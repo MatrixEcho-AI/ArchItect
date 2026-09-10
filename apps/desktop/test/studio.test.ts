@@ -56,7 +56,47 @@ describe('StudioService：状态', () => {
       expect(op.tool.length).toBeGreaterThan(0)
       expect(op.changed).toBeGreaterThan(0)
       expect(op.rev).toBeGreaterThan(0)
+      // 谁改的：界面要能一眼分开"模型改的"与"我改的"
+      expect(['llm', 'user']).toContain(op.source)
     }
+  })
+
+  it('**opDetail 给出参数与改动量**（工具调用检查器点开某一步）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const last = studio.state().totalOps
+
+    // 示例小屋是**宿主**造的（不是模型），所以它的 source 是 user；
+    // 这里借着它验形状，下面再验"模型那一侧"能区分出来
+    const demoOp = studio.opDetail(1)!
+    expect(demoOp.tool.length).toBeGreaterThan(0)
+    expect(demoOp.source).toBe('user')
+    expect(demoOp.result.changed).toBeGreaterThan(0)
+    expect(demoOp.args).toBeDefined()
+
+    // 人手放一格：同一条日志、同一个 `rev` 序列，只有 `source` 不同
+    const state = studio.editBlock({ pos: [2, 2, 2], block: 'minecraft:stone', mode: 'place' })
+    expect(state.totalOps).toBe(last + 1)
+    const mine = studio.opDetail(state.totalOps)!
+    expect(mine.source).toBe('user')
+    expect(mine.args).toMatchObject({ pos: [2, 2, 2], block: 'minecraft:stone' })
+    expect(mine.result.changed).toBe(1)
+
+    // 模型那一侧：`applyEdit` 默认是宿主（user），工具循环里走的是同一个方法、
+    // 只是带了另一个 actor——所以"谁改的"这件事只有一个字段的差别（D-61）
+    const store = studio.agentSession.store
+    studio.agentSession.applyEdit(
+      'place_block',
+      { pos: [3, 3, 3] },
+      () => store.write((emit) => emit(3, 3, 3), store.palette.indexOf('minecraft:stone'), { confirm: true }),
+      { source: 'llm', actor: 'assistant' },
+    )
+    const fromModel = studio.opDetail(studio.state().totalOps)!
+    expect(fromModel.source).toBe('llm')
+    expect(fromModel.actor).toBe('assistant')
+
+    // 不存在的版本问不出东西，也不该抛
+    expect(studio.opDetail(9999)).toBeUndefined()
   })
 })
 

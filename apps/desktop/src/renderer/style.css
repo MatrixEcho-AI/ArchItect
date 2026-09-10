@@ -722,3 +722,69 @@ dialog.settings::backdrop {
   gap: 8px;
   margin-top: 14px;
 }
+
+/* 编辑记录：可点，当前那一步高亮；人手改的与模型改的用颜色分开 */
+.ops li.op {
+  cursor: pointer;
+}
+
+.ops li.op:hover {
+  background: #262b36;
+}
+
+.ops li.op.current {
+  background: #2c3444;
+  outline: 1px solid var(--accent);
+}
+
+.ops li.op.user .rev {
+  color: var(--warn);
+}
+
+.op-detail {
+  margin: 6px 0 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #1d2230;
+  font-size: 11px;
+}
+
+.op-detail b {
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.op-detail button {
+  float: right;
+}
+
+.op-detail dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0;
+  word-break: break-all;
+}
+
+.op-detail dt {
+  color: var(--muted);
+}
+
+.op-detail dd {
+  margin: 0;
+}
+
+/* 需求模板：点一下填进输入框，省掉"去文档里复制"那一步 */
+.templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.templates .label {
+  color: var(--muted);
+  font-size: 11px;
+}

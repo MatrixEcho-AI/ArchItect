@@ -66,6 +66,17 @@ export const zhCN = {
     overlay: { ruler: '坐标标尺', axis: '坐标轴', lastEdit: '上次编辑高亮' },
   },
   panel: {
+    opDetail: {
+      title: '第 {{rev}} 步 · {{tool}}',
+      args: '参数',
+      result: '改动',
+      resultLine: '改了 {{changed}} 格（覆盖了 {{overwritten}} 格非空气，裁剪 {{clipped}} 格）',
+      source: '来源',
+      sourceLlm: '模型',
+      sourceUser: '人手',
+      empty: '这一条没有留下细节',
+      hint: '点一条跳到那一步',
+    },
     measureLine: '尺寸 {{size}}   方块 {{blocks}}',
     project: '工程',
     materials: '材质',
@@ -98,6 +109,14 @@ export const zhCN = {
     picked: '吸取 {{block}}',
   },
   chat: {
+    templates: {
+      label: '模板',
+      house: '造一座 9×9 的单层林间小屋，工区 24×24×24。\n材质：云杉木板做墙，圆石做地基与壁炉，深色橡木做框架，玻璃板开窗。\n必须有：正门朝南（门洞净高 2 格）、东西各一扇窗、斜坡屋顶、屋顶一个烟囱。\n屋顶要比墙外扩 1 格做屋檐。\n完成后用 verify 确认门洞净高，并拍两个角度的截图。',
+      public: '设计一座海边灯塔，工区 32×40×32。\n基座：八角形，高 2 格，直径 17 格。\n塔身：从直径 11 格收分到 5 格，高 26 格，用 fill_line 的 radius + taper 做收分。\n顶部：直径 7 格的玻璃灯室，高 3 格，上面一个深色锥顶。\n必须有：南面一个门洞（净高 3 格）、塔身每隔 8 格一圈装饰线脚。',
+      decor: '造一座 11×11 的四角亭，工区 24×24×24。\n先只造西半边（x < 5 的部分）：4 根圆石柱、木质台基、护栏。\n然后用 symmetrize 沿 x=5 镜像出另外半边。\n屋顶做四坡顶，中央用 fill_line 做一根宝顶。\n完成后用 verify 的 symmetric 检查确认对称。',
+      fix: '先调用 analyze_structure 体检，把报出来的问题逐条修掉：\n- floating（悬空）：给悬空的部分加柱子撑到地面\n- doorway（开口不足）：把门洞开到净高 2 格以上\n- headroom（净高不足）：把爬行空间抬高到 2 格\n修完再跑一次 analyze_structure，确认 error 归零。',
+      hint: '点一下填进输入框，改掉里面的数字与材质再发',
+    },
     behindTipDetail: '当前停在历史版本 rev {{rev}}／共 {{total}} 步：从这里继续，模型的第一笔改动就会覆盖掉后面的 {{lost}} 步。请先「回到最新」（时间线右端或 ⌘⇧Z 重做），再发消息。',
     title: '对话',
     placeholder: '描述你想建造的建筑…（⌘/Ctrl + Enter 发送）',

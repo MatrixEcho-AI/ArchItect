@@ -112,6 +112,8 @@
         </div>
         <div class="block grow">
           <h2 data-i18n="panel.ops"></h2>
+          <!-- 点一条记录展开它的参数与改动量：排查"模型哪一步改坏了"的入口 -->
+          <div id="op-detail" class="op-detail hidden"></div>
           <ol id="ops" class="ops"></ol>
         </div>
       </aside>
@@ -143,6 +145,7 @@
         <div id="blocking" class="blocking hidden"></div>
         <ol id="messages" class="messages"></ol>
         <form id="chat-form" class="chat-form">
+          <div id="templates" class="templates"></div>
           <textarea id="chat-input" rows="3" data-i18n-placeholder="chat.placeholder"></textarea>
           <div class="chat-actions">
             <button type="submit" id="btn-send" data-i18n="chat.send"></button>

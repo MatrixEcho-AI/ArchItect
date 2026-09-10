@@ -48,7 +48,7 @@ export interface StudioState {
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
   paletteSize: number
-  ops: Array<{ rev: number; tool: string; changed: number; ts: string }>
+  ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
   /** 游标前面还有内容（可以撤销）。 */
   canUndo: boolean
@@ -78,6 +78,18 @@ export interface StudioState {
    * `discardRecovery()`。界面据此显示两个按钮，而不是只给一句话干看着。
    */
   recovery?: RecoverySummary
+}
+
+/** 一条编辑记录的细节（`opDetail` 的返回值，直接序列化给界面）。 */
+export interface OpDetail {
+  rev: number
+  id: string
+  tool: string
+  args: unknown
+  ts: string
+  source: string
+  actor: string
+  result: { changed: number; overwrittenNonAir: number; clipped: number }
 }
 
 /** 崩溃恢复的待办：界面上那两个按钮描述的就是它。 */
@@ -539,6 +551,27 @@ export class StudioService {
     return target
   }
 
+  /**
+   * 一条编辑记录的细节（界面点开某一步看）。
+   *
+   * 为什么单独开一条通道而不是塞进 `state()`：`args` 可能是个很大的多边形/区域参数，
+   * 而 `state()` 每次编辑都会被推一遍。这里按需取一条，代价与用户点了几次成正比。
+   */
+  opDetail(rev: number): OpDetail | undefined {
+    const op = this.session.log.byRevision(rev)
+    if (op === undefined) return undefined
+    return {
+      rev: op.rev,
+      id: op.id,
+      tool: op.tool,
+      args: op.args,
+      ts: op.ts,
+      source: op.source,
+      actor: op.actor,
+      result: op.result,
+    }
+  }
+
   /** 当前状态快照。 */
   state(): StudioState {
     const store = this.session.store
@@ -554,7 +587,14 @@ export class StudioService {
       ops: this.session.log
         .all()
         .slice(-50)
-        .map((op) => ({ rev: op.rev, tool: op.tool, changed: op.result.changed, ts: op.ts })),
+        .map((op) => ({
+          rev: op.rev,
+          tool: op.tool,
+          changed: op.result.changed,
+          ts: op.ts,
+          // 谁改的：界面上"模型改的"和"我改的"要能一眼分开
+          source: op.source,
+        })),
       histogram: stats.histogram.slice(0, 8),
       // 撤销/重做是**游标移动**，所以这两个是"游标前后还有没有内容"，
       // 不是"世界内部的栈里还有没有东西"。界面据此灰掉按钮。

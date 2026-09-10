@@ -1649,9 +1649,9 @@ secrets.bin
 >
 > 花费那一栏值得单独看：两次都**超过 98% 的输入走了缓存**。这正是 §9.2 Regime A 选择
 > "不裁剪"的依据——裁一次历史，这 98% 会全部以全价重算。
-| **M5 Electron UI** | 3D 视口、对话面板（内联截图）、时间线时间旅行、工具调用检查器、调色板、成本表盘、人在环路 | 全流程可在 GUI 完成；拖动时间线能看到历史状态；双击 `.mcai` 能打开 |
-| **M6 高级编辑** | copy/rotate/mirror（含 state 重映射）、fix_states、analyze_structure linter、run_batch 优化 | linter 能抓出测试 fixture 里预埋的 5 类结构问题 |
-| **M7 互操作与导出** | `.schem` / `.litematic` / `.obj` 导入导出、版本迁移器、资源包纹理提取 | 导出的 `.schem` **逐格正确还原**（换一个世界导入后 `contentHash` 对拍）；能导入外部 `.schem` 继续编辑 |
+| **M5 Electron UI** | 3D 视口、对话面板（内联截图）、时间线时间旅行、工具调用检查器、调色板、成本表盘、人在环路 | 全流程可在 GUI 完成；拖动时间线能看到历史状态；双击 `.mcai` 能打开。三条都由 `pnpm desktop:gui-smoke` 里的 DOM 断言钉住（在页面里真派发点击与拖动，而不是读内部状态） |
+| **M6 高级编辑** | copy/rotate/mirror（含 state 重映射）、fix_states、analyze_structure linter、run_batch 优化 | linter 能抓出测试 fixture 里预埋的 5 类**结构**问题（实现里另加 2 类 info，共 7 个 id） |
+| **M7 互操作与导出** | `.schem` / `.litematic` 往返、`.obj` 导出（附录 E.4：碰撞盒几何还原不了状态，所以**故意不做导入**）、导入侧版本迁移、资源包纹理提取 | 导出的 `.schem` **逐格正确还原**（换一个世界导入后 `contentHash` 对拍）；能导入外部 `.schem` 继续编辑 |
 | **M8 打磨** | 安装包、自动保存、崩溃恢复、i18n 补全、文档、prompt 库、示例项目 | 三平台能打包安装；新用户 5 分钟内能产出第一座建筑 |
 
 > **打包已实测可用，但体积 837 MB 而不是预估的 220 MB**——差在 `minecraft-assets`

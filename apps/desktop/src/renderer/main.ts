@@ -29,7 +29,7 @@ interface StudioState {
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
   paletteSize: number
-  ops: Array<{ rev: number; tool: string; changed: number; ts: string }>
+  ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
   /** 一次性提示（崩溃恢复之类）。主进程读过就没了，所以界面要自己留住。 */
   notice?: string
@@ -53,6 +53,18 @@ interface StudioState {
     eye?: [number, number, number]
     lookAt?: [number, number, number]
   }
+}
+
+/** 一条编辑记录的细节（主进程按需给，不跟着每次状态推）。 */
+interface OpDetailView {
+  rev: number
+  id: string
+  tool: string
+  args: unknown
+  ts: string
+  source: string
+  actor: string
+  result: { changed: number; overwrittenNonAir: number; clipped: number }
 }
 
 interface ChatMessageView {
@@ -137,6 +149,7 @@ type StudioEvent =
 interface ArchitectBridge {
   state(): Promise<StudioState>
   measureText(): Promise<string>
+  opDetail(rev: number): Promise<OpDetailView | undefined>
   newProject(): Promise<StudioState>
   open(): Promise<StudioState | undefined>
   save(path?: string): Promise<string | undefined>
@@ -1197,6 +1210,43 @@ async function simulateUndo(): Promise<void> {
 
 // ── 左侧面板 ──────────────────────────────────────────────────────────────────
 
+/**
+ * 展开一条编辑记录的细节。
+ *
+ * 参数是**原样的 JSON**（不翻译、不美化过头）：用户在排查"模型这一步到底传了什么"，
+ * 把 `args` 改写成人话反而会遮住真相（少了哪个字段、坐标写成了哪个数）。
+ */
+function renderOpDetail(detail: OpDetailView | undefined): void {
+  const box = el('op-detail')
+  if (detail === undefined) {
+    box.classList.add('hidden')
+    box.replaceChildren()
+    return
+  }
+  box.classList.remove('hidden')
+  const rows: Array<[string, string]> = [
+    [t('panel.opDetail.source'), detail.source === 'user' ? t('panel.opDetail.sourceUser') : t('panel.opDetail.sourceLlm')],
+    [t('panel.opDetail.args'), JSON.stringify(detail.args ?? {}).slice(0, 400)],
+    [
+      t('panel.opDetail.result'),
+      t('panel.opDetail.resultLine', {
+        changed: detail.result.changed,
+        overwritten: detail.result.overwrittenNonAir,
+        clipped: detail.result.clipped,
+      }),
+    ],
+  ]
+  box.innerHTML =
+    `<b>${escapeHtml(t('panel.opDetail.title', { rev: detail.rev, tool: detail.tool }))}</b>` +
+    `<button type="button" class="mini" id="op-detail-close">✕</button>` +
+    `<dl>${rows
+      .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
+      .join('')}</dl>`
+  el('op-detail-close').addEventListener('click', () => {
+    box.classList.add('hidden')
+  })
+}
+
 function renderPanel(next: StudioState): void {
   current = next
   // 提示是一次性的（主进程读过就清），所以在这里留住，别让它被下一次状态刷新冲掉
@@ -1235,15 +1285,31 @@ function renderPanel(next: StudioState): void {
     )
     .join('')
 
+  // 编辑记录：**可点**。点一条就跳到那一步（时间线跟着走），并展开它的参数与改动量。
+  // 这是"模型哪一步改坏了"最直接的入口——以前这里只有一行只读的字符串。
   el('ops').innerHTML = next.ops
     .slice()
     .reverse()
     .map(
       (op) =>
-        `<li><span class="rev">${op.rev}</span><b>${escapeHtml(op.tool)}</b>` +
+        `<li class="op${op.rev === next.revision ? ' current' : ''}${op.source === 'user' ? ' user' : ''}"` +
+        ` data-rev="${op.rev}" title="${escapeHtml(t('panel.opDetail.hint'))}">` +
+        `<span class="rev">${op.rev}</span><b>${escapeHtml(op.tool)}</b>` +
         `<span>${op.changed}</span></li>`,
     )
     .join('')
+  for (const item of el('ops').querySelectorAll<HTMLElement>('li.op')) {
+    item.addEventListener('click', () => {
+      const rev = Number(item.dataset['rev'])
+      if (!Number.isFinite(rev)) return
+      void guard(t('panel.opDetail.title', { rev, tool: '' }), async () => {
+        const detail = await window.architect.opDetail(rev)
+        renderPanel(await window.architect.seek(rev))
+        renderOpDetail(detail)
+        await shoot()
+      })
+    })
+  }
 
   scrub.max = String(next.totalOps)
   scrub.value = String(next.revision)
@@ -1273,6 +1339,35 @@ function renderPanel(next: StudioState): void {
  * 基准工程找不到时，"恢复"必须是禁用的：没有基准就没法知道该把这些 op 接到哪儿，
  * 硬接出来的世界不会是崩溃前的那个。
  */
+/**
+ * 需求模板（M8「5 分钟产出第一座建筑」最直接的一步）。
+ *
+ * 以前模板只躺在 `docs/prompt-library.md` 里——用户得离开应用去复制粘贴。
+ * 文案走 i18n（换语言时模板也跟着换），四个模板对应文档里的四类。
+ */
+const TEMPLATE_KEYS = ['house', 'public', 'decor', 'fix'] as const
+
+function renderTemplates(): void {
+  const row = el('templates')
+  row.title = t('chat.templates.hint')
+  row.innerHTML = `<span class="label">${escapeHtml(t('chat.templates.label'))}</span>`
+  for (const key of TEMPLATE_KEYS) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'mini'
+    button.textContent = t(`chat.templates.${key}`).split('\n')[0]!.slice(0, 14)
+    button.dataset['template'] = key
+    button.addEventListener('click', () => {
+      const input = el<HTMLTextAreaElement>('chat-input')
+      input.value = t(`chat.templates.${key}`)
+      input.focus()
+      // 光标放到末尾：用户接下来要改的就是里面的数字与材质
+      input.setSelectionRange(input.value.length, input.value.length)
+    })
+    row.append(button)
+  }
+}
+
 function renderRecovery(recovery: StudioState['recovery']): void {
   const banner = el('recovery')
   if (recovery === undefined) {
@@ -1599,6 +1694,7 @@ function wire(): void {
   wireViewport()
   wireCamera()
   wirePalette()
+  renderTemplates()
 
   el('btn-new').addEventListener('click', () => {
     void guard(t('menu.new'), async () => {
@@ -1856,6 +1952,7 @@ async function boot(): Promise<void> {
     onLocaleChange(() => {
       applyStaticText()
       renderPresetButtons()
+      renderTemplates()
       if (current !== undefined) renderPanel(current)
       if (chat !== undefined) renderChat(chat)
       if (settings !== undefined) renderSettings(settings)

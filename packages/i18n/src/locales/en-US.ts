@@ -70,6 +70,17 @@ export const enUS = {
     overlay: { ruler: 'Coordinate ruler', axis: 'Axis gizmo', lastEdit: 'Last edit highlight' },
   },
   panel: {
+    opDetail: {
+      title: 'Step {{rev}} · {{tool}}',
+      args: 'Arguments',
+      result: 'Change',
+      resultLine: '{{changed}} cell(s) changed ({{overwritten}} non-air overwritten, {{clipped}} clipped)',
+      source: 'Source',
+      sourceLlm: 'Model',
+      sourceUser: 'You',
+      empty: 'This step left no detail behind',
+      hint: 'Click a step to jump to it',
+    },
     measureLine: 'Size {{size}}   blocks {{blocks}}',
     project: 'Project',
     materials: 'Materials',
@@ -102,6 +113,14 @@ export const enUS = {
     picked: 'Picked {{block}}',
   },
   chat: {
+    templates: {
+      label: 'Templates',
+      house: 'Build a 9x9 single-storey forest cabin, work area 24x24x24.\nMaterials: spruce planks for the walls, cobblestone for the foundation and fireplace, dark oak for the frame, glass panes for windows.\nMust have: a south-facing front door (2-block clear opening), one window on the east and one on the west, a pitched roof, and a chimney.\nThe roof should overhang the walls by 1 block.\nFinish by using verify to confirm the door clearance, and take screenshots from two angles.',
+      public: 'Design a seaside lighthouse, work area 32x40x32.\nBase: octagonal, 2 blocks tall, 17 blocks across.\nShaft: taper from 11 blocks down to 5 across, 26 blocks tall — use fill_line with radius + taper instead of placing each ring by hand.\nTop: a 7-block-wide glass lantern room, 3 blocks tall, with a dark conical roof above it.\nMust have: a south-facing doorway (3-block clear opening) and a decorative ring every 8 blocks up the shaft.',
+      decor: 'Build an 11x11 pavilion with four corner posts, work area 24x24x24.\nFirst build only the western half (x < 5): four cobblestone pillars, a wooden platform, railings.\nThen use symmetrize to mirror the other half across x=5.\nGive the roof a hipped shape and add a finial down the middle with fill_line.\nFinish by using verify\u2019s symmetric check to confirm symmetry.',
+      fix: 'Start by running analyze_structure, then fix every issue it reports:\n- floating: support the floating parts down to the ground\n- doorway: open the doorway to at least 2 blocks of clearance\n- headroom: raise crawl spaces to 2 blocks\nWhen done, run analyze_structure again and confirm errors are back to zero.',
+      hint: 'Click one to drop it into the input box, then change the numbers and materials before sending',
+    },
     behindTipDetail: 'You are sitting on history: rev {{rev}} of {{total}}. Continuing from here means the model\u2019s first edit overwrites the {{lost}} step(s) after it. Go back to the latest first (right end of the timeline, or ⌘⇧Z), then send.',
     title: 'Chat',
     placeholder: 'Describe the building you want… (⌘/Ctrl + Enter to send)',

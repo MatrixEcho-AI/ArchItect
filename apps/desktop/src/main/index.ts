@@ -180,8 +180,10 @@ const SHOT_TIMEOUT_MS = 8000
  * id 表，也就没有"哪个 id 对应哪个 Promise"这类会泄漏的状态。
  *
  * **拿不到就抛，让会话记下原因并退回软件光栅器**。抛而不是返回 `undefined`
- * 是有意的：渲染进程知道"这台机器没有 WebGL"，主进程不知道——
- * 把原因一路带到 `renderFallback`，界面上才能说清楚"为什么图忽然变糊了"。
+ * 是有意的：渲染进程知道"这台机器没有 WebGL"，主进程不知道。原因会一路带到
+ * `renderFallback`，再由 `--gui-smoke` / `--shot` 把原话打出来——
+ * **那是诊断路径，不是界面文案**：界面上的"现在用软件视口"由渲染进程自己
+ * 按 `viewport.softwareMode` 显示（它才知道自己有没有 WebGL）。
  */
 async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefined> {
   const win = mainWindow
@@ -298,6 +300,8 @@ function registerIpc(): void {
   // 界面拿它显示"当前打开的是哪个文件"；也方便测试断言
   handle('studio:projectPath', () => studio.state().projectPath ?? null)
   handle('studio:measureText', () => studio.measureText())
+  // 工具调用检查器点开某一步时用（按需取，不跟着每次 state 推）
+  handle('studio:opDetail', (rev: number) => studio.opDetail(rev))
 
   handle('studio:new', (volume?: Parameters<StudioService['newProject']>[0]) => {
     const state = studio.newProject(volume)
@@ -467,10 +471,21 @@ function registerIpc(): void {
     // 从这一刻起才允许把截图请求发给渲染进程
     rendererReady = report.ok
     if (guiSmoke) {
-      void assertGpuShot(report).then((result) => {
+      void (async () => {
+        const result = await assertGpuShot(report)
         process.stdout.write(`[gui-smoke] ${result.ok ? 'OK' : 'FAILED'}: ${result.detail}\n`)
-        setTimeout(() => app.exit(result.ok ? 0 : 1), 50)
-      })
+        // 渲染进程里那些**只有 DOM 能回答**的问题：时间线拖得动吗、编辑记录点得开吗、
+        // 模板填得进输入框吗。以前这些全靠人肉看，现在一条条断言出来。
+        const shooter = mainWindow
+        const checks =
+          shooter === undefined || shooter.isDestroyed() ? [] : await assertGuiPanels(shooter)
+        let failed = !result.ok
+        for (const check of checks) {
+          process.stdout.write(`[gui-smoke] ${check.ok ? '✓' : '✗'} ${check.name}: ${check.detail}\n`)
+          if (!check.ok) failed = true
+        }
+        setTimeout(() => app.exit(failed ? 1 : 0), 50)
+      })()
     }
     // `--shot <png>`：把**模型看到的那张图**原样写下来再退出。
     // 抓窗口得到的是用户的视口，这个得到的才是模型的眼睛——两者的差别
@@ -505,6 +520,105 @@ function registerIpc(): void {
     }
     return { ok: true, value: undefined }
   })
+}
+
+/** 一条 DOM 断言的结论。 */
+interface GuiCheck {
+  name: string
+  ok: boolean
+  detail: string
+}
+
+/**
+ * **渲染进程里那些只有 DOM 能回答的问题**。
+ *
+ * 这一层以前是空的：`pnpm test` 里 0 个 electron 引用，时间线、编辑记录、模板
+ * 全靠人肉点一遍。而它们恰好是 M5 的验收条目（"拖动时间线能看到历史状态"）。
+ *
+ * 做法是在页面里跑一小段脚本并**真的派发事件**（点、拖），而不是读内部状态——
+ * 读状态只能证明"数据对"，证明不了"用户点得动"。断言失败时把实际文本带回来，
+ * 免得只看到一句"失败了"。
+ */
+async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
+  const script = `(async () => {
+    const results = [];
+    const check = (name, ok, detail) => results.push({ name, ok: Boolean(ok), detail: String(detail ?? '') });
+    // 拖时间线会走 rAF 合流，所以要等两帧再读结果
+    const frames = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // 点击之后要走「IPC 往返 → seek → 重画」好几步，等固定帧数会飘。这里轮询等条件成立。
+    const waitFor = async (predicate, timeoutMs = 1500) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (predicate()) return true;
+        await frames();
+      }
+      return false;
+    };
+
+    const ops = document.querySelectorAll('#ops li.op');
+    check('ops-list', ops.length > 0, ops.length + ' 条可点的编辑记录');
+
+    const label = document.querySelector('#rev-label');
+    const scrub = document.querySelector('#scrub');
+    const before = label ? label.textContent : '';
+    const target = Math.max(0, Math.min(Number(scrub.max) - 1, 3));
+    scrub.value = String(target);
+    scrub.dispatchEvent(new Event('input', { bubbles: true }));
+    await frames();
+    check(
+      'timeline-drag',
+      label.textContent !== before && label.textContent.includes(String(target)),
+      '"' + before + '" → "' + label.textContent + '"（拖到 rev ' + target + '）',
+    );
+
+    const items = document.querySelectorAll('#ops li.op');
+    if (items.length > 1) items[1].click();
+    const detail = document.querySelector('#op-detail');
+    const detailReady = await waitFor(
+      () => detail !== null && !detail.classList.contains('hidden') && detail.textContent.trim().length > 0,
+    );
+    check(
+      'op-detail',
+      detailReady,
+      detail === null ? '没有 #op-detail' : detail.textContent.replace(/\\s+/g, ' ').slice(0, 60),
+    );
+
+    const template = document.querySelector('#templates button');
+    const input = document.querySelector('#chat-input');
+    if (template !== null) template.click();
+    check(
+      'templates',
+      input !== null && input.value.trim().length > 10,
+      input === null ? '没有 #chat-input' : input.value.split('\\n')[0].slice(0, 40),
+    );
+
+    // 恢复条：**有草稿才显示**。这里不能硬断言"一定是隐藏的"——
+    // 上一次跑留下的草稿本来就该让这个条亮着；要断言的是"显示与否跟状态一致"。
+    const state = await window.architect.state();
+    const recovery = document.querySelector('#recovery');
+    const shown = recovery !== null && !recovery.classList.contains('hidden');
+    const hasDraft = state.recovery !== undefined;
+    check(
+      'recovery-banner',
+      recovery !== null && shown === hasDraft,
+      (hasDraft ? '有 ' + state.recovery.ops + ' 步草稿' : '没有草稿') + '，条' + (shown ? '显示' : '隐藏'),
+    );
+    if (hasDraft) {
+      const apply = document.querySelector('#btn-recover');
+      const discard = document.querySelector('#btn-discard-recovery');
+      check(
+        'recovery-buttons',
+        apply !== null && discard !== null && apply.disabled === !state.recovery.baseExists,
+        '恢复' + (apply.disabled ? '禁用' : '可用') + ' / 丢掉存在=' + (discard !== null),
+      );
+    }
+
+    const cost = document.querySelector('#cost');
+    check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
+    return results;
+  })()`
+  const raw = (await target.webContents.executeJavaScript(script)) as GuiCheck[]
+  return raw
 }
 
 /**

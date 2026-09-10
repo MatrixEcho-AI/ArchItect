@@ -113,7 +113,7 @@ examples/    示例工程
 
 ```bash
 cd apps/desktop
-npx --no-install electron . --demo --gui-smoke             # 全链路冒烟（含"模型截图确实走了 GPU"）
+npx --no-install electron . --demo --gui-smoke             # 全链路冒烟：GPU 截图 + 一串 DOM 断言（时间线拖得动、编辑记录点得开、模板填得进输入框）；任何一条不过就退 1
 npx --no-install electron . --demo --capture /tmp/gui.png  # 抓用户看到的窗口
 npx --no-install electron . --demo --shot /tmp/eye.png     # 抓**模型收到的那张图**
 npx --no-install electron . --demo --no-webgl              # 强制走软件视口（验兜底路径）

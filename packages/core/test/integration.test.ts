@@ -143,7 +143,7 @@ describe('端到端：用几何算子盖一座房子', () => {
     expect(store.stats().blocks).toBeGreaterThan(200)
 
     let guard = 0
-    while (store.canUndo && guard++ < 100) store.undo()
+    while (store.canRevertLastWrite && guard++ < 100) store.revertLastWrite()
     expect(store.stats().blocks).toBe(empty)
   })
 

@@ -296,7 +296,7 @@ describe('M7 验收：导出再导入，contentHash 必须相等', () => {
     expect(target.revision).toBe(start + 1)
     expect(result.revision).toBe(start + 1)
     // 撤回一次就该全部回退
-    target.undo()
+    target.revertLastWrite()
     expect(target.stats().blocks).toBe(0)
   })
 

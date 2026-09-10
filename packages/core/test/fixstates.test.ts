@@ -279,7 +279,7 @@ describe('不变式：幂等 + 一个 revision', () => {
     expect(result.fix.changed).toBeGreaterThan(1)
     expect(store.revision).toBe(revision + 1) // 不是每格一个 revision
 
-    expect(store.undo()).toBe(result.fix.changed)
+    expect(store.revertLastWrite()).toBe(result.fix.changed)
     expect(store.contentHash()).toBe(before)
   })
 

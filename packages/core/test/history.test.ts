@@ -332,7 +332,116 @@ describe('contentHash', () => {
     const before = store.contentHash()
     store.setBlock({ x: 2, y: 2, z: 2 }, 'minecraft:stone')
     expect(store.contentHash()).not.toBe(before)
-    store.undo()
+    store.revertLastWrite()
     expect(store.contentHash()).toBe(before)
+  })
+})
+
+/**
+ * 时间线游标（`ReplaySession`）。
+ *
+ * 这一组钉死的是**"撤销 = 游标移动"**这条语义。早期 `WorldStore` 自带一个
+ * 内存撤销栈，撤销时会打一个反向补丁并让版本号 **+1**——于是世界写着 rev 4、
+ * 日志只有 3 条，重放、时间线、`.mcai` 往返同时坏掉，而且坏得很安静。
+ */
+describe('时间线游标', () => {
+  it('撤销 / 重做只是游标前后移动，日志长度不变', () => {
+    const { store, log } = buildScenario()
+    const tip = log.length
+    const session = new ReplaySession(store, log)
+    expect(session.atTip).toBe(true)
+    expect(session.canUndo).toBe(true)
+    expect(session.canRedo).toBe(false)
+
+    expect(session.undo()).toBe(tip - 1)
+    expect(store.revision).toBe(tip - 1)
+    // **不产生新 op**：撤销进日志的话，"撤销"和"再改回去"就没法区分了
+    expect(log.length).toBe(tip)
+    expect(session.canRedo).toBe(true)
+
+    expect(session.redo()).toBe(tip)
+    expect(store.revision).toBe(tip)
+    expect(log.length).toBe(tip)
+    expect(session.atTip).toBe(true)
+  })
+
+  it('**游标就是 `store.revision`**：不存在第二个真相', () => {
+    const { store, log } = buildScenario()
+    const session = new ReplaySession(store, log)
+    session.undo()
+    session.undo()
+    expect(session.revision).toBe(store.revision)
+    session.seek(1)
+    expect(session.revision).toBe(store.revision)
+    expect(session.length).toBe(log.length)
+  })
+
+  it('撤销之后重做回来，内容与哈希都精确复原', () => {
+    const { store, log } = buildScenario()
+    const session = new ReplaySession(store, log)
+    const before = store.contentHash()
+    session.undo()
+    expect(store.contentHash()).not.toBe(before)
+    session.redo()
+    expect(store.contentHash()).toBe(before)
+  })
+
+  it('一路撤销到 0 得到空世界，再撤销是空操作', () => {
+    const { store, log } = buildScenario()
+    const session = new ReplaySession(store, log)
+    for (let i = 0; i < log.length + 3; i++) session.undo()
+    expect(store.revision).toBe(0)
+    expect(store.contentHash()).toBe(makeStore().contentHash())
+    expect(session.canUndo).toBe(false)
+  })
+
+  it('任意游标位置上，世界都等于"从零重放到那里"', () => {
+    const { store, log } = buildScenario()
+    const session = new ReplaySession(store, log)
+    const rebuild = makeStore()
+    for (let rev = log.length; rev >= 0; rev--) {
+      session.seek(rev)
+      expect(store.revision).toBe(rev)
+      // 注意用 `replayTo(.., rev)` 而不是 `verifyReplay`：后者重放到**最新**，
+      // 拿它去比一个停在 rev 5 的世界当然不等
+      replayTo(rebuild, log, rev)
+      expect(store.contentHash(), `rev ${rev} 对不上`).toBe(rebuild.contentHash())
+    }
+  })
+})
+
+describe('EditLog：在历史版本上继续编辑（分叉）', () => {
+  it('给了 worldRevision 就会先截断，绝不出现两条同号 op', () => {
+    const { store, log } = buildScenario()
+    const session = new ReplaySession(store, log)
+    const tip = log.length
+    session.seek(tip - 2)
+
+    const result = store.write(box({ x: 0, y: 5, z: 0 }, { x: 1, y: 5, z: 1 }), store.palette.indexOf('minecraft:bricks'), {
+      confirm: true,
+    })
+    log.record(result, { tool: 'fill_box', args: {}, worldRevision: store.revision })
+
+    expect(log.length).toBe(store.revision)
+    expect(store.revision).toBe(tip - 1)
+    expect(new Set(log.all().map((op) => op.rev)).size).toBe(log.length)
+    expect(verifyReplay(store, log, makeStore()).ok).toBe(true)
+  })
+
+  it('世界绕过日志被改过时**大声报错**，而不是安静地写出两条同号 op', () => {
+    const store = makeStore()
+    const log = new EditLog()
+    // 夹具 / 导入会绕过日志直接写：版本号涨了，日志还是空的
+    store.setBlock({ x: 1, y: 1, z: 1 }, 'minecraft:stone')
+    store.setBlock({ x: 2, y: 1, z: 1 }, 'minecraft:stone')
+    store.setBlock({ x: 3, y: 1, z: 1 }, 'minecraft:stone')
+    const result = store.write(box({ x: 5, y: 1, z: 5 }, { x: 6, y: 1, z: 6 }), store.palette.indexOf('minecraft:bricks'), {
+      confirm: true,
+    })
+    // 写入后世界在 rev 4，而日志里下一条只能是 rev 1——这时**必须报错**。
+    // 不报的话日志与世界会安静地脱节，重放、时间线、`.mcai` 往返同时坏掉。
+    expect(() => log.record(result, { tool: 'fill_box', args: {}, worldRevision: store.revision })).toThrow(
+      EditLogError,
+    )
   })
 })

@@ -7,6 +7,7 @@ import type { ShotInput } from '@architect/agent'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { StudioService } from '../src/main/services/studio.js'
+import type { StudioEvent } from '../src/main/services/chat.js'
 
 // 用确定性兜底配色，跳过 352MB 资源包的加载
 const makeStudio = (): StudioService => new StudioService({ plain: true })
@@ -214,6 +215,85 @@ describe('StudioService：时间旅行', () => {
     studio.demo()
     const zero = studio.seek(0)
     expect(zero.blocks).toBe(0)
+  })
+})
+
+describe('StudioService：撤销 / 重做', () => {
+  it('撤销是**游标退一格**：方块回去、日志长度不变', () => {
+    const studio = makeStudio()
+    const full = studio.demo()
+    const ops = full.totalOps
+
+    const undone = studio.undo()
+    expect(undone.revision).toBe(ops - 1)
+    expect(undone.blocks).toBeLessThan(full.blocks)
+    // 关键：撤销不进日志。进的话时间线上会冒出一步"撤销"，而模型看不到它
+    expect(undone.totalOps).toBe(ops)
+    expect(undone.canUndo).toBe(true)
+    expect(undone.canRedo).toBe(true)
+    expect(undone.behindTip).toBe(true)
+
+    const redone = studio.redo()
+    expect(redone.revision).toBe(ops)
+    expect(redone.blocks).toBe(full.blocks)
+    expect(redone.behindTip).toBe(false)
+    expect(redone.canRedo).toBe(false)
+  })
+
+  it('撤销到底再撤销是空操作（不会把版本号拧成负的）', () => {
+    const studio = makeStudio()
+    const full = studio.demo()
+    for (let i = 0; i < full.totalOps + 3; i++) studio.undo()
+    const state = studio.state()
+    expect(state.revision).toBe(0)
+    expect(state.blocks).toBe(0)
+    expect(state.canUndo).toBe(false)
+  })
+
+  it('**撤销之后保存再打开，撤销的结果不丢**（回归：日志与世界脱节）', async () => {
+    const studio = makeStudio()
+    const full = studio.demo()
+    studio.undo()
+    studio.undo()
+    const expected = studio.state()
+    const path = join(workspace, 'undone.mcai')
+    await studio.save(path)
+
+    const reopened = makeStudio()
+    const opened = await reopened.open(path)
+    expect(opened.revision).toBe(expected.revision)
+    expect(opened.blocks).toBe(expected.blocks)
+    expect(opened.totalOps).toBe(full.totalOps)
+    // 重开的工程里游标仍然停在同一个位置，重做还能把后面拿回来
+    expect(reopened.redo().blocks).toBeGreaterThan(opened.blocks)
+  })
+
+  it('停历史版本上时**拒绝发消息**，并给出可照做的提示', () => {
+    const studio = makeStudio()
+    const full = studio.demo()
+    const events: StudioEvent[] = []
+    studio.onEvent((event) => events.push(event))
+    studio.seek(full.totalOps - 2)
+
+    const view = studio.send('再高一点')
+    // 没进对话——否则模型会在这里从历史分叉，把后面两步覆盖掉
+    expect(view.messages).toEqual([])
+    // 提示是**一次性**的，所以走事件读（界面就是这么拿的），而不是事后再问一次 state
+    const notice = events
+      .map((event) => (event.type === 'state' ? (event.state as { notice?: string }).notice : undefined))
+      .find((value) => value !== undefined)
+    expect(notice).toContain('历史版本')
+    expect(notice).toContain('2 步')
+  })
+
+  it('回到最新之后那道闸放开（接下来卡在"还没选模型"上是另一回事）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    studio.seek(1)
+    studio.seekLatest()
+    expect(studio.state().behindTip).toBe(false)
+    // 过了历史那道闸才会走到 ChatController 的配置检查，报的是模型没选而不是历史版本
+    expect(() => studio.send('再高一点')).toThrow(/还没选定模型/)
   })
 })
 

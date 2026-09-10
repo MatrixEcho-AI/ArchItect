@@ -15,6 +15,8 @@
       <button id="btn-new" data-i18n="menu.new"></button>
       <button id="btn-open" data-i18n="menu.open"></button>
       <button id="btn-save" data-i18n="menu.save"></button>
+      <button id="btn-undo" data-i18n="menu.undo" data-i18n-title="menu.undoTitle"></button>
+      <button id="btn-redo" data-i18n="menu.redo" data-i18n-title="menu.redoTitle"></button>
       <span class="sep"></span>
       <label for="view" data-i18n="viewport.camera"></label>
       <select id="view">
@@ -112,6 +114,8 @@
           <button id="btn-chat-clear" class="mini" data-i18n="chat.clear"></button>
         </div>
         <div id="notice" class="notice hidden"></div>
+        <!-- 停在历史版本上时挡住发送：模型的第一笔改动会从历史分叉，把后面几步截断丢掉 -->
+        <div id="behind-tip" class="blocking hidden" data-i18n="chat.behindTip"></div>
         <div id="blocking" class="blocking hidden"></div>
         <ol id="messages" class="messages"></ol>
         <form id="chat-form" class="chat-form">

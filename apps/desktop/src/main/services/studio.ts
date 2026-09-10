@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import type { SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
-import { forEachBox, forEachExtrude, forEachPlane, measure, ReplaySession, renderSlice } from '@architect/core'
+import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis } from '@architect/core'
 import {
   DATA_VERSION_1_21_4,
@@ -48,6 +48,17 @@ export interface StudioState {
   paletteSize: number
   ops: Array<{ rev: number; tool: string; changed: number; ts: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
+  /** 游标前面还有内容（可以撤销）。 */
+  canUndo: boolean
+  /** 游标后面还有内容（可以重做）。 */
+  canRedo: boolean
+  /**
+   * 游标停在最新版本**之前**（用户拖了时间线，或撤销过）。
+   *
+   * 界面据此禁用发送框并说明原因：模型的新改动会从历史**分叉**，
+   * 把后面的几步截断丢掉——那是用户的工作，不能默默丢。
+   */
+  behindTip: boolean
   /** 一次性的提示（崩溃恢复提醒之类）。读过就没了。 */
   notice?: string
   /**
@@ -178,7 +189,6 @@ export class StudioService {
   private session: AgentSession
   /** 交互视口的网格缓存，见 `viewport()`。revision 一变就失效。 */
   private meshCache?: { revision: number; geometry: WorldGeometry }
-  private replay: ReplaySession
   private projectPath?: string
   private projectName = '未命名项目'
   readonly chat: ChatController
@@ -199,7 +209,6 @@ export class StudioService {
       ...(options.minecraftVersion !== undefined ? { minecraftVersion: options.minecraftVersion } : {}),
       plain: options.plain ?? false,
     })
-    this.replay = new ReplaySession(this.session.store, this.session.log)
 
     this.chat = new ChatController(
       options.chat ?? { secrets: createMemorySecretStore() },
@@ -231,7 +240,6 @@ export class StudioService {
     )
     // 世界被改动之后必须重建回放游标，否则向后 seek 会以为自己已经回退过
     this.chat.onAfterRun(() => {
-      this.resetReplay()
       // 一轮结束时把这一步的 op 落进 WAL：agent 停下来时状态一定是齐的
       this.autosaveNow()
       this.emit({ type: 'state', state: this.state() })
@@ -313,7 +321,25 @@ export class StudioService {
     return this.chat.chatView()
   }
 
+  /**
+   * 发一条对话。
+   *
+   * **游标不在最新时拒绝**。用户在时间线上翻到 rev 3 看着呢，这时让模型动手，
+   * 它的第一笔写入就会把 rev 4..N 截断丢掉——那是用户的工作，不能默默丢。
+   * 模型自己在运行中调 `undo` 造成的历史游标是另一回事：那一笔"撤销"是它自己做的，
+   * 它接着改就是正常的"撤销后换个做法"。
+   */
   send(text: string): ChatView {
+    const history = this.session.history
+    if (!history.atTip) {
+      this.notice =
+        `当前停在历史版本 rev ${history.revision}／共 ${history.length} 步：从这里继续，` +
+        `模型的第一笔改动就会覆盖掉后面的 ${history.length - history.revision} 步。` +
+        `请先「回到最新」（时间线右端或 ⌘⇧Z 重做），再发消息。`
+      // 立刻推一次状态：提示要马上看得见，不能等下一次世界变化
+      this.emit({ type: 'state', state: this.state() })
+      return this.chat.chatView()
+    }
     return this.chat.send(text)
   }
 
@@ -346,7 +372,6 @@ export class StudioService {
     this.session = this.openSession({
       volume: volume ?? this.session.store.volume,
     })
-    this.replay = new ReplaySession(this.session.store, this.session.log)
     this.projectPath = undefined
     this.projectName = '未命名项目'
     return this.state()
@@ -367,7 +392,6 @@ export class StudioService {
     target.restoreColumns(store.dumpColumns(), project.manifest.baseRevision)
     for (const op of project.log.all()) this.session.log.append(op)
     target.setRevision(project.manifest.revision)
-    this.replay = new ReplaySession(target, this.session.log)
     this.projectPath = path
     this.projectName = project.manifest.name
     return this.state()
@@ -412,6 +436,12 @@ export class StudioService {
         .slice(-50)
         .map((op) => ({ rev: op.rev, tool: op.tool, changed: op.result.changed, ts: op.ts })),
       histogram: stats.histogram.slice(0, 8),
+      // 撤销/重做是**游标移动**，所以这两个是"游标前后还有没有内容"，
+      // 不是"世界内部的栈里还有没有东西"。界面据此灰掉按钮。
+      canUndo: this.session.history.canUndo,
+      canRedo: this.session.history.canRedo,
+      // 游标落在最新版本**之前**：此时再让模型改，就是从历史分叉（会丢后面几步）
+      behindTip: !this.session.history.atTip,
     }
     if (this.projectPath !== undefined) snapshot.projectPath = this.projectPath
     if (stats.bounds !== undefined) snapshot.bounds = opTuple(stats.bounds)
@@ -435,17 +465,6 @@ export class StudioService {
     return this.state()
   }
 
-  /**
-   * 在**世界被改动之后**重建回放会话。
-   *
-   * `ReplaySession` 的游标记录"已重放到第几版"。如果世界被外部写入（工具调用、示例生成），
-   * 游标就与真实版本脱节了——此时向后 seek 会以为自己已经回退过，于是**不重建**，
-   * 结果历史版本里混着未来的方块。写完重建是唯一安全的做法。
-   */
-  private resetReplay(): void {
-    this.replay = new ReplaySession(this.session.store, this.session.log)
-  }
-
   /** 生成一座示例小屋，让首次启动的界面不是空的。 */
   demo(): StudioState {
     const store = this.session.store
@@ -456,8 +475,10 @@ export class StudioService {
       { x: 13, z: 13 },
       { x: 4, z: 13 },
     ]
+    // 走会话的 `applyEdit` 而不是自己 `log.record`：那条路会校验
+    // "游标 / 日志长度 / op 编号"三者一致，自己拼很容易少传一项
     const record = (tool: string, args: unknown, run: () => ReturnType<typeof store.write>): void => {
-      this.session.log.record(run(), { tool, args, correlationId: 'demo', source: 'user' })
+      this.session.applyEdit(tool, args, run)
     }
 
     record('extrude', { baseY: 0, height: 1, block: 'minecraft:oak_planks' }, () =>
@@ -503,7 +524,6 @@ export class StudioService {
       ),
     )
 
-    this.resetReplay()
     this.projectName = '示例小屋'
     return this.state()
   }
@@ -514,12 +534,27 @@ export class StudioService {
    * 用 `ReplaySession` 在事件日志上移动——向前是增量的，向后退才重建。
    */
   seek(revision: number): StudioState {
-    this.replay.seek(revision)
+    this.session.history.seek(revision)
     return this.state()
   }
 
   seekLatest(): StudioState {
-    this.replay.seekLatest()
+    this.session.history.seekLatest()
+    return this.state()
+  }
+
+  /**
+   * **撤销**：游标退一格 + 重放（plan §6）。不进日志，所以时间线、重放、
+   * `.mcai` 往返全都保持一致。
+   */
+  undo(): StudioState {
+    this.session.history.undo()
+    return this.state()
+  }
+
+  /** **重做**：游标进一格。只在撤销之后有意义。 */
+  redo(): StudioState {
+    this.session.history.redo()
     return this.state()
   }
 
@@ -815,9 +850,12 @@ export class StudioService {
       plain: this.plain,
     })
     const result = importSchematicInto(session.store, data, { at: { x: 0, y: 0, z: 0 } })
+    // 导入的内容是**基准状态**，不在 op 流里：把游标拉回 0，
+    // 这样"世界的版本"与"日志长度"从第一笔编辑起就一致。
+    // 与 `.mcai` 的 base 快照语义一样：rev 0 = 打开时看到的样子。
+    session.store.setRevision(0)
 
     this.session = session
-    this.replay = new ReplaySession(session.store, session.log)
     this.projectPath = undefined
     this.projectName = path.split('/').pop()?.replace(/\.(schem|schematic|litematic)$/i, '') ?? '导入的工程'
     this.chat.clear()

@@ -1,4 +1,4 @@
-import { EditLog, WorldStore } from '@architect/core'
+import { EditLog, ReplaySession, WorldStore } from '@architect/core'
 import type { Bounds, Pos } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
@@ -26,6 +26,7 @@ function makeContext(): ToolContext {
   return {
     store,
     log,
+    history: new ReplaySession(store, log),
     clipboard: {},
     correlationId: 'turn_1',
     // 只读工具一旦写入就会被发现：这两个注入点直接抛错。

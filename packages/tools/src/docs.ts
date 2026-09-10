@@ -14,12 +14,12 @@ import type { ToolDefinition } from './types.js'
  */
 
 const HEADER = `<!-- 由 packages/tools/src/docs.ts 生成，请勿手工编辑。 -->
-<!-- 重新生成：pnpm docs -->
+<!-- 重新生成：pnpm docs:gen -->
 
 # 工具参考
 
 > **本文件是生成的。** 唯一真相是工具自己的 JSON Schema（\`packages/tools/src/tools/*.ts\`），
-> 改 schema 之后跑 \`pnpm docs\` 重新生成；文档过期时 \`pnpm test\` 会失败。
+> 改 schema 之后跑 \`pnpm docs:gen\` 重新生成；文档过期时 \`pnpm test\` 会失败。
 >
 > 参数表能说清"有哪些参数"，说不清"这个语义为什么这样设计"。后者在 \`plan.md\` 里：
 > **附录 A**（\`fill_line\` 的半径/锥度语义）、**附录 C**（几何算子的坐标口径）、

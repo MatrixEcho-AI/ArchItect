@@ -22,6 +22,8 @@ export const zhCN = {
     import: '导入…',
     undo: '撤销',
     redo: '重做',
+    undoTitle: '撤销上一步（⌘Z / Ctrl+Z）—— 时间线游标退一格',
+    redoTitle: '重做（⇧⌘Z / Ctrl+Shift+Z）',
   },
   viewport: {
     status: '视角 方位 {{az}}° / 仰角 {{el}}° · {{ms}}',
@@ -95,6 +97,7 @@ export const zhCN = {
     stoppedByUser: '被用户停止',
     nudge: '完成闸门：还需要一次通过的 verify',
     noProvider: '还没有配置模型。先到「设置」里填好接口地址与 API Key。',
+    behindTip: '正在看历史版本。此时让模型继续改，它的第一笔就会把后面的步骤覆盖掉——先点「回到最新」（或重做到最新）。',
     turnDone: '本轮结束（{{reason}}）',
     tokens: '{{in}} 入 / {{out}} 出 / {{cached}} 命中缓存',
   },

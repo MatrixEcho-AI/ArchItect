@@ -265,7 +265,7 @@ describe('WorldStore 撤销 / 重做', () => {
       confirm: true,
     })
     expect(snapshot()).not.toEqual(before)
-    expect(store.undo()).toBe(1000)
+    expect(store.revertLastWrite()).toBe(1000)
     expect(snapshot()).toEqual(before)
   })
 
@@ -273,29 +273,29 @@ describe('WorldStore 撤销 / 重做', () => {
     const store = makeStore()
     store.setBlock({ x: 1, y: 1, z: 1 }, 'minecraft:stone')
     store.setBlock({ x: 2, y: 2, z: 2 }, 'minecraft:dirt')
-    store.undo()
+    store.revertLastWrite()
     expect(store.isAir({ x: 2, y: 2, z: 2 })).toBe(true)
-    expect(store.redo()).toBe(1)
+    expect(store.reapplyReverted()).toBe(1)
     expect(store.getBlockString({ x: 2, y: 2, z: 2 })).toBe('minecraft:dirt')
   })
 
   it('新编辑会清空 redo 栈', () => {
     const store = makeStore()
     store.setBlock({ x: 1, y: 1, z: 1 }, 'minecraft:stone')
-    store.undo()
-    expect(store.canRedo).toBe(true)
+    store.revertLastWrite()
+    expect(store.canReapplyReverted).toBe(true)
     store.setBlock({ x: 3, y: 3, z: 3 }, 'minecraft:dirt')
-    expect(store.canRedo).toBe(false)
+    expect(store.canReapplyReverted).toBe(false)
   })
 
   it('连续 undo 到空，再 undo 返回 0', () => {
     const store = makeStore()
     store.setBlock({ x: 1, y: 1, z: 1 }, 'minecraft:stone')
     store.setBlock({ x: 2, y: 2, z: 2 }, 'minecraft:stone')
-    expect(store.undo()).toBe(1)
-    expect(store.undo()).toBe(1)
-    expect(store.undo()).toBe(0)
-    expect(store.canUndo).toBe(false)
+    expect(store.revertLastWrite()).toBe(1)
+    expect(store.revertLastWrite()).toBe(1)
+    expect(store.revertLastWrite()).toBe(0)
+    expect(store.canRevertLastWrite).toBe(false)
   })
 
   it('撤销也走工区约束：不会把工区外的东西写坏', () => {
@@ -304,7 +304,7 @@ describe('WorldStore 撤销 / 重做', () => {
       confirm: true,
     })
     expect(store.isAir({ x: 0, y: 0, z: 0 })).toBe(false)
-    store.undo()
+    store.revertLastWrite()
     expect(store.isAir({ x: 0, y: 0, z: 0 })).toBe(true)
   })
 })

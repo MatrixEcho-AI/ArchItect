@@ -25,6 +25,8 @@ export const enUS = {
     import: 'Import…',
     undo: 'Undo',
     redo: 'Redo',
+    undoTitle: 'Undo the last step (Cmd/Ctrl+Z) — moves the timeline cursor back',
+    redoTitle: 'Redo (Shift+Cmd/Ctrl+Z)',
   },
   viewport: {
     status: 'azimuth {{az}}°  elevation {{el}}° · {{ms}}',
@@ -99,6 +101,8 @@ export const enUS = {
     stoppedByUser: 'Stopped by the user',
     nudge: 'Completion gate: a passing verify() is still required',
     noProvider: 'No model configured yet. Set the endpoint and API key under Settings first.',
+    behindTip:
+      'You are viewing a historical revision. Letting the model edit now would discard the later steps — go back to the latest first (or redo up to it).',
     turnDone: 'Turn finished ({{reason}})',
     tokens: '{{in}} in / {{out}} out / {{cached}} cached',
   },

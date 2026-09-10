@@ -1,4 +1,4 @@
-import { EditLog, measure, WorldStore } from '@architect/core'
+import { EditLog, measure, ReplaySession, verifyReplay, WorldStore } from '@architect/core'
 import type { Bounds } from '@architect/core'
 import { cameraForShot, createFallbackColorResolver, encodePng, renderIsometric, shotCameraLabel } from '@architect/render'
 import { describe, expect, it } from 'vitest'
@@ -39,10 +39,17 @@ function makeContext(useVolume: Bounds = volume): ToolContext {
   return {
     store,
     log,
+    history: new ReplaySession(store, log),
     clipboard: {},
     correlationId: 'turn_1',
     record: (tool, args, result) => {
-      log.record(result, { tool, args, correlationId: 'turn_1', ts: '2026-01-01T00:00:00.000Z' })
+      log.record(result, {
+        tool,
+        args,
+        correlationId: 'turn_1',
+        ts: '2026-01-01T00:00:00.000Z',
+        worldRevision: store.revision,
+      })
     },
     shoot: (request) => stubShoot(store, request),
   }
@@ -620,10 +627,15 @@ describe('撤销 / 重做工具', () => {
     await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 0, 3], block: 'stone' })
     const before = ctx.store.contentHash()
     await registry.call(ctx, 'fill_box', { from: [5, 0, 5], to: [6, 0, 6], block: 'dirt' })
+    const revisionBefore = ctx.store.revision
     const undone = await registry.call(ctx, 'undo', {})
     expect(undone.ok).toBe(true)
-    expect(undone.data?.reverted).toBe(4)
     expect(ctx.store.contentHash()).toBe(before)
+    // 撤销**不是**打一个反向补丁：游标退一格，日志长度不变
+    expect(undone.data?.revision).toBe(revisionBefore - 1)
+    expect(ctx.store.revision).toBe(revisionBefore - 1)
+    expect(ctx.log.length).toBe(revisionBefore)
+    expect(undone.data?.atTip).toBe(false)
   })
 
   it('没有可撤销时返回明确错误', async () => {
@@ -640,6 +652,26 @@ describe('撤销 / 重做工具', () => {
     const redone = await registry.call(ctx, 'redo', {})
     expect(redone.ok).toBe(true)
     expect(measure(ctx.store).blocks).toBe(9)
+    expect(redone.data?.atTip).toBe(true)
+  })
+
+  it('**撤销之后再编辑 = 从历史分叉**：日志被截断，不会出现两条同号 op', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [1, 0, 1], block: 'stone' })
+    await registry.call(ctx, 'fill_box', { from: [4, 0, 4], to: [5, 0, 5], block: 'dirt' })
+    await registry.call(ctx, 'undo', {})
+    expect(ctx.log.length).toBe(2)
+    expect(ctx.store.revision).toBe(1)
+
+    await registry.call(ctx, 'fill_box', { from: [8, 0, 8], to: [9, 0, 9], block: 'bricks' })
+    // 旧的那条 rev 2 被丢掉了，新的一笔占住 rev 2
+    expect(ctx.log.length).toBe(2)
+    expect(ctx.log.byRevision(2)!.args).toMatchObject({ from: [8, 0, 8] })
+    expect(ctx.store.revision).toBe(ctx.log.length)
+    expect(ctx.history.atTip).toBe(true)
+    // 重放不变式：世界必须与"从零重放日志"逐格相等
+    const rebuild = new WorldStore({ minecraftVersion: '1.21.4', volume })
+    expect(verifyReplay(ctx.store, ctx.log, rebuild).ok).toBe(true)
   })
 })
 

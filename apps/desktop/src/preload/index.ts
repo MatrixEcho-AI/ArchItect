@@ -29,6 +29,10 @@ export interface StudioBridge {
   save(path?: string): Promise<string | undefined>
   seek(revision: number): Promise<unknown>
   seekLatest(): Promise<unknown>
+  /** 撤销：游标退一格 + 重放。**不写日志**，所以时间线与 `.mcai` 往返保持一致。 */
+  undo(): Promise<unknown>
+  /** 重做：游标进一格。只在撤销之后有意义。 */
+  redo(): Promise<unknown>
   scene(): Promise<{
     revision: number
     positions: Float32Array
@@ -143,6 +147,8 @@ const bridge: StudioBridge = {
   save: (path) => call('studio:save', path),
   seek: (revision) => call('studio:seek', revision),
   seekLatest: () => call('studio:seekLatest'),
+  undo: () => call('studio:undo'),
+  redo: () => call('studio:redo'),
   shoot: (request) => call('studio:shoot', request),
   scene: () => call('studio:scene'),
   viewPresets: () => call('studio:viewPresets'),

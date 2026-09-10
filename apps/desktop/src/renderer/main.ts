@@ -33,6 +33,12 @@ interface StudioState {
   histogram: Array<{ block: string; count: number; percent: number }>
   /** 一次性提示（崩溃恢复之类）。主进程读过就没了，所以界面要自己留住。 */
   notice?: string
+  /** 游标前面还有内容（可以撤销）。 */
+  canUndo: boolean
+  /** 游标后面还有内容（可以重做）。 */
+  canRedo: boolean
+  /** 游标停在最新版本之前 —— 此时**不能让模型改**（它的第一笔会截断后面的步骤）。 */
+  behindTip: boolean
   /** 会话相机（`set_camera` 或机位面板设的）。界面只读显示，不自动改用户的视角。 */
   camera?: {
     azimuth?: number
@@ -131,6 +137,9 @@ interface ArchitectBridge {
   save(path?: string): Promise<string | undefined>
   seek(revision: number): Promise<StudioState>
   seekLatest(): Promise<StudioState>
+  /** 撤销 / 重做：**游标前后移动**，不是打反向补丁（plan §6）。 */
+  undo(): Promise<StudioState>
+  redo(): Promise<StudioState>
   shoot(request: { view: string; width: number; height: number; highlightLast?: boolean }): Promise<{
     png: Uint8Array
     view: string
@@ -954,6 +963,18 @@ async function simulateCameraPanel(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 300))
 }
 
+/**
+ * 合成一次撤销（只给 `#undo-test` 用）：走真实按钮那条路，抓"停在历史版本上"那张图。
+ *
+ * 这个状态值得能自动抓出来，因为它拦着一件会丢数据的事：此时让模型改，
+ * 它的第一笔就会把后面的步骤截断。
+ */
+async function simulateUndo(): Promise<void> {
+  renderPanel(await window.architect.undo())
+  renderPanel(await window.architect.undo())
+  await shoot()
+}
+
 // ── 左侧面板 ──────────────────────────────────────────────────────────────────
 
 function renderPanel(next: StudioState): void {
@@ -1003,9 +1024,18 @@ function renderPanel(next: StudioState): void {
   scrub.max = String(next.totalOps)
   scrub.value = String(next.revision)
   revLabel.textContent = t('timeline.revision', { rev: next.revision, total: next.totalOps })
-  const atHead = next.revision === next.totalOps
-  el<HTMLButtonElement>('btn-latest').disabled = atHead
+  el<HTMLButtonElement>('btn-latest').disabled = next.behindTip
   scrub.disabled = next.totalOps === 0
+
+  // 撤销 / 重做 = 游标前后还有没有内容（不是"内存栈里还有没有东西"）
+  el<HTMLButtonElement>('btn-undo').disabled = !next.canUndo
+  el<HTMLButtonElement>('btn-redo').disabled = !next.canRedo
+
+  // 停历史版本上时**不让发消息**：模型的第一笔改动会从历史分叉，
+  // 把后面的几步截断丢掉——那是用户的工作，不能默默丢
+  chatInput.disabled = next.behindTip || chat?.running === true
+  sendButton.disabled = next.behindTip || chat?.running === true
+  el('behind-tip').classList.toggle('hidden', !next.behindTip)
 }
 
 /** 可关闭的横幅。**不自动消失**——它说的是"有一份未保存的草稿"，值得用户看第二眼。 */
@@ -1032,9 +1062,12 @@ function escapeHtml(text: string): string {
 
 function renderChat(next: ChatView): void {
   chat = next
-  sendButton.disabled = next.running
+  // 两道闸叠加：运行中不能发，停在历史版本上也不能发（`renderPanel` 也会设一次，
+  // 两个渲染函数都会跑，所以两边都要把对方那个条件算进去，否则后跑的那个会把它抹掉）
+  const locked = next.running || current?.behindTip === true
+  sendButton.disabled = locked
   stopButton.classList.toggle('hidden', !next.running)
-  chatInput.disabled = next.running
+  chatInput.disabled = locked
 
   if (next.blocking.length > 0) {
     blockingEl.classList.remove('hidden')
@@ -1396,6 +1429,35 @@ function wire(): void {
     })
   })
 
+  // 撤销 / 重做：游标前后移动 + 重放。走的是和 seek 同一条路，
+  // 所以拖时间线和按 ⌘Z 在语义上没有区别（plan §6）。
+  el('btn-undo').addEventListener('click', () => {
+    void guard(t('menu.undo'), async () => {
+      renderPanel(await window.architect.undo())
+      await shoot()
+    })
+  })
+  el('btn-redo').addEventListener('click', () => {
+    void guard(t('menu.redo'), async () => {
+      renderPanel(await window.architect.redo())
+      await shoot()
+    })
+  })
+  // 快捷键：⌘Z / Ctrl+Z 撤销，⇧⌘Z / Ctrl+Shift+Z 重做。
+  // **输入框里不抢**——在文本框里按 ⌘Z 应该是文本撤销，不是世界撤销。
+  document.addEventListener('keydown', (event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return
+    const active = document.activeElement
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return
+    event.preventDefault()
+    const action = event.shiftKey ? window.architect.redo() : window.architect.undo()
+    const label = event.shiftKey ? t('menu.redo') : t('menu.undo')
+    void guard(label, async () => {
+      renderPanel(await action)
+      await shoot()
+    })
+  })
+
   // 时间线拖动：input 事件很密集，用 requestAnimationFrame 合流
   let pending: number | undefined
   scrub.addEventListener('input', () => {
@@ -1553,6 +1615,7 @@ async function boot(): Promise<void> {
     if (debugFlags().has('drag-test')) simulateDrag()
     // `#camera-test`：合成一次机位面板操作 + 共享给模型
     if (debugFlags().has('camera-test')) await simulateCameraPanel()
+    if (debugFlags().has('undo-test')) await simulateUndo()
     await window.architect.ready({
       ok: true,
       detail: softwareViewport

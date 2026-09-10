@@ -1,5 +1,5 @@
-import { EditLog, measure, WorldStore } from '@architect/core'
-import type { Bounds, Palette } from '@architect/core'
+import { EditLog, measure, ReplaySession, WorldStore } from '@architect/core'
+import type { Bounds, OpSource, Palette, WriteResult } from '@architect/core'
 import { cameraForShot, createAssetColorResolver, createFallbackColorResolver, encodePng, renderIsometric, shotCameraLabel } from '@architect/render'
 import type { CameraSpec, ColorResolver, OverlayOptions } from '@architect/render'
 import { createDefaultRegistry } from '@architect/tools'
@@ -7,6 +7,23 @@ import type { ScreenshotRequest, ToolContext, ToolImage, ToolRegistry } from '@a
 
 import { buildStateMessage, buildSystemPrompt } from './prompts.js'
 import type { PromptContext } from './prompts.js'
+
+/** 一次编辑的执行者。`source` 进 `.mcai`，用来区分"谁改的"。 */
+export interface Actor {
+  source: OpSource
+  actor: string
+}
+
+/** 工具调用写下的 op：模型改的。 */
+const LLM_ACTOR: Actor = { source: 'llm', actor: 'assistant' }
+
+/**
+ * **由人**改的 op（界面上的手改）。
+ *
+ * 和模型改的走同一条日志、同一套重放——于是时间线、撤销、`.mcai` 往返、
+ * 导出全都自动成立，不需要给"人手编辑"另开一条数据通路。
+ */
+export const USER_ACTOR: Actor = { source: 'user', actor: 'user' }
 
 /**
  * 交给外部渲染后端的一张图。
@@ -81,6 +98,13 @@ export interface SessionOptions {
 export class AgentSession {
   readonly store: WorldStore
   readonly log: EditLog
+  /**
+   * **op 流上的游标**（时间线、`undo`/`redo` 都用它）。
+   *
+   * 会话自己持有它，桌面端的时间线直接用同一个——**不能各建一个**：
+   * 两个游标意味着"世界写着 rev 7、另一个游标还停在 3"这类双真相。
+   */
+  readonly history: ReplaySession
   readonly registry: ToolRegistry
   readonly ctx: ToolContext
   private readonly resolve: ColorResolver
@@ -95,30 +119,62 @@ export class AgentSession {
       ...(options.palette !== undefined ? { palette: options.palette } : {}),
     })
     this.log = new EditLog()
+    // **会话自己持有游标**：世界 + 日志 + 游标是一件事，拆开放到别处就会出现
+    // 两个游标各改各的（那个 bug 真出现过）。桌面端的时间线直接用它，不再另建一个。
+    this.history = new ReplaySession(this.store, this.log)
     this.registry = options.registry ?? createDefaultRegistry()
     this.resolve = options.plain === true ? createFallbackColorResolver() : createAssetColorResolver(version)
 
     this.ctx = {
       store: this.store,
       log: this.log,
+      history: this.history,
       clipboard: {},
       correlationId: 'init',
       record: (tool, args, result) => {
-        this.log.record(result, {
-          tool,
-          args,
-          correlationId: this.ctx.correlationId,
-          source: 'llm',
-          ...(options.now !== undefined ? { ts: options.now() } : {}),
-        })
+        this.record(tool, args, result, LLM_ACTOR)
       },
       shoot: (request) => this.shoot(request),
     }
   }
 
+  /**
+   * 记一条 op。
+   *
+   * 截断与编号校验都在 `EditLog.record` 里（`worldRevision`）——那是唯一能同时
+   * 看到"写入后的版本"和"日志长度"的地方。曾经把它写在这一层，结果是任何
+   * 自己拼 `ToolContext` 的宿主都绕过了它，留下一份有两条同号 op 的日志。
+   */
+  private record(tool: string, args: unknown, result: WriteResult, who: Actor): void {
+    this.log.record(result, {
+      tool,
+      args,
+      correlationId: this.ctx.correlationId,
+      source: who.source,
+      actor: who.actor,
+      worldRevision: this.store.revision,
+      ...(this.options.now !== undefined ? { ts: this.options.now() } : {}),
+    })
+  }
+
   /** 开始新的一轮：同一次 LLM 响应里的多个 op 会共享这个 id，便于整轮回滚。 */
   beginTurn(correlationId: string): void {
     this.ctx.correlationId = correlationId
+  }
+
+  /**
+   * **宿主自己写一笔**（示例生成、导入、界面上的手改）。
+   *
+   * 和工具写入走**同一条记录路径**：截断、编号校验、`source` 全都一致。
+   * 宿主绕过它直接调 `log.record` 的话，就少了一道不变式检查，
+   * 而且很容易忘了传 `worldRevision`——那样日志与世界会安静地脱节。
+   *
+   * `who` 默认是"人"，因为会走这条路的都是人在改（模型走的是工具）。
+   */
+  applyEdit(tool: string, args: unknown, run: () => WriteResult, who: Actor = USER_ACTOR): WriteResult {
+    const result = run()
+    this.record(tool, args, result, who)
+    return result
   }
 
   /** 按当前状态构造 system prompt。**前缀要稳定**，所以只放慢变的东西。 */
@@ -139,6 +195,7 @@ export class AgentSession {
     const bounds = stats.bounds
     return buildStateMessage({
       revision: this.store.revision,
+      totalRevisions: this.log.length,
       blocks: stats.blocks,
       ...(bounds !== undefined
         ? { bounds: `${bounds.min.x},${bounds.min.y},${bounds.min.z}..${bounds.max.x},${bounds.max.y},${bounds.max.z}` }

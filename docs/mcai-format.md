@@ -81,7 +81,7 @@ project.mcai
   "minecraftVersion": "1.21.4", // **钉死**。全局 stateId 跨版本不稳定，见 §4.3
   "createdAt": "2026-01-01T00:00:00.000Z",
   "modifiedAt": "2026-01-01T02:59:59.120Z",
-  "revision": 185,              // 当前版本 = 已应用的 op 总数
+  "revision": 185,              // **游标**：世界现在对应哪个版本（已应用的 op 数）
   "baseRevision": 185,          // world/base.mcvox 对应的版本
   "worldHash": "…",             // WorldStore.contentHash()，打开后应当核对
   "minY": -64,                  // 世界 Y 下界
@@ -90,8 +90,17 @@ project.mcai
 }
 ```
 
-读方必须校验：`baseRevision <= revision`；`revision === edits.jsonl` 的行数（若日志存在）；
-`worldHash` 在恢复世界之后核对。
+读方必须校验：`baseRevision <= revision <= counters.ops`；
+`counters.ops === edits.jsonl` 的行数（若日志存在）；`worldHash` 在恢复世界之后核对。
+
+- `revision` 是**游标**，不是"日志有多长"。撤销 / 时间旅行只把它前后移动，
+  不写新的 op（plan §6）。所以 `revision < counters.ops` 是**合法且常见**的状态：
+  它表示"世界停在历史版本上，日志后面那几步是重做分支"。
+- `counters.ops` 才是日志的行数，**全量写入**——包括游标之后的重做分支，
+  这样重开工程之后仍然能重做。
+- 保存时 `baseRevision` 取**游标**而不是日志长度：快照写的是世界现在的样子，
+  而世界现在停在游标那里。取日志长度会写出一份谎报（快照 = 撤销后的内容，
+  manifest 却说它在最新版本），重开之后世界与日志就对不上了。
 
 ### 4.1 `project.json`
 

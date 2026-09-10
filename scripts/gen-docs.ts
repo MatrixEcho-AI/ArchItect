@@ -28,7 +28,7 @@ for (const target of targets) {
     const { readFileSync, existsSync } = await import('node:fs')
     const current = existsSync(target.path) ? readFileSync(target.path, 'utf8') : ''
     if (current !== target.content) {
-      console.error(`✗ ${relative} 与代码不一致——跑 pnpm docs 重新生成`)
+      console.error(`✗ ${relative} 与代码不一致——跑 pnpm docs:gen 重新生成`)
       stale++
     } else {
       console.log(`✓ ${relative}`)

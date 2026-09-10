@@ -143,7 +143,7 @@ describe('symmetrize：沿平面镜像', () => {
     const before = dump(store)
     symmetrize(store, { axis: 'x', coordinate: 8, source: 'negative', confirm: true })
     expect(dump(store).size).toBeGreaterThan(before.size)
-    store.undo()
+    store.revertLastWrite()
     expect(dump(store)).toEqual(before)
   })
 

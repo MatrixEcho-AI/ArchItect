@@ -1,4 +1,4 @@
-import { EditLog, WorldStore } from '@architect/core'
+import { EditLog, ReplaySession, WorldStore } from '@architect/core'
 import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
@@ -14,10 +14,17 @@ function makeContext(useVolume: Bounds = volume): ToolContext {
   return {
     store,
     log,
+    history: new ReplaySession(store, log),
     clipboard: {},
     correlationId: 'turn_1',
     record: (tool, args, result) => {
-      log.record(result, { tool, args, correlationId: 'turn_1', ts: '2026-01-01T00:00:00.000Z' })
+      log.record(result, {
+        tool,
+        args,
+        correlationId: 'turn_1',
+        ts: '2026-01-01T00:00:00.000Z',
+        worldRevision: store.revision,
+      })
     },
     shoot: () => {
       throw new Error('这个测试不该截图')

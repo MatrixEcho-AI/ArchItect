@@ -160,36 +160,51 @@ export const screenshotTool = defineTool<{
   },
 })
 
+/**
+ * **撤销 / 重做 = 版本游标前后移动 + 重放**（plan §6）。
+ *
+ * 不是"打一个反向补丁"：op 记录的是**结果**，所以往回走只能重放。
+ * 好处是撤销本身不进日志，时间线、`.mcai` 往返、`verifyReplay` 三者始终自洽。
+ *
+ * ⚠️ 一句必须写进描述里的话：**撤销之后再编辑等于从历史分叉**，
+ * 被丢掉的支线真的没了。不写的话模型会以为撤销是可逆的，然后随手在历史版本上
+ * 继续盖房子，把用户后面的工作挤掉。
+ */
 export const undoRedoTools = [
   defineTool<Record<string, never>>({
     name: 'undo',
-    description: 'Undo the last edit, rolling the world back to the state before that operation. Returns the number of reverted cells.',
+    description:
+      'Move the version cursor back one step and replay, undoing the last edit. Use it when you just made a change you regret.\n' +
+      'IMPORTANT: editing after an undo DISCARDS everything after the cursor (there is no branching yet). ' +
+      'If you only want to look at an earlier state, use screenshot/slice instead of undo.',
     parameters: obj({}),
     mutating: true,
     execute: (ctx): ToolResult => {
-      const reverted = ctx.store.undo()
-      if (reverted === 0) {
-        return failure('NOT_FOUND', 'There is nothing to undo')
-      }
+      if (!ctx.history.canUndo) return failure('NOT_FOUND', 'There is nothing to undo')
+      const before = ctx.store.revision
+      const revision = ctx.history.undo()
       return {
         ok: true,
-        summary: `reverted ${reverted} cells, revision ${ctx.store.revision}`,
-        data: { reverted, revision: ctx.store.revision },
+        summary:
+          `rolled back to revision ${revision} (was ${before}); the world is now the state before that edit. ` +
+          `${ctx.history.atTip ? 'You are at the latest revision.' : `${ctx.history.length - revision} later revision(s) are still available via redo, but a new edit would discard them.`}`,
+        data: { revision, dropped: before - revision, atTip: ctx.history.atTip },
       }
     },
   }),
   defineTool<Record<string, never>>({
     name: 'redo',
-    description: 'Redo the edit that was undone. Returns the number of cells reapplied.',
+    description:
+      'Move the version cursor forward one step and replay, reapplying an edit you undid. Only meaningful right after undo.',
     parameters: obj({}),
     mutating: true,
     execute: (ctx): ToolResult => {
-      const replayed = ctx.store.redo()
-      if (replayed === 0) return failure('NOT_FOUND', 'There is nothing to redo')
+      if (!ctx.history.canRedo) return failure('NOT_FOUND', 'There is nothing to redo')
+      const revision = ctx.history.redo()
       return {
         ok: true,
-        summary: `redid ${replayed} cells, revision ${ctx.store.revision}`,
-        data: { replayed, revision: ctx.store.revision },
+        summary: `moved forward to revision ${revision} (of ${ctx.history.length})`,
+        data: { revision, atTip: ctx.history.atTip },
       }
     },
   }),

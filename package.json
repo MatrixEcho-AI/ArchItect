@@ -20,7 +20,7 @@
     "providers": "tsx packages/cli/src/index.ts providers",
     "desktop:settings-shot": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --open-settings --capture /tmp/architect-settings.png",
     "desktop:gui-smoke": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --gui-smoke",
-    "docs": "tsx scripts/gen-docs.ts",
+    "docs:gen": "tsx scripts/gen-docs.ts",
     "docs:check": "tsx scripts/gen-docs.ts --check",
     "example": "tsx scripts/make-example.ts"
   },

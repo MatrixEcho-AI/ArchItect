@@ -1,10 +1,10 @@
 <!-- 由 packages/tools/src/docs.ts 生成，请勿手工编辑。 -->
-<!-- 重新生成：pnpm docs -->
+<!-- 重新生成：pnpm docs:gen -->
 
 # 工具参考
 
 > **本文件是生成的。** 唯一真相是工具自己的 JSON Schema（`packages/tools/src/tools/*.ts`），
-> 改 schema 之后跑 `pnpm docs` 重新生成；文档过期时 `pnpm test` 会失败。
+> 改 schema 之后跑 `pnpm docs:gen` 重新生成；文档过期时 `pnpm test` 会失败。
 >
 > 参数表能说清"有哪些参数"，说不清"这个语义为什么这样设计"。后者在 `plan.md` 里：
 > **附录 A**（`fill_line` 的半径/锥度语义）、**附录 C**（几何算子的坐标口径）、
@@ -37,8 +37,8 @@
 | [`analyze_structure`](#analyze_structure) | — | — | Building linter (read-only, does not change the world). |
 | [`screenshot`](#screenshot) | — | — | Render a screenshot for you to look at. |
 | [`set_camera`](#set_camera) | — | — | Position the camera explicitly and KEEP it for every later screenshot. |
-| [`undo`](#undo) | ✅ | — | Undo the last edit, rolling the world back to the state before that operation. |
-| [`redo`](#redo) | ✅ | — | Redo the edit that was undone. |
+| [`undo`](#undo) | ✅ | — | Move the version cursor back one step and replay, undoing the last edit. |
+| [`redo`](#redo) | ✅ | — | Move the version cursor forward one step and replay, reapplying an edit you undi… |
 
 ## 批量编辑
 
@@ -411,7 +411,8 @@ reset:true clears it and goes back to the default preset.
 ## `undo`
 
 ```
-Undo the last edit, rolling the world back to the state before that operation. Returns the number of reverted cells.
+Move the version cursor back one step and replay, undoing the last edit. Use it when you just made a change you regret.
+IMPORTANT: editing after an undo DISCARDS everything after the cursor (there is no branching yet). If you only want to look at an earlier state, use screenshot/slice instead of undo.
 ```
 
 **无参数。**
@@ -419,7 +420,7 @@ Undo the last edit, rolling the world back to the state before that operation. R
 ## `redo`
 
 ```
-Redo the edit that was undone. Returns the number of cells reapplied.
+Move the version cursor forward one step and replay, reapplying an edit you undid. Only meaningful right after undo.
 ```
 
 **无参数。**

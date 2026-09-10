@@ -33,9 +33,28 @@ export class EditLog {
   }
 
   /** 由一次成功写入记录一个 op。 */
+  /**
+   * 由一次成功写入记录一个 op。
+   *
+   * 给了 `options.worldRevision` 时顺带守两条不变式（见 `MakeOpOptions`）：
+   * 在历史版本上写入先**截断**（从那里分叉），并校验新 op 的编号与世界的版本一致。
+   * 这两条一旦破掉，日志里就会出现两条同号 op，而 `revision` 与 `log.length`
+   * 再也对不上——重放、时间线、`.mcai` 往返会同时坏掉，且坏得很安静。
+   */
   record(result: WriteResult, options: MakeOpOptions): EditOp | undefined {
     if (!result.ok || result.changeSet.length === 0) return undefined
-    const op = makeOp(this.ops.length + 1, result.changeSet, {
+    const worldRevision = options.worldRevision
+    if (worldRevision !== undefined && worldRevision - 1 < this.ops.length) {
+      this.truncate(worldRevision - 1)
+    }
+    const rev = this.ops.length + 1
+    if (worldRevision !== undefined && rev !== worldRevision) {
+      throw new EditLogError(
+        `写入后世界在 rev ${worldRevision}，但日志里下一条只能是 rev ${rev}——` +
+          `游标与日志脱节了（宿主忘了传 worldRevision，或者世界被绕过日志改过）`,
+      )
+    }
+    const op = makeOp(rev, result.changeSet, {
       changed: result.changed,
       overwrittenNonAir: result.overwrittenNonAir,
       clipped: result.clipped,
@@ -52,6 +71,24 @@ export class EditLog {
   /** 1-based 取用（与 `rev` 一致）。 */
   byRevision(rev: number): EditOp | undefined {
     return this.ops[rev - 1]
+  }
+
+  /**
+   * **从某个版本之后截断**，返回丢掉的 op 数。
+   *
+   * 只在一种情况下用：**在历史版本上继续编辑**。游标退到 rev 3 之后又写了一笔，
+   * 那条新 op 要占 rev 4，而 rev 4 已经被旧的那条占了——不截断的话日志里会出现
+   * 两条 `rev: 4`，`revision` 与 `log.length` 就此脱节，重放与 `.mcai` 往返全对不上。
+   *
+   * 这是"从这里分叉"的**简化版**：被丢弃的支线**真的没了**。
+   * plan §6 里那种"分支记在同一个 jsonl、用 `branch` 字段区分"的完整形态需要
+   * 格式支持，还没做（见 §17.2 待定）。
+   */
+  truncate(revision: number): number {
+    const keep = Math.max(0, Math.min(Math.floor(revision), this.ops.length))
+    const dropped = this.ops.length - keep
+    if (dropped > 0) this.ops.length = keep
+    return dropped
   }
 
   all(): readonly EditOp[] {

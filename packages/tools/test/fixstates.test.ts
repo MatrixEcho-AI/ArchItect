@@ -1,4 +1,4 @@
-import { EditLog, WorldStore } from '@architect/core'
+import { EditLog, ReplaySession, WorldStore } from '@architect/core'
 import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
@@ -27,10 +27,17 @@ function makeContext(): ToolContext {
   return {
     store,
     log,
+    history: new ReplaySession(store, log),
     clipboard: {},
     correlationId: 'turn_1',
     record: (tool, args, result) => {
-      log.record(result, { tool, args, correlationId: 'turn_1', ts: '2026-01-01T00:00:00.000Z' })
+      log.record(result, {
+        tool,
+        args,
+        correlationId: 'turn_1',
+        ts: '2026-01-01T00:00:00.000Z',
+        worldRevision: store.revision,
+      })
     },
     shoot: () => {
       throw new Error('fix_states never takes a screenshot')
@@ -56,6 +63,10 @@ describe('fix_states 工具', () => {
   it('修好一条栅栏线，把规则计数带进 data 与摘要', async () => {
     const ctx = makeContext()
     for (let x = 0; x < 4; x++) ctx.store.setBlock({ x, y: 0, z: 0 }, 'minecraft:oak_fence')
+    // `setBlock` 是**绕过日志**的直接写入，所以要把版本号拉回日志长度：
+    // 这条栅栏线是**基准状态**（rev 0），工具接下来那一笔才是 rev 1。
+    // 不拉的话"世界的版本"和"日志长度"一开始就是两回事，后面全对不上。
+    ctx.store.setRevision(ctx.log.length)
 
     const result = await fixStatesTool.execute(ctx, {})
 
@@ -72,6 +83,10 @@ describe('fix_states 工具', () => {
   it('整趟修正只花一个 revision，并记下恰好一个 EditOp', async () => {
     const ctx = makeContext()
     for (let x = 0; x < 4; x++) ctx.store.setBlock({ x, y: 0, z: 0 }, 'minecraft:oak_fence')
+    // `setBlock` 是**绕过日志**的直接写入，所以要把版本号拉回日志长度：
+    // 这条栅栏线是**基准状态**（rev 0），工具接下来那一笔才是 rev 1。
+    // 不拉的话"世界的版本"和"日志长度"一开始就是两回事，后面全对不上。
+    ctx.store.setRevision(ctx.log.length)
     const revision = ctx.store.revision
     const ops = ctx.log.length
 
@@ -86,6 +101,10 @@ describe('fix_states 工具', () => {
   it('幂等：第二次调用 changed=0，摘要里出现 no changes made', async () => {
     const ctx = makeContext()
     for (let x = 0; x < 4; x++) ctx.store.setBlock({ x, y: 0, z: 0 }, 'minecraft:oak_fence')
+    // `setBlock` 是**绕过日志**的直接写入，所以要把版本号拉回日志长度：
+    // 这条栅栏线是**基准状态**（rev 0），工具接下来那一笔才是 rev 1。
+    // 不拉的话"世界的版本"和"日志长度"一开始就是两回事，后面全对不上。
+    ctx.store.setRevision(ctx.log.length)
 
     const first = await fixStatesTool.execute(ctx, {})
     expect(fixData(first.data).changed).toBeGreaterThan(0)
@@ -100,6 +119,10 @@ describe('fix_states 工具', () => {
   it('from/to 限定区域：区域外不动', async () => {
     const ctx = makeContext()
     for (let x = 0; x < 4; x++) ctx.store.setBlock({ x, y: 0, z: 0 }, 'minecraft:oak_fence')
+    // `setBlock` 是**绕过日志**的直接写入，所以要把版本号拉回日志长度：
+    // 这条栅栏线是**基准状态**（rev 0），工具接下来那一笔才是 rev 1。
+    // 不拉的话"世界的版本"和"日志长度"一开始就是两回事，后面全对不上。
+    ctx.store.setRevision(ctx.log.length)
 
     const result = await fixStatesTool.execute(ctx, { from: [0, 0, 0], to: [1, 0, 0] })
 

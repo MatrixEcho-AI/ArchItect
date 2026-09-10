@@ -48,6 +48,17 @@ export interface MakeOpOptions {
   correlationId?: string
   /** 注入时间戳（测试用，保证可复现）。 */
   ts?: string
+  /**
+   * **这次写入之后世界所在的版本**（也就是 `store.revision`）。
+   *
+   * 给了它，`EditLog.record` 就会（a）在写入发生在历史版本上时先把日志截断到那里，
+   * （b）校验新 op 的 `rev` 正好等于它。两条都是在守同一个不变式：
+   * **游标、日志长度、op 编号三者必须一致**。
+   *
+   * 可选是为了不逼着每个测试夹具都填；但**宿主必须填**——不填就等于放弃这道防线，
+   * 而放弃的后果是日志里出现两条 `rev: 4`，重放与 `.mcai` 往返全对不上。
+   */
+  worldRevision?: number
 }
 
 /** 由 `rev` 生成稳定 id。 */

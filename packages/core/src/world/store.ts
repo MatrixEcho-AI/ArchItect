@@ -114,6 +114,13 @@ export class WorldStore {
     }
   }
 
+  /**
+   * **游标**：世界现在对应事件日志上的第几个版本（0 = 空白，N = 应用了前 N 条 op）。
+   *
+   * 它**不是**单调递增的计数器——`ReplaySession.seek()` 与 `revertLastWrite()`
+   * 都会让它变小。所以任何"用 revision 当唯一键"的缓存，都要能接受同一个键
+   * 对应同一份内容（这正是它可用的原因：revision 一一对应一个世界状态）。
+   */
   get revision(): number {
     return this.currentRevision
   }
@@ -121,14 +128,6 @@ export class WorldStore {
   /** 已分配的 chunk 列数——内存占用的直接指标（约 27 KB/列）。 */
   get allocatedColumns(): number {
     return this.columns.size
-  }
-
-  get canUndo(): boolean {
-    return this.undoStack.length > 0
-  }
-
-  get canRedo(): boolean {
-    return this.redoStack.length > 0
   }
 
   /** 读取全局 stateId；世界高度之外或未分配的列一律是空气。 */
@@ -267,24 +266,49 @@ export class WorldStore {
     }
   }
 
-  /** 撤销上一步。返回被回滚的格数（0 表示没有可撤销的）。 */
-  undo(): number {
+  /**
+   * 在内存里回退**最近一次写入**。返回被回滚的格数（0 表示没有可回退的）。
+   *
+   * ⚠️ **这不是事件溯源意义上的"撤销"**。事件日志上的撤销是**游标移动**
+   * （`ReplaySession.undo()`）：不产生新 op，只把世界重放到前一个版本。
+   * 两者不能混用，也不能互相替代：
+   *
+   * - 这个方法只认**本对象**的写入栈。`ReplaySession.seek()`（时间旅行、打开工程）
+   *   会 `clear()` 掉世界与那个栈，于是它此后一律返回 0。
+   * - 早期把它当成"撤销"用，结果是版本号被它 +1 而日志没变——`revision` 与
+   *   `log.length` 就此脱节，重放、时间线、`.mcai` 往返全都对不上。
+   *
+   * 名字故意写得难听：它是给"写完立刻反悔"这类**局部**场景（脚本、测试、
+   * 一次性试算）用的，不该出现在设计流程里。
+   */
+  revertLastWrite(): number {
     const changeSet = this.undoStack.pop()
     if (changeSet === undefined) return 0
     this.applyChangeSet(changeSet.inverted())
     this.redoStack.push(changeSet)
-    this.currentRevision++
+    // 版本号要跟着**退**：它是"世界现在对应哪个版本"的游标，不是单调计数器
+    if (this.currentRevision > 0) this.currentRevision--
     return changeSet.length
   }
 
-  /** 重做。返回重放的格数。 */
-  redo(): number {
+  /** 重新应用被 `revertLastWrite()` 回退掉的那一次写入。返回重放的格数。 */
+  reapplyReverted(): number {
     const changeSet = this.redoStack.pop()
     if (changeSet === undefined) return 0
     this.applyChangeSet(changeSet)
     this.undoStack.push(changeSet)
     this.currentRevision++
     return changeSet.length
+  }
+
+  /** 有没有可以 `revertLastWrite()` 的写入。 */
+  get canRevertLastWrite(): boolean {
+    return this.undoStack.length > 0
+  }
+
+  /** 有没有可以 `reapplyReverted()` 的写入。 */
+  get canReapplyReverted(): boolean {
+    return this.redoStack.length > 0
   }
 
   /**

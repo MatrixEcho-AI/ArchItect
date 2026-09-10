@@ -1,4 +1,4 @@
-import type { ClipRegion, EditLog, WorldStore, WriteResult } from '@architect/core'
+import type { ClipRegion, EditLog, ReplaySession, WorldStore, WriteResult } from '@architect/core'
 
 import type { JsonSchema } from './schema.js'
 
@@ -110,6 +110,14 @@ export interface ToolContext {
   camera?: SessionCamera
   /** 本轮的关联 id：同一次 LLM 响应里的多个 op 共享它，便于整轮回滚。 */
   correlationId: string
+  /**
+   * **op 流上的游标**（`undo` / `redo` 走它）。
+   *
+   * 撤销是**游标移动 + 重放**，不是"打一个反向补丁"（plan §6）。
+   * 这也意味着：撤销之后游标会落在最新版本**之前**，此时再编辑就是"从历史分叉"——
+   * 会话层会把日志截断到游标处（打算丢掉的支线真的没了，还没有 `branch` 字段）。
+   */
+  history: ReplaySession
   /** 记录一条 EditOp。mutating 工具写入成功后必须调用。 */
   record: (tool: string, args: unknown, result: WriteResult) => void
   /**

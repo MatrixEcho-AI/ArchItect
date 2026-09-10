@@ -88,10 +88,18 @@ export function packProject(input: PackInput): Uint8Array {
   // 打包前自查一次：索引与文件对不上是能看见的问题，值得在写盘前就把话说清楚
   validateCapturesQuietly(captures)
 
-  manifest.revision = log.length
-  manifest.baseRevision = log.length // 每次保存都写全量快照
+  // 快照写的是**世界现在的样子**，而世界现在停在 `store.revision` ——那是游标，
+  // 不一定等于日志长度：撤销之后日志还留着后面几步（重做分支），世界却不在那里。
+  //
+  // 早期这里写的是 `log.length`，于是"撤销之后保存"会存下一份谎报：
+  // 快照是撤销后的内容，manifest 却说它在最新版本上，日志里那条被撤销的 op
+  // 看上去"已经应用了"。重开之后世界与日志就此对不上（重放、时间线全错）。
+  const cursor = store.revision
+  manifest.revision = cursor
+  manifest.baseRevision = cursor // 每次保存都写全量快照
   manifest.worldHash = store.contentHash()
   manifest.counters = {
+    // 日志是**全量**写进去的：游标之后那几步是重做分支，重开之后还能 ⌘⇧Z 拿回来
     ops: log.length,
     captures: captures.refs.length,
     // 有 usage 的 assistant 消息 = 一次真实的模型调用

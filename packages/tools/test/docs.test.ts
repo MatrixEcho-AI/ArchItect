@@ -17,7 +17,7 @@ const referencePath = join(root, 'docs', 'tool-reference.md')
  * 这一条测试把 `docs/tool-reference.md` 与生成结果逐字节对比——不一致就失败，
  * 并直接告诉你缺了哪个工具、多了哪个工具。
  *
- * 重新生成：`pnpm docs`
+ * 重新生成：`pnpm docs:gen`
  */
 describe('工具参考文档与 schema 一致', () => {
   const registry = createDefaultRegistry()
@@ -27,7 +27,7 @@ describe('工具参考文档与 schema 一致', () => {
     const problems = diffToolReference(registry, onDisk)
     expect(
       problems,
-      `docs/tool-reference.md 已过期，跑 \`pnpm docs\` 重新生成。\n  ${problems.join('\n  ')}`,
+      `docs/tool-reference.md 已过期，跑 \`pnpm docs:gen\` 重新生成。\n  ${problems.join('\n  ')}`,
     ).toEqual([])
   })
 

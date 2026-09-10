@@ -88,10 +88,25 @@ export function buildSystemPrompt(context: PromptContext): string {
   return sections.join('\n')
 }
 
-/** 把 volatile 的状态（revision 等）作为**第一条 user 消息**而不是 system 前缀。 */
-export function buildStateMessage(context: { revision: number; blocks: number; bounds?: string }): string {
+/**
+ * 把 volatile 的状态（revision 等）作为**第一条 user 消息**而不是 system 前缀。
+ *
+ * `revision` 后面带 `of N` **只在游标不在最新时**出现。撤销之后世界就停在这个状态，
+ * 而模型看不到"后面还有几步"的话，会以为撤销是可逆的，然后在历史版本上继续盖房子——
+ * 那一笔落下去就把后面的支线截断了（plan §6 的分叉语义）。
+ */
+export function buildStateMessage(context: {
+  revision: number
+  blocks: number
+  bounds?: string
+  /** op 流的总长度。给了才会算"后面还有几步"。 */
+  totalRevisions?: number
+}): string {
+  const total = context.totalRevisions
+  const behind = total !== undefined && context.revision < total
   return (
-    `[STATE] revision=${context.revision} blocks=${context.blocks}` +
-    (context.bounds !== undefined ? ` bounds=${context.bounds}` : '')
+    `[STATE] revision=${context.revision}${behind ? ` of ${total}` : ''} blocks=${context.blocks}` +
+    (context.bounds !== undefined ? ` bounds=${context.bounds}` : '') +
+    (behind ? ' (historical revision: a new edit discards the later ones)' : '')
   )
 }

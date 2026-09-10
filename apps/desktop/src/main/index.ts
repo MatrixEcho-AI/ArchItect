@@ -264,6 +264,9 @@ function createWindow(): void {
   // `--no-webgl`：强制走软件视口。没有 WebGL 的机器（虚拟机、远程桌面、驱动被禁）
   // 走的就是这条路，只是平时没法在 CI 上复现——这个开关让它可复现
   if (process.argv.includes('--no-webgl')) debugFlags.push('no-webgl')
+  // `--undo-test`：启动时请求撤销两次，用来抓"停在历史版本上"那张图
+  // （发送框禁用 + 重做可用 + 时间线不在最右）
+  if (process.argv.includes('--undo-test')) debugFlags.push('undo-test')
 
   void mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
     ...(debugFlags.length > 0 ? { hash: debugFlags.join(',') } : {}),
@@ -363,6 +366,9 @@ function registerIpc(): void {
   handle('studio:demo', () => studio.demo())
   handle('studio:seek', (revision: number) => studio.seek(revision))
   handle('studio:seekLatest', () => studio.seekLatest())
+  // 撤销/重做是**游标移动**（plan §6），不是"打一个反向补丁"——所以它和 seek 是同一族操作
+  handle('studio:undo', () => studio.undo())
+  handle('studio:redo', () => studio.redo())
   // 界面上的机位面板：把用户定的机位交给会话，让模型从同一个位置看（D-52）。
   // `null` = 复原。这是**人在环路里唯一一条直接的相机通路**——其余全归模型。
   handle('studio:setCamera', (camera: Parameters<StudioService['setCamera']>[0]) => studio.setCamera(camera))
@@ -549,15 +555,11 @@ async function runSmoke(): Promise<void> {
     // 保存之后再改两格（模拟"用户还在改，然后进程被杀"）
     const store = live.agentSession.store
     for (const x of [20, 21]) {
-      const result = store.write((emit) => emit(x, 5, 20), store.palette.indexOf('minecraft:gold_block'), {
-        confirm: true,
-      })
-      live.agentSession.log.record(result, {
-        tool: 'place_block',
-        args: { pos: [x, 5, 20] },
-        source: 'user',
-        actor: 'user',
-      })
+      live.agentSession.applyEdit('place_block', { pos: [x, 5, 20] }, () =>
+        store.write((emit) => emit(x, 5, 20), store.palette.indexOf('minecraft:gold_block'), {
+          confirm: true,
+        }),
+      )
     }
     const journaled = live.autosaveNow()
     const expectedHash = store.contentHash()

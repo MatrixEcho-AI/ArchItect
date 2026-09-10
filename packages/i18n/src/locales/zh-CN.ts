@@ -255,7 +255,7 @@ export const zhCN = {
         tasks: '选任务，默认全部（hut/tower/courtyard/bridge/lighthouse）',
         outDir: '保存每个任务的 .mcai 与截图',
         record: '把全部 LLM 交互录下来（之后可离线回放）',
-        replay: '从录音回放，不联网',
+        replay: '从录音回放，不联网（录音没录完会在尽头停下报错）',
         help: '显示本帮助',
       },
     },
@@ -486,7 +486,9 @@ export const zhCN = {
     },
     recording: {
       exhausted: '（录音已放完）',
-      stale: '录音只有 {{total}} 轮，但对话已经走到第 {{turn}} 轮——说明 prompt 或工具集变了，录音已过期',
+      stale:
+        '录音只有 {{total}} 轮，但对话已经走到第 {{turn}} 轮——要么 prompt 或工具集变了，' +
+        '要么这段录音本身就是被打断的（跑了一半，只有已经拿到回复的那几轮被录下来）。两种情况都算录音过期',
       missingTools: '录音第 {{turn}} 轮用到了当前不存在的工具：{{tools}}',
       invalidJsonLine: '录音第 {{line}} 行不是合法 JSON：{{error}}',
     },

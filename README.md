@@ -102,7 +102,7 @@ examples/    示例工程
 | `pnpm demo:v0` | 不需要 API key 的完整闭环演示 |
 | `pnpm providers` | 探测模型端点：列模型、选模型、实测能力 |
 | `npx vitest run packages/cli` | 起一个协议级假模型端点，用真 `architect build` 跑完整条链路（不需要 API key） |
-| `pnpm bench` | 跑黄金任务出评分表 |
+| `pnpm bench` | 跑黄金任务出评分表（真模型，五个任务约 $0.19）。`--record <f.jsonl>` 录下全部模型交互，`--replay <f.jsonl>` 之后**完全不联网**重跑同一遍——实测每个数字逐项相同，耗时从 359 s 降到 1.7 s |
 | `pnpm architect <命令>` | CLI：`info` / `ops` / `measure` / `slice` / `replay` / `shoot` / `build` / `export` / `import` |
 | `pnpm desktop` | 打开桌面端 |
 | `pnpm example` | 重新生成 `examples/forest-hut.mcai`（时间戳钉死，所以输出可复现） |

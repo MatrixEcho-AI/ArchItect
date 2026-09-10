@@ -263,7 +263,7 @@ export const enUS = {
         tasks: 'Pick tasks, default all (hut/tower/courtyard/bridge/lighthouse)',
         outDir: 'Save each task .mcai and screenshot',
         record: 'Record every LLM exchange (replayable offline later)',
-        replay: 'Replay from a recording, no network',
+        replay: 'Replay from a recording, no network (stops if the recording is short)',
         help: 'Show this help',
       },
     },
@@ -507,7 +507,7 @@ export const enUS = {
     recording: {
       exhausted: '(recording exhausted)',
       stale:
-        'The recording has only {{total}} turns, but the conversation already reached turn {{turn}} — the prompt or tool set changed, so the recording is stale',
+        'The recording has only {{total}} turns, but the conversation already reached turn {{turn}} — either the prompt or tool set changed, or the recording was cut short mid-run (an interrupted run only records the exchanges that finished). Either way this recording is stale',
       missingTools: 'Turn {{turn}} of the recording uses tools that no longer exist: {{tools}}',
       invalidJsonLine: 'Line {{line}} of the recording is not valid JSON: {{error}}',
     },

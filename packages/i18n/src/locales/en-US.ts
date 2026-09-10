@@ -70,6 +70,7 @@ export const enUS = {
     overlay: { ruler: 'Coordinate ruler', axis: 'Axis gizmo', lastEdit: 'Last edit highlight' },
   },
   panel: {
+    measureLine: 'Size {{size}}   blocks {{blocks}}',
     project: 'Project',
     materials: 'Materials',
     palette: 'Palette (take over by hand)',
@@ -101,6 +102,7 @@ export const enUS = {
     picked: 'Picked {{block}}',
   },
   chat: {
+    behindTipDetail: 'You are sitting on history: rev {{rev}} of {{total}}. Continuing from here means the model\u2019s first edit overwrites the {{lost}} step(s) after it. Go back to the latest first (right end of the timeline, or ⌘⇧Z), then send.',
     title: 'Chat',
     placeholder: 'Describe the building you want… (⌘/Ctrl + Enter to send)',
     send: 'Send',
@@ -214,6 +216,59 @@ export const enUS = {
     noBase: 'The base project is gone, so this draft cannot be recovered — it can only be discarded.',
     applied: 'Draft merged back into the world',
     discarded: 'Draft discarded',
+    // The main-process sentences (shown as a notice above the chat).
+    found: 'Last session left {{ops}} unsaved step(s) (base: {{project}}). Click "Recover draft" to open that project and attach them.',
+    missingBase: 'Last session left {{ops}} unsaved step(s), but the base project{{project}} is gone, so they cannot be recovered. You can discard this draft; to keep it, do not start a new project.',
+    cannotApply: 'The base project is gone, so this draft cannot be recovered safely (a patched-together world would not be the one you had). You can discard it.',
+    appliedNotice: 'Recovered {{ops}} unsaved step(s) (base: {{project}}).',
+    discardedNotice: 'Discarded the {{ops}} draft step(s) from last session.',
+    unknownProject: '(unknown)',
+    parenthesized: ' ({{value}})',
+  },
+  desktop: {
+    demoProjectName: 'Demo hut',
+    importedProject: 'Imported project',
+    sliceFailed: 'Could not render the slice: {{message}}',
+    untitledProject: 'Untitled project',
+    untitledSession: 'Untitled session',
+    noSavePath: 'No save path given',
+    unserializableArgs: '(unserializable arguments)',
+    world: {
+      empty: 'The world is empty',
+      emptyExport: 'The world is empty — nothing to export',
+    },
+    edit: {
+      outsideBreak: 'That cell is outside the work area — nothing to break',
+      alreadyAir: 'That cell is already empty',
+      noBlockSelected: 'No block selected yet',
+      unknownBlock: 'Unknown block: {{name}}',
+      outsidePlace: 'That cell is outside the work area — cannot place there',
+    },
+    export: {
+      schemSummary: 'Sponge v3 · {{size}} · {{blocks}} blocks',
+      litematicSummary: 'Litematica v6 · {{size}}',
+      objSummary: 'Wavefront · {{size}} · {{blocks}} blocks / {{faces}} faces / {{materials}} materials',
+    },
+    import: {
+      summary: 'Source {{size}}{{version}} · wrote {{cells}} cells',
+      dataVersion: ' · DataVersion {{version}}',
+    },
+    chatBlocking: {
+      noProvider: 'No model provider configured yet',
+      needModel: 'No model selected yet — open Settings and click "Test connection" so the app can pick one from GET /models',
+      envKeyMissing: 'Environment variable {{name}} is not set',
+      keyMissing: 'The API key has not been saved to this machine’s keystore',
+      keychainUnavailable: 'The system keychain is unavailable on this machine, so the key was not saved. Use an environment variable instead: export ARCHITECT_API_KEY=...',
+      running: 'The previous turn is still running',
+      emptyGoal: 'The request is empty',
+    },
+    contextTrimmed: '[CONTEXT] this request dropped {{turns}} turn(s) of history{{images}} ({{reason}})',
+    contextImages: ' and {{count}} screenshot(s)',
+    settingsBadJson: 'Settings file {{file}} is not valid JSON; defaults are in use for now (the original file was left untouched)',
+    secretLocation: {
+      memory: '(in memory)',
+      unconfigured: '(not configured)',
+    },
   },
   cli: {
     usage: {

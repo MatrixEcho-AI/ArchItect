@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { defaultSettings, parseSettings, serializeSettings } from '@architect/agent'
+import { t } from '@architect/i18n'
 import type { ProviderSettings, SettingsIssue } from '@architect/agent'
 
 /**
@@ -33,7 +34,7 @@ export function loadSettings(file: string): SettingsLoad {
     // json 语法就坏了：退回默认值，但**不覆盖用户的文件**——他可能还想手工抢救
     return {
       settings: defaultSettings(),
-      issues: [{ field: '', message: `设置文件 ${file} 不是合法 JSON，已临时使用默认设置（原文件未改动）` }],
+      issues: [{ field: '', message: t('desktop.settingsBadJson', { file }) }],
       fresh: false,
     }
   }
@@ -137,7 +138,7 @@ export function createSecretStore(file: string, cipher: Cipher): SecretStore {
 export function createMemorySecretStore(): SecretStore {
   const entries = new Map<string, string>()
   return {
-    location: '(内存)',
+    location: t('desktop.secretLocation.memory'),
     encrypted: true,
     get: (id) => entries.get(id),
     set: (id, value) => {

@@ -574,7 +574,7 @@ async function runSmoke(): Promise<void> {
     const savePath = path.join(dir, 'crash.mcai')
 
     const live = new StudioService({ plain: true })
-    const wal = new AutosaveService({ dir, projectId: 'active', name: '崩溃恢复冒烟' })
+    const wal = new AutosaveService({ dir, projectId: 'active', name: 'crash-recovery smoke' })
     live.attachAutosave(wal)
     live.demo()
     await live.save(savePath)
@@ -595,7 +595,7 @@ async function runSmoke(): Promise<void> {
     // （不是在这里手写 applyPatch 循环：那样只能证明 WAL 的内容对，
     //   证明不了"界面点一下恢复真的能拿回世界"——而那才是用户要的）
     const after = new StudioService({ plain: true })
-    const reopened = new AutosaveService({ dir, projectId: 'active', name: '崩溃恢复冒烟' })
+    const reopened = new AutosaveService({ dir, projectId: 'active', name: 'crash-recovery smoke' })
     after.attachAutosave(reopened)
     const summary = after.recover()
     if (summary === undefined) throw new Error('WAL 里应当有可恢复的 op')

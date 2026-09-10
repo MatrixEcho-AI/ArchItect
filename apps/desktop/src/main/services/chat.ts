@@ -22,6 +22,7 @@ import type {
   SettingsIssue,
   UsageTotals,
 } from '@architect/agent'
+import { t } from '@architect/i18n'
 import { TranscriptRecorder } from '@architect/mcai'
 import type { TranscriptRecording } from '@architect/mcai'
 import type { ToolResult } from '@architect/tools'
@@ -154,11 +155,11 @@ export class ChatController {
     runner: ChatRunner,
   ) {
     this.settings = options.settings ?? defaultSettings()
-    this.secrets = options.secrets ?? { location: '(未配置)', encrypted: false, get: () => undefined, set: () => false, has: () => false, remove: () => {} }
+    this.secrets = options.secrets ?? { location: t('desktop.secretLocation.unconfigured'), encrypted: false, get: () => undefined, set: () => false, has: () => false, remove: () => {} }
     this.maxCaptures = options.maxCaptures ?? 60
     this.providerFactory = options.providerFactory
     this.runner = runner
-    this.recorder = new TranscriptRecorder({ title: '未命名会话' })
+    this.recorder = new TranscriptRecorder({ title: t('desktop.untitledSession') })
   }
 
   onEvent(listener: (event: StudioEvent) => void): void {
@@ -230,7 +231,7 @@ export class ChatController {
           ...this.issues.filter((i) => i.field !== 'apiKeyRef'),
           {
             field: 'apiKeyRef',
-            message: '这台机器上系统钥匙串不可用，密钥没有保存。请改用环境变量：export ARCHITECT_API_KEY=...',
+            message: t('desktop.chatBlocking.keychainUnavailable'),
           },
         ]
       }
@@ -360,18 +361,18 @@ export class ChatController {
 
   private blocking(): string[] {
     const config = activeProvider(this.settings)
-    if (config === undefined) return ['还没有配置模型']
+    if (config === undefined) return [t('desktop.chatBlocking.noProvider')]
     const problems = validateProviderConfig(config).filter(
       (problem) => problem.field === 'baseURL' || problem.field === 'apiKeyRef',
     )
     const out = problems.map((p) => p.message)
     if (config.model.trim().length === 0) {
-      out.push('还没选定模型——到「设置」里点一次「测试连接」让程序从 GET /models 里挑一个')
+      out.push(t('desktop.chatBlocking.needModel'))
     } else if (!this.hasKey(config)) {
       out.push(
         config.apiKeyRef.startsWith('env:')
-          ? `环境变量 ${config.apiKeyRef.slice(4)} 没有设置`
-          : '密钥还没有保存到本机密钥库',
+          ? t('desktop.chatBlocking.envKeyMissing', { name: config.apiKeyRef.slice(4) })
+          : t('desktop.chatBlocking.keyMissing'),
       )
     }
     return out
@@ -390,7 +391,7 @@ export class ChatController {
   /** 会话标题：用第一句用户输入，太长就截断。 */
   private recorderTitle(): string {
     const first = this.messages.find((message) => message.role === 'user')
-    if (first === undefined) return '未命名会话'
+    if (first === undefined) return t('desktop.untitledSession')
     return first.text.length > 60 ? `${first.text.slice(0, 60)}…` : first.text
   }
 
@@ -405,9 +406,9 @@ export class ChatController {
 
   /** 开始一轮。**立刻返回**，过程通过事件推给界面。 */
   send(text: string): ChatView {
-    if (this.running) throw new Error('上一轮还在进行中')
+    if (this.running) throw new Error(t('desktop.chatBlocking.running'))
     const goal = text.trim()
-    if (goal.length === 0) throw new Error('需求是空的')
+    if (goal.length === 0) throw new Error(t('desktop.chatBlocking.emptyGoal'))
 
     const blocking = this.blocking()
     if (blocking.length > 0) throw new Error(blocking.join('；'))
@@ -517,8 +518,12 @@ export class ChatController {
         // 不显示的话，用户只会觉得模型变笨了。
         const message = this.newMessage(
           'assistant',
-          `[CONTEXT] 本轮请求裁掉了 ${event.droppedTurns} 轮历史` +
-            `${event.droppedImages > 0 ? `与 ${event.droppedImages} 张截图` : ''}（${event.reason}）`,
+          t('desktop.contextTrimmed', {
+            turns: event.droppedTurns,
+            images:
+              event.droppedImages > 0 ? t('desktop.contextImages', { count: event.droppedImages }) : '',
+            reason: event.reason,
+          }),
         )
         message.gate = true
         this.messages.push(message)
@@ -585,6 +590,6 @@ function compactJson(value: unknown): string {
     const text = JSON.stringify(value ?? {})
     return text.length > 300 ? `${text.slice(0, 300)}…` : text
   } catch {
-    return '(无法序列化的参数)'
+    return t('desktop.unserializableArgs')
   }
 }

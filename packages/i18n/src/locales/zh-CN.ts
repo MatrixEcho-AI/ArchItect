@@ -66,6 +66,7 @@ export const zhCN = {
     overlay: { ruler: '坐标标尺', axis: '坐标轴', lastEdit: '上次编辑高亮' },
   },
   panel: {
+    measureLine: '尺寸 {{size}}   方块 {{blocks}}',
     project: '工程',
     materials: '材质',
     palette: '调色板（人手接管）',
@@ -97,6 +98,7 @@ export const zhCN = {
     picked: '吸取 {{block}}',
   },
   chat: {
+    behindTipDetail: '当前停在历史版本 rev {{rev}}／共 {{total}} 步：从这里继续，模型的第一笔改动就会覆盖掉后面的 {{lost}} 步。请先「回到最新」（时间线右端或 ⌘⇧Z 重做），再发消息。',
     title: '对话',
     placeholder: '描述你想建造的建筑…（⌘/Ctrl + Enter 发送）',
     send: '发送',
@@ -207,6 +209,60 @@ export const zhCN = {
     noBase: '基准工程不在原处，恢复不了——只能丢掉。',
     applied: '草稿已接回世界',
     discarded: '草稿已丢掉',
+    // 主进程那几句（走 notice 显示在对话面板上）。与上面几条分开：
+    // 上面是按钮与状态栏，下面是完整句子，措辞不一样是有意的。
+    found: '上次会话有 {{ops}} 步没保存进工程（基准：{{project}}）。点「恢复草稿」会打开那个工程，把这几步接上去。',
+    missingBase: '上次会话有 {{ops}} 步没保存进工程，但基准工程{{project}}已经不在原处，恢复不了。可以丢掉这份草稿；想留住它就先别新建工程。',
+    cannotApply: '基准工程不在原处，没法安全恢复（硬凑出来的世界不会是崩溃前的那个）。可以丢掉这份草稿。',
+    appliedNotice: '已恢复 {{ops}} 步没保存的改动（基准：{{project}}）。',
+    discardedNotice: '已丢掉上次会话的 {{ops}} 步草稿。',
+    unknownProject: '（未知）',
+    parenthesized: '（{{value}}）',
+  },
+  desktop: {
+    demoProjectName: '示例小屋',
+    importedProject: '导入的工程',
+    sliceFailed: '无法渲染切片：{{message}}',
+    untitledProject: '未命名项目',
+    untitledSession: '未命名会话',
+    noSavePath: '没有指定保存路径',
+    unserializableArgs: '(无法序列化的参数)',
+    world: {
+      empty: '世界是空的',
+      emptyExport: '世界是空的，没有可导出的内容',
+    },
+    edit: {
+      outsideBreak: '这一格在工区之外，挖不动',
+      alreadyAir: '这一格本来就是空的',
+      noBlockSelected: '还没选方块',
+      unknownBlock: '认不出这个方块：{{name}}',
+      outsidePlace: '这一格在工区之外，放不下',
+    },
+    export: {
+      schemSummary: 'Sponge v3 · {{size}} · {{blocks}} 方块',
+      litematicSummary: 'Litematica v6 · {{size}}',
+      objSummary: 'Wavefront · {{size}} · {{blocks}} 方块 / {{faces}} 面 / {{materials}} 种材质',
+    },
+    import: {
+      summary: '源 {{size}}{{version}} · 写入 {{cells}} 格',
+      dataVersion: ' · DataVersion {{version}}',
+    },
+    chatBlocking: {
+      noProvider: '还没有配置模型',
+      needModel: '还没选定模型——到「设置」里点一次「测试连接」让程序从 GET /models 里挑一个',
+      envKeyMissing: '环境变量 {{name}} 没有设置',
+      keyMissing: '密钥还没有保存到本机密钥库',
+      keychainUnavailable: '这台机器上系统钥匙串不可用，密钥没有保存。请改用环境变量：export ARCHITECT_API_KEY=...',
+      running: '上一轮还在进行中',
+      emptyGoal: '需求是空的',
+    },
+    contextTrimmed: '[CONTEXT] 本轮请求裁掉了 {{turns}} 轮历史{{images}}（{{reason}}）',
+    contextImages: '与 {{count}} 张截图',
+    settingsBadJson: '设置文件 {{file}} 不是合法 JSON，已临时使用默认设置（原文件未改动）',
+    secretLocation: {
+      memory: '(内存)',
+      unconfigured: '(未配置)',
+    },
   },
   cli: {
     usage: {

@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
+import { t } from '@architect/i18n'
 import type { SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis, WorldStore } from '@architect/core'
@@ -97,7 +98,7 @@ const VIEWPORT_BACKGROUND = { r: 26, g: 28, b: 34 }
 
 /** 提示里显示工程名而不是一整条路径：路径太长，面板上会被截掉一半。 */
 function baseNameOf(path: string | undefined): string {
-  if (path === undefined) return '（未知）'
+  if (path === undefined) return t('recovery.unknownProject')
   const parts = path.split(/[/\\]/)
   return parts[parts.length - 1] ?? path
 }
@@ -241,7 +242,7 @@ export class StudioService {
   /** 交互视口的网格缓存，见 `viewport()`。revision 一变就失效。 */
   private meshCache?: { revision: number; geometry: WorldGeometry }
   private projectPath?: string
-  private projectName = '未命名项目'
+  private projectName = t('desktop.untitledProject')
   readonly chat: ChatController
   private emit: (event: StudioEvent) => void = () => {}
   private readonly plain: boolean
@@ -352,14 +353,12 @@ export class StudioService {
 
     const basePath = pending.header.projectPath
     if (!pending.baseExists) {
-      this.notice =
-        `上次会话有 ${pending.ops.length} 步没保存进工程，但基准工程已经不在原处` +
-        `${basePath !== undefined ? `（${basePath}）` : ''}，恢复不了。` +
-        `可以丢掉这份草稿；想留住它就先别新建工程。`
+      this.notice = t('recovery.missingBase', {
+        ops: pending.ops.length,
+        project: basePath !== undefined ? t('recovery.parenthesized', { value: basePath }) : '',
+      })
     } else {
-      this.notice =
-        `上次会话有 ${pending.ops.length} 步没保存进工程（基准：${baseNameOf(basePath)}）。` +
-        `点「恢复草稿」会打开那个工程，把这几步接上去。`
+      this.notice = t('recovery.found', { ops: pending.ops.length, project: baseNameOf(basePath) })
     }
     return this.recoverySummary()
   }
@@ -390,8 +389,7 @@ export class StudioService {
     if (draft === undefined) return this.state()
     const basePath = draft.header.projectPath
     if (!draft.baseExists || basePath === undefined) {
-      this.notice =
-        '基准工程不在原处，没法安全恢复（硬凑出来的世界不会是崩溃前的那个）。可以丢掉这份草稿。'
+      this.notice = t('recovery.cannotApply')
       return this.state()
     }
 
@@ -409,7 +407,7 @@ export class StudioService {
     this.draft = undefined
     // 草稿已经进世界了：基准推到最新，免得同一个文件被恢复第二次
     this.autosave?.clear(log.length)
-    this.notice = `已恢复 ${draft.ops.length} 步没保存的改动（基准：${baseNameOf(basePath)}）。`
+    this.notice = t('recovery.appliedNotice', { ops: draft.ops.length, project: baseNameOf(basePath) })
     return this.state()
   }
 
@@ -419,7 +417,7 @@ export class StudioService {
     const dropped = this.draft.ops.length
     this.draft = undefined
     this.autosave?.discard()
-    this.notice = `已丢掉上次会话的 ${dropped} 步草稿。`
+    this.notice = t('recovery.discardedNotice', { ops: dropped })
     return this.state()
   }
 
@@ -453,10 +451,11 @@ export class StudioService {
   send(text: string): ChatView {
     const history = this.session.history
     if (!history.atTip) {
-      this.notice =
-        `当前停在历史版本 rev ${history.revision}／共 ${history.length} 步：从这里继续，` +
-        `模型的第一笔改动就会覆盖掉后面的 ${history.length - history.revision} 步。` +
-        `请先「回到最新」（时间线右端或 ⌘⇧Z 重做），再发消息。`
+      this.notice = t('chat.behindTipDetail', {
+        rev: history.revision,
+        total: history.length,
+        lost: history.length - history.revision,
+      })
       // 立刻推一次状态：提示要马上看得见，不能等下一次世界变化
       this.emit({ type: 'state', state: this.state() })
       return this.chat.chatView()
@@ -494,7 +493,7 @@ export class StudioService {
       volume: volume ?? this.session.store.volume,
     })
     this.projectPath = undefined
-    this.projectName = '未命名项目'
+    this.projectName = t('desktop.untitledProject')
     return this.state()
   }
 
@@ -521,7 +520,7 @@ export class StudioService {
   /** 保存工程；省略路径时写回原位。 */
   async save(path?: string): Promise<string> {
     const target = path ?? this.projectPath
-    if (target === undefined) throw new Error('没有指定保存路径')
+    if (target === undefined) throw new Error(t('desktop.noSavePath'))
     // 对话记录与截图一起进工程文件——`.mcai` 的价值有一半在这里
     const recording = this.chat.recording()
     const bytes = packProject({
@@ -647,7 +646,7 @@ export class StudioService {
       ),
     )
 
-    this.projectName = '示例小屋'
+    this.projectName = t('desktop.demoProjectName')
     return this.state()
   }
 
@@ -913,18 +912,18 @@ export class StudioService {
     const pos = { x: Math.round(request.pos[0]), y: Math.round(request.pos[1]), z: Math.round(request.pos[2]) }
 
     if (request.mode === 'break') {
-      if (!store.contains(pos)) throw new Error('这一格在工区之外，挖不动')
-      if (store.isAir(pos)) throw new Error('这一格本来就是空的')
+      if (!store.contains(pos)) throw new Error(t('desktop.edit.outsideBreak'))
+      if (store.isAir(pos)) throw new Error(t('desktop.edit.alreadyAir'))
       this.session.applyEdit('break_block', { pos: request.pos }, () =>
         store.write((emit) => emit(pos.x, pos.y, pos.z), 0, { mode: 'destroy', confirm: true }),
       )
     } else {
       const name = request.block
-      if (name === undefined || name.length === 0) throw new Error('还没选方块')
+      if (name === undefined || name.length === 0) throw new Error(t('desktop.edit.noBlockSelected'))
       // `palette.indexOf` 会把认不出的名字**悄悄追加**进调色板，所以先自己验一遍。
       // 不验的话，手滑打错一个名字就会在工程里留下一项永远用不到的调色板条目
-      if (store.registry.blockByName(name) === undefined) throw new Error(`认不出这个方块：${name}`)
-      if (!store.contains(pos)) throw new Error('这一格在工区之外，放不下')
+      if (store.registry.blockByName(name) === undefined) throw new Error(t('desktop.edit.unknownBlock', { name }))
+      if (!store.contains(pos)) throw new Error(t('desktop.edit.outsidePlace'))
       this.session.applyEdit('place_block', { pos: request.pos, block: name }, () =>
         store.write((emit) => emit(pos.x, pos.y, pos.z), store.palette.indexOf(name), { confirm: true }),
       )
@@ -971,7 +970,7 @@ export class StudioService {
         ...(Object.keys(range).length > 0 ? { range } : {}),
       }).text
     } catch (error) {
-      return error instanceof Error ? `无法渲染切片：${error.message}` : String(error)
+      return error instanceof Error ? t('desktop.sliceFailed', { message: error.message }) : String(error)
     }
   }
 
@@ -992,7 +991,7 @@ export class StudioService {
   ): { files: Array<{ name: string; bytes: Uint8Array }>; summary: string } {
     const store = this.session.store
     const bounds = store.contentBounds()
-    if (bounds === undefined) throw new Error('世界是空的，没有可导出的内容')
+    if (bounds === undefined) throw new Error(t('desktop.world.emptyExport'))
     const size: [number, number, number] = [
       bounds.max.x - bounds.min.x + 1,
       bounds.max.y - bounds.min.y + 1,
@@ -1007,7 +1006,7 @@ export class StudioService {
       })
       return {
         files: [{ name: `${stem}.schem`, bytes: result.bytes }],
-        summary: `Sponge v3 · ${result.size.join('×')} · ${result.blocks} 方块`,
+        summary: t('desktop.export.schemSummary', { size: result.size.join('×'), blocks: result.blocks }),
       }
     }
 
@@ -1015,7 +1014,7 @@ export class StudioService {
       const bytes = exportLitematic(store, { name: this.projectName, author: 'ArchItect' })
       return {
         files: [{ name: `${stem}.litematic`, bytes }],
-        summary: `Litematica v6 · ${size.join('×')}`,
+        summary: t('desktop.export.litematicSummary', { size: size.join('×') }),
       }
     }
 
@@ -1036,7 +1035,12 @@ export class StudioService {
     }
     return {
       files,
-      summary: `Wavefront · ${size.join('×')} · ${result.blocks} 方块 / ${result.faces} 面 / ${result.materials.length} 种材质`,
+      summary: t('desktop.export.objSummary', {
+        size: size.join('×'),
+        blocks: result.blocks,
+        faces: result.faces,
+        materials: result.materials.length,
+      }),
     }
   }
 
@@ -1077,14 +1081,17 @@ export class StudioService {
 
     this.session = session
     this.projectPath = undefined
-    this.projectName = path.split('/').pop()?.replace(/\.(schem|schematic|litematic)$/i, '') ?? '导入的工程'
+    this.projectName =
+      path.split('/').pop()?.replace(/\.(schem|schematic|litematic)$/i, '') ?? t('desktop.importedProject')
     this.chat.clear()
 
     return {
       state: this.state(),
-      summary:
-        `源 ${data.size.join('×')}${data.dataVersion !== undefined ? ` · DataVersion ${data.dataVersion}` : ''} · ` +
-        `写入 ${result.placed} 格`,
+      summary: t('desktop.import.summary', {
+        size: data.size.join('×'),
+        version: data.dataVersion !== undefined ? t('desktop.import.dataVersion', { version: data.dataVersion }) : '',
+        cells: result.placed,
+      }),
       unknown: result.unknown,
       renamed: result.renamed,
       skipped: result.skipped,
@@ -1094,8 +1101,8 @@ export class StudioService {
   /** 直方图文本（给 UI 的材质面板用）。 */
   measureText(): string {
     const stats = measure(this.session.store)
-    if (stats.bounds === undefined) return '世界是空的'
+    if (stats.bounds === undefined) return t('desktop.world.empty')
     const size = stats.size!
-    return `尺寸 ${size.x}×${size.y}×${size.z}   方块 ${stats.blocks}`
+    return t('panel.measureLine', { size: `${size.x}×${size.y}×${size.z}`, blocks: stats.blocks })
   }
 }

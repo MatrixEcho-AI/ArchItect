@@ -1,7 +1,8 @@
 import { initI18n, onLocaleChange, setLocale, t } from '@architect/i18n'
 import { eyeFromOrientation, orientationFromEye } from '@architect/render/browser'
 
-import { Viewport } from './viewport.js'
+import { SoftwareViewport, Viewport } from './viewport.js'
+import type { FrameSink, SceneViewport, SoftwareFrame } from './viewport.js'
 import type { MessageKey } from '@architect/i18n'
 import type { CameraSpec, OverlayOptions } from '@architect/render/browser'
 
@@ -166,6 +167,23 @@ interface ArchitectBridge {
     } | null,
   ): Promise<StudioState>
   slice(request: { axis: 'x' | 'y' | 'z'; index: number }): Promise<string>
+  /** 没有 WebGL 时用它要帧（软件视口）。有 WebGL 时一次都不会调。 */
+  viewport(request: {
+    azimuth: number
+    elevation: number
+    roll?: number
+    scale?: number
+    target?: [number, number, number]
+    width: number
+    height: number
+    draft?: boolean
+  }): Promise<{
+    pixels: Uint8Array
+    width: number
+    height: number
+    revision: number
+    ms: number
+  }>
   demo(): Promise<StudioState>
   exportModel(format: string, suggestedName?: string): Promise<{ paths: string[]; summary: string } | undefined>
   importModel(): Promise<
@@ -209,12 +227,19 @@ declare global {
      * 只能渲染 → 主。`executeJavaScript` 会 await 这个函数返回的 Promise 并把结果
      * （PNG 的 data URL）带回主进程，一行就够，不需要自己造一套请求/应答 id 表。
      *
-     * 返回 `null` 表示"这一枪我画不了"（版本对不上、只要纯色路径），主进程会退回
-     * 软件光栅器。
+     * 画不了时返回**带原因的 `{ error }`**，主进程会记进 `renderFallback` 再退回
+     * 软件光栅器——"这台机器有没有 WebGL"只有渲染进程知道。
      */
-    __architectCaptureShot?: (request: CaptureShotRequest) => Promise<string | null>
+    __architectCaptureShot?: (request: CaptureShotRequest) => Promise<CaptureAnswer>
   }
 }
+
+/**
+ * 离屏截图的结果：要么是一张 PNG 的 data URL，要么是**画不了的原因**。
+ *
+ * 带原因而不是裸 `null`：主进程要拿它解释"图为什么忽然变糊了"。
+ */
+type CaptureAnswer = { dataUrl: string } | { error: string }
 
 /** 主进程发来的离屏截图请求。字段与 `@architect/agent` 的 `ShotInput` 对齐。 */
 interface CaptureShotRequest {
@@ -309,19 +334,81 @@ async function guard<T>(label: string, fn: () => Promise<T>): Promise<T | undefi
   }
 }
 
-// ── 视口：three.js（WebGL） ───────────────────────────────────────────────────
+// ── 视口：three.js（WebGL），拿不到 WebGL 就退回软件光栅器 ─────────────────────
 //
-// 方块在渲染进程用 WebGL 画（MSAA 抗锯齿、mipmap、60 fps），标尺/坐标轴/文字由
+// 方块默认在渲染进程用 WebGL 画（MSAA 抗锯齿、mipmap、60 fps），标尺/坐标轴/文字由
 // `viewport.ts` 里那层 2D 画布负责。世界与几何仍然来自主进程——渲染进程不跑
 // 体素逻辑，只收一份「带 UV 的三角形 + 图集」（见 `StudioService.scene()`）。
 //
 // 早先是"每帧走一趟 IPC 拿回 RGBA"，那样既没有抗锯齿、拖动时还得降分辨率。
 // 换成 GPU 之后不再需要在画质与帧率之间二选一。
 //
-// 注意这与模型走的**软件光栅器**不是同一套：那条路要的是可复现（CI 与 golden
-// 测试没有 GPU），这条要的是好看。但几何与相机是同一份，所以两边看到的是同一个世界。
+// **但没有 WebGL 的机器上必须还能用**（虚拟机、远程桌面、驱动被禁）：
+// `new THREE.WebGLRenderer()` 会直接抛，而这一抛会连同对话面板一起带走，
+// 用户连"描述需求"都做不到。所以拿不到 WebGL 时换成软件视口——慢、糊、
+// 拖动降分辨率，但能干活，而且**模型截图那条路本来就还是软件光栅器**。
 
-let viewport: Viewport | undefined
+/**
+ * 这台机器有没有可用的 WebGL。
+ *
+ * 用一个**一次性的探针画布**，不碰真正的视口画布：three 的构造函数会独占
+ * `#canvas`，拿它试错的话失败之后就再也拿不到干净的上下文了。
+ */
+function webglAvailable(): boolean {
+  try {
+    const probe = document.createElement('canvas')
+    return probe.getContext('webgl2') !== null || probe.getContext('webgl') !== null
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 把软件帧贴到**叠加层**画布上。
+ *
+ * 为什么是叠加层而不是 `#canvas`：后者是 WebGL 画布，没有 WebGL 时它连 2D 上下文
+ * 都拿不到。叠加层本来就是 2D 的、尺寸完全一样、还在最上面，所以软件模式下由它整帧顶替。
+ *
+ * **画布的像素尺寸由这里定**（`resize`），不是由帧大小定：草稿帧是降过分辨率的，
+ * 让它去改画布尺寸会让"拖动中"和"松手后"两块缓冲来回换，画面会跳。
+ * 帧比画布小时用 `drawImage` 放大回去，而且**关掉插值**——像素画放大本来就该是硬边。
+ */
+class CanvasFrameSink implements FrameSink {
+  private readonly scratch = document.createElement('canvas')
+  private width = 1
+  private height = 1
+
+  resize(width: number, height: number): void {
+    this.width = Math.max(1, Math.floor(width))
+    this.height = Math.max(1, Math.floor(height))
+    if (overlayCanvas.width !== this.width || overlayCanvas.height !== this.height) {
+      overlayCanvas.width = this.width
+      overlayCanvas.height = this.height
+    }
+  }
+
+  blit(frame: SoftwareFrame): void {
+    const target = overlayCanvas.getContext('2d')
+    const scratch = this.scratch.getContext('2d')
+    if (target === null || scratch === null) return
+    if (this.scratch.width !== frame.width || this.scratch.height !== frame.height) {
+      this.scratch.width = frame.width
+      this.scratch.height = frame.height
+    }
+    scratch.putImageData(
+      new ImageData(new Uint8ClampedArray(frame.pixels), frame.width, frame.height),
+      0,
+      0,
+    )
+    target.imageSmoothingEnabled = false
+    target.drawImage(this.scratch, 0, 0, frame.width, frame.height, 0, 0, this.width, this.height)
+  }
+}
+
+/** 当前视口是不是软件实现（状态栏要说实话，模型截图那条路也跟着它走）。 */
+let softwareViewport = false
+
+let viewport: SceneViewport | undefined
 /**
  * 相机状态。`scale <= 0` 表示自动取景，`target` 省略表示注视内容中心。
  *
@@ -625,6 +712,13 @@ function wireCamera(): void {
 async function syncScene(): Promise<void> {
   if (current === undefined || viewport === undefined) return
   if (current.revision === sceneRevision) return
+  if (softwareViewport) {
+    // 软件视口**不吃几何**——世界本来就在主进程手里。省掉一次几 MB 的传输
+    // （顶点 + 索引 + 4 MB 图集），只把版本号记下来
+    sceneRevision = current.revision
+    viewport.setRevision(current.revision)
+    return
+  }
   const payload = await window.architect.scene()
   viewport.setRevision(payload.revision)
   viewport.setScene(payload)
@@ -639,49 +733,82 @@ async function syncScene(): Promise<void> {
  *
  * **版本必须对得上**。主进程给的 `revision` 是它算这张图时世界的版本，而渲染进程
  * 这边的场景可能还停在几步之前（状态事件还在队列里没处理）。所以对不上就重拉一次
- * 几何；重拉回来**仍然**对不上，说明世界在请求飞行途中又变了——这时宁可返回 `null`
+ * 几何；重拉回来**仍然**对不上，说明世界在请求飞行途中又变了——这时宁可拒收
  * 让主进程退回软件光栅器，也**绝不能**把一张旧图当新图交出去：
  * 让模型拿着过期截图下结论是多轮视觉 agent 最隐蔽的 bug（plan §9.4）。
+ *
+ * 拒收时**带上原因**（不是一个裸 `null`）：主进程把它一路记进 `renderFallback`，
+ * 界面上才能说清楚"为什么图忽然变糊了"——而这台机器有没有 WebGL，只有渲染进程知道。
  */
-async function captureShot(request: CaptureShotRequest): Promise<string | null> {
-  if (viewport === undefined) return null
+async function captureShot(request: CaptureShotRequest): Promise<CaptureAnswer> {
+  if (viewport === undefined) return { error: '视口还没建好，这一枪由软件光栅器画' }
   // three.js 这条路只有纹理渲染，没有"平均色快路径"，所以纯色会话直接拒收
-  if (!request.textured) return null
+  if (!request.textured) return { error: '这一枪要的是纯色路径，只有软件光栅器有' }
+  // 软件视口给不出比主进程更好的东西——**主进程自己就是软件光栅器**。
+  // 绕这一圈只会白花一次 IPC，所以直接拒收，让它自己画。
+  if (viewport.capture === undefined) {
+    return { error: '这台机器上没有可用的 WebGL，截图由主进程的软件光栅器完成' }
+  }
   if (sceneRevision !== request.revision) {
     const payload = await window.architect.scene()
-    if (payload.revision !== request.revision) return null
+    if (payload.revision !== request.revision) {
+      return { error: `渲染进程的场景还停在 rev ${payload.revision}，而这一枪要 rev ${request.revision}` }
+    }
     viewport.setRevision(payload.revision)
     viewport.setScene(payload)
     sceneRevision = payload.revision
   }
-  return viewport.capture({
-    camera: request.camera,
-    width: request.width,
-    height: request.height,
-    overlays: request.overlays,
-  })
+  return {
+    dataUrl: viewport.capture({
+      camera: request.camera,
+      width: request.width,
+      height: request.height,
+      overlays: request.overlays,
+    }),
+  }
 }
 
-/** 把一帧排到下一个动画帧。 */
-function requestFrame(): void {
+/** 本次排队的是不是"草稿帧"（拖动中）。GPU 那条路忽略它。 */
+let frameDraft = false
+/** 草稿帧之后补一张全分辨率的那一枪。 */
+let refineTimer: number | undefined
+
+/**
+ * 把一帧排到下一个动画帧。
+ *
+ * `draft` 只对软件视口有意义（半分辨率 + 不画叠加层）。连着拖时必须**合并**：
+ * pointermove 的频率远高于光栅化，不合并就会排出一长串过期请求，画面越拖越落后。
+ * 所以草稿帧之后要补一张全分辨率的（`refineTimer`），否则滚轮缩放会停在糊的那一帧上。
+ */
+function requestFrame(draft = false): void {
+  if (draft) frameDraft = true
   if (frameQueued) return
   frameQueued = true
   requestAnimationFrame(() => {
     frameQueued = false
+    const isDraft = frameDraft
+    frameDraft = false
     if (viewport === undefined || current === undefined) return
     if (current.blocks === 0) {
       empty.classList.add('show')
       return
     }
     empty.classList.remove('show')
-    viewport.render(camera)
+    viewport.render(camera, { draft: isDraft })
+    if (isDraft) {
+      if (refineTimer !== undefined) window.clearTimeout(refineTimer)
+      refineTimer = window.setTimeout(() => {
+        refineTimer = undefined
+        requestFrame()
+      }, 180)
+    }
     // 机位面板是相机的**单向镜**：拖动时数字跟着变，但用户正在面板里打字时不覆盖
     syncCameraFields()
     setStatus(
       t('viewport.status', {
         az: camera.azimuth.toFixed(0),
         el: camera.elevation.toFixed(0),
-        ms: 'GPU',
+        ms: softwareViewport ? 'CPU' : 'GPU',
       }) + (camShared ? ` · ${t('viewport.cam.sharedShort')}` : ''),
     )
   })
@@ -719,7 +846,7 @@ function wireViewport(): void {
     if (event.altKey) {
       // Alt + 拖动 = 滚转。不占额外按钮：滚转是偶尔用一次的调节
       camera.roll = (camera.roll + dx * 0.4) % 360
-      requestFrame()
+      requestFrame(true)
       return
     }
     // 往右拖 = 场景往右转；向下拖 = 从上往下看。
@@ -727,7 +854,7 @@ function wireViewport(): void {
     const unit = 360 / Math.max(320, surface.clientHeight)
     camera.azimuth -= dx * unit
     camera.elevation = clamp(camera.elevation + dy * unit * 0.8, 1, 89)
-    requestFrame()
+    requestFrame(true)
   })
 
   const endDrag = (event: PointerEvent): void => {
@@ -735,6 +862,8 @@ function wireViewport(): void {
     dragging = false
     document.body.classList.remove('dragging')
     if (surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId)
+    // 松手补一张全分辨率的：拖动中出的都是草稿帧
+    requestFrame()
   }
   surface.addEventListener('pointerup', endDrag)
   surface.addEventListener('pointercancel', endDrag)
@@ -746,7 +875,7 @@ function wireViewport(): void {
       // 指数缩放：每格 1.0015^Δy，滚一格（~100）约 ±16%，手感上比较均匀
       const base = camera.scale > 0 ? camera.scale : lastScale
       camera.scale = clamp(base * Math.exp(-event.deltaY * 0.0015), 0.5, 120)
-      requestFrame()
+      requestFrame(true)
     },
     { passive: false },
   )
@@ -1154,8 +1283,36 @@ function describeProbe(result: DiscoveryResult): string {
 
 // ── 接线 ──────────────────────────────────────────────────────────────────────
 
+/**
+ * 主进程传来的诊断开关（`location.hash` 里的逗号列表）。
+ *
+ * 渲染进程读不到 `process.argv`，所以这些开关只能这样传。做成列表是为了能**叠加**：
+ * `--no-webgl --drag-test` 验的是"没有 WebGL 时拖动还能不能用"。
+ */
+const debugFlags = (): Set<string> =>
+  new Set(location.hash.replace(/^#/, '').split(',').filter((flag) => flag.length > 0))
+
+/**
+ * 建视口。**GPU 优先，拿不到就退回软件光栅器**。
+ *
+ * `no-webgl` 是给自动抓图用的：没有 WebGL 的机器平时没法在 CI 上复现，
+ * 这个开关让那条兜底路径可以被真的走到（也顺便让人肉验一次观感）。
+ */
+function createViewport(): SceneViewport {
+  if (!debugFlags().has('no-webgl') && webglAvailable()) {
+    try {
+      return new Viewport(canvas, overlayCanvas)
+    } catch (error) {
+      // three 的构造函数抛了也要能继续：兜底那条路就是为这种情况准备的
+      console.warn('WebGL 初始化失败，改用软件视口：', error)
+    }
+  }
+  softwareViewport = true
+  return new SoftwareViewport(new CanvasFrameSink(), (request) => window.architect.viewport(request))
+}
+
 function wire(): void {
-  viewport = new Viewport(canvas, overlayCanvas)
+  viewport = createViewport()
   wireViewport()
   wireCamera()
 
@@ -1382,6 +1539,8 @@ async function boot(): Promise<void> {
     }
 
     wire()
+    // 软件视口是**降级**，不是常态：必须说出来，否则用户只会觉得"这软件怎么这么卡"
+    if (softwareViewport) showNotice(t('viewport.softwareMode'))
     // 预设角度必须在第一帧之前拿到，否则首帧用的是写死的默认角度
     await loadPresets()
     renderSettings(initial)
@@ -1389,12 +1548,17 @@ async function boot(): Promise<void> {
     renderChat(await window.architect.chat())
     await shoot()
     // `#settings`：抓图/调试时直接把设置面板打开
-    if (location.hash === '#settings') settingsDialog.showModal()
+    if (debugFlags().has('settings')) settingsDialog.showModal()
     // `#drag-test`：合成一次拖动，让"拖动"这条路径在自动抓图里也能被走到
-    if (location.hash === '#drag-test') simulateDrag()
+    if (debugFlags().has('drag-test')) simulateDrag()
     // `#camera-test`：合成一次机位面板操作 + 共享给模型
-    if (location.hash === '#camera-test') await simulateCameraPanel()
-    await window.architect.ready({ ok: true, detail: `canvas ${canvas.width}x${canvas.height}` })
+    if (debugFlags().has('camera-test')) await simulateCameraPanel()
+    await window.architect.ready({
+      ok: true,
+      detail: softwareViewport
+        ? `软件视口 ${overlayCanvas.width}x${overlayCanvas.height}（没有 WebGL）`
+        : `canvas ${canvas.width}x${canvas.height}`,
+    })
   } catch (error) {
     await window.architect.ready({
       ok: false,

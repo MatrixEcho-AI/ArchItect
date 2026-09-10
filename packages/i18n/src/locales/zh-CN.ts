@@ -41,6 +41,7 @@ export const zhCN = {
       top: '俯视',
     },
     shotDecodeFailed: '截图解码失败',
+    softwareMode: '这台机器上没有可用的 WebGL，视口改用软件光栅器：拖动会降分辨率、没有抗锯齿。模型截图不受影响（那条路本来就是软件光栅器）。',
     cam: {
       modeAngle: '按角度',
       modeEye: '按坐标',

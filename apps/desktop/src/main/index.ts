@@ -13,7 +13,7 @@ import type { StudioEvent, TestConnectionInput } from './services/chat.js'
 import type { Cipher } from './services/settings.js'
 import { createSecretStore, loadSettings, saveSettings, secretsFile, settingsFile } from './services/settings.js'
 import { StudioService } from './services/studio.js'
-import type { ExportFormat, ShootRequest, SliceRequest } from './services/studio.js'
+import type { ExportFormat, ShootRequest, SliceRequest, ViewportRequest } from './services/studio.js'
 
 /** 按扩展名（或 `--format` 的值）判断要导成什么。 */
 function formatOf(value: string): ExportFormat {
@@ -170,30 +170,42 @@ const SHOT_TIMEOUT_MS = 8000
  *
  * 方向是**主进程 → 渲染进程**，而 `ipcRenderer.invoke` 只能反过来，所以走
  * `executeJavaScript`：它会 await 页面里那个函数返回的 Promise，把结果
- * （PNG 的 data URL）带回来。省掉了自己造一套请求/应答 id 表，也就没有
- * "哪个 id 对应哪个 Promise"这类会泄漏的状态。
+ * （PNG 的 data URL，或者一个 `{ error }`）带回来。省掉了自己造一套请求/应答
+ * id 表，也就没有"哪个 id 对应哪个 Promise"这类会泄漏的状态。
  *
- * **任何异常都变成 `undefined`**：截图回落是可恢复的（还有软件光栅器），
- * 不该把一轮对话带走。
+ * **拿不到就抛，让会话记下原因并退回软件光栅器**。抛而不是返回 `undefined`
+ * 是有意的：渲染进程知道"这台机器没有 WebGL"，主进程不知道——
+ * 把原因一路带到 `renderFallback`，界面上才能说清楚"为什么图忽然变糊了"。
  */
 async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefined> {
   const win = mainWindow
-  if (!rendererReady || win === undefined || win.isDestroyed()) return undefined
-  try {
-    const dataUrl: unknown = await Promise.race([
-      win.webContents.executeJavaScript(`window.__architectCaptureShot?.(${JSON.stringify(input)}) ?? null`),
-      new Promise((resolve) => setTimeout(() => resolve(null), SHOT_TIMEOUT_MS)),
-    ])
-    if (typeof dataUrl !== 'string') return undefined
-    const comma = dataUrl.indexOf(',')
-    if (comma < 0) return undefined
-    return new Uint8Array(Buffer.from(dataUrl.slice(comma + 1), 'base64'))
-  } catch (error) {
-    process.stderr.write(
-      `GPU 截图失败，退回软件光栅器：${error instanceof Error ? error.message : String(error)}\n`,
-    )
-    return undefined
+  if (!rendererReady || win === undefined || win.isDestroyed()) {
+    throw new Error('渲染进程还没就绪，这一枪由软件光栅器画')
   }
+  let answer: unknown
+  try {
+    answer = await Promise.race([
+      win.webContents.executeJavaScript(`window.__architectCaptureShot?.(${JSON.stringify(input)}) ?? null`),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), SHOT_TIMEOUT_MS)),
+    ])
+  } catch (error) {
+    process.stderr.write(`GPU 截图通道失败：${error instanceof Error ? error.message : String(error)}\n`)
+    throw new Error('与渲染进程的截图通道断了，这一枪由软件光栅器画')
+  }
+  if (answer === 'timeout') throw new Error(`渲染进程 ${SHOT_TIMEOUT_MS}ms 没回话，这一枪由软件光栅器画`)
+  if (typeof answer === 'object' && answer !== null) {
+    if ('error' in answer) {
+      // 渲染进程明确说了"我画不了"，并给了原因（没有 WebGL、场景版本对不上……）
+      throw new Error(String((answer as { error: unknown }).error))
+    }
+    if ('dataUrl' in answer) {
+      const dataUrl = String((answer as { dataUrl: unknown }).dataUrl)
+      const comma = dataUrl.indexOf(',')
+      if (comma < 0) throw new Error('渲染进程回来的不是 PNG')
+      return new Uint8Array(Buffer.from(dataUrl.slice(comma + 1), 'base64'))
+    }
+  }
+  throw new Error('渲染进程没有返回截图')
 }
 
 function persistSettings(): void {
@@ -234,15 +246,27 @@ function createWindow(): void {
     void consumePendingOpen()
   })
 
-  // `--open-settings` 让窗口直接带着设置面板起来，便于抓图做视觉检查
+  // 诊断开关通过 **hash 列表**传进渲染进程（渲染进程读不到 argv）。
+  //
+  // 之所以是列表而不是"一个 flag 一个 hash"：这些开关**需要能叠加**——
+  // `--no-webgl --drag-test` 验的是"没有 WebGL 时拖动还能不能用"，
+  // 而 spread 写法里后一个会把前一个覆盖掉（真机上就吃过这个亏：抓出来的图
+  // 看着没拖动过，其实是 drag-test 被 no-webgl 顶掉了）。
+  const debugFlags: string[] = []
+  // `--open-settings`：窗口直接带着设置面板起来，便于抓图做视觉检查
+  if (process.argv.includes('--open-settings')) debugFlags.push('settings')
+  // `--drag-test`：启动时合成一次拖动再抓图，用来验证"拖动中降分辨率"那条路
+  // （不合成事件的话，`--capture` 抓到的永远是静止的第一帧，拖动路径一次都没被走到）
+  if (process.argv.includes('--drag-test')) debugFlags.push('drag-test')
+  // `--camera-test`：合成一次"在机位面板里填坐标 + 共享给模型"，
+  // 于是 `--shot` 拿到的就是**用户定的那个机位**拍的图（人机共用机位的验收）
+  if (process.argv.includes('--camera-test')) debugFlags.push('camera-test')
+  // `--no-webgl`：强制走软件视口。没有 WebGL 的机器（虚拟机、远程桌面、驱动被禁）
+  // 走的就是这条路，只是平时没法在 CI 上复现——这个开关让它可复现
+  if (process.argv.includes('--no-webgl')) debugFlags.push('no-webgl')
+
   void mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
-    ...(process.argv.includes('--open-settings') ? { hash: 'settings' } : {}),
-    // `--drag-test`：启动时合成一次拖动再抓图，用来验证"拖动中降分辨率"那条路
-    // （不合成事件的话，`--capture` 抓到的永远是静止的第一帧，拖动路径一次都没被走到）
-    ...(process.argv.includes('--drag-test') ? { hash: 'drag-test' } : {}),
-    // `--camera-test`：合成一次"在机位面板里填坐标 + 共享给模型"，
-    // 于是 `--shot` 拿到的就是**用户定的那个机位**拍的图（人机共用机位的验收）
-    ...(process.argv.includes('--camera-test') ? { hash: 'camera-test' } : {}),
+    ...(debugFlags.length > 0 ? { hash: debugFlags.join(',') } : {}),
   })
 }
 
@@ -328,6 +352,14 @@ function registerIpc(): void {
   // 预设机位的角度：`VIEW_PRESETS` 是唯一真相，渲染进程不抄一份（抄了就会漂移）
   handle('studio:viewPresets', () => VIEW_PRESETS)
 
+  // 没有 WebGL 时渲染进程用它要帧：主进程的软件光栅器画完直接给 RGBA。
+  // 这条通道**同时是那条路的唯一入口**，所以它必须和 `studio:scene` 一样能拿到
+  // 最新的世界——`studio.viewport()` 内部按 revision 缓存网格。
+  handle('studio:viewport', (request: ViewportRequest) => {
+    const frame = studio.viewport(request)
+    return { ...frame, pixels: Buffer.from(frame.pixels) }
+  })
+
   handle('studio:demo', () => studio.demo())
   handle('studio:seek', (revision: number) => studio.seek(revision))
   handle('studio:seekLatest', () => studio.seekLatest())
@@ -343,11 +375,6 @@ function registerIpc(): void {
 
   // three.js 视口的几何与图集（一次性；网格按 revision 缓存）
   handle('studio:scene', () => studio.scene())
-
-  // `studio:viewport` 的 IPC **没有**接：交互视口已改用渲染进程里的 three.js
-  // （见 renderer/viewport.ts）。`StudioService.viewport()` 保留着，因为
-  // 冒烟测试用它验"软件光栅器在桌面端也能跑"，以及将来"把当前视口导成 PNG"
-  // 会需要一条不依赖 GPU 的路径。
 
   handle('studio:slice', (request: SliceRequest) => studio.slice(request))
 

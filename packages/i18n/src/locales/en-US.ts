@@ -44,6 +44,8 @@ export const enUS = {
       top: 'Top',
     },
     shotDecodeFailed: 'Failed to decode the screenshot',
+    softwareMode:
+      'No usable WebGL on this machine, so the viewport falls back to the software rasterizer: dragging drops resolution and there is no antialiasing. Model screenshots are unaffected (that path always used the software rasterizer).',
     cam: {
       modeAngle: 'By angle',
       modeEye: 'By coordinates',

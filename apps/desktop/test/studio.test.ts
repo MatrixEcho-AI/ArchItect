@@ -217,6 +217,56 @@ describe('StudioService：时间旅行', () => {
   })
 })
 
+describe('StudioService：软件视口（没有 WebGL 时的兜底）', () => {
+  it('出一帧原始 RGBA，长度与尺寸对得上', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const frame = studio.viewport({ azimuth: 45, elevation: 30, width: 120, height: 90 })
+    expect(frame.pixels.length).toBe(120 * 90 * 4)
+    expect(frame.width).toBe(120)
+    expect(frame.height).toBe(90)
+    expect(frame.revision).toBe(studio.state().revision)
+    expect(frame.scale).toBeGreaterThan(0)
+  })
+
+  it('第二帧命中网格缓存（拖动靠它才跟得上）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const first = studio.viewport({ azimuth: 45, elevation: 30, width: 120, height: 90 })
+    expect(first.meshed).toBe(true)
+    const second = studio.viewport({ azimuth: 60, elevation: 30, width: 120, height: 90 })
+    expect(second.meshed).toBe(false)
+  })
+
+  it('**注视点与滚转也要生效**：机位面板设的机位在兜底路径上不能丢', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const centred = studio.viewport({ azimuth: 45, elevation: 30, width: 120, height: 90 })
+    const offset = studio.viewport({
+      azimuth: 45,
+      elevation: 30,
+      target: [16, 6, 0],
+      width: 120,
+      height: 90,
+    })
+    // 取景中心确实挪了，画面也真的变了（只改字段不改画面的话这里会相等）
+    expect(offset.target).toEqual([16, 6, 0])
+    expect(offset.target).not.toEqual(centred.target)
+    expect([...offset.pixels]).not.toEqual([...centred.pixels])
+
+    const rolled = studio.viewport({ azimuth: 45, elevation: 30, roll: 30, width: 120, height: 90 })
+    expect([...rolled.pixels]).not.toEqual([...centred.pixels])
+  })
+
+  it('draft 帧跳过叠加层（拖动时文字每帧都在抖）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const full = studio.viewport({ azimuth: 45, elevation: 30, width: 160, height: 120 })
+    const draft = studio.viewport({ azimuth: 45, elevation: 30, width: 160, height: 120, draft: true })
+    expect([...draft.pixels]).not.toEqual([...full.pixels])
+  })
+})
+
 describe('StudioService：切片', () => {
   it('返回 ASCII 平面图', () => {
     const studio = makeStudio()

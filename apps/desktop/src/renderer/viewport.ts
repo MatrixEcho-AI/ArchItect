@@ -42,7 +42,7 @@ import {
 import type { CameraSpec, OverlayOptions, TextureAtlas } from '@architect/render/browser'
 import * as THREE from 'three'
 
-interface ScenePayload {
+export interface ScenePayload {
   revision: number
   positions: Float32Array
   normals: Float32Array
@@ -86,11 +86,71 @@ export interface CaptureRequest {
 const CAPTURE_SUPERSAMPLE = 2
 
 /**
+ * 视口的共同接口。**两个实现**：`Viewport`（three.js）与 `SoftwareViewport`（主进程的软件光栅器）。
+ *
+ * 为什么要两个：`new THREE.WebGLRenderer()` 在**没有 WebGL 的机器上直接抛异常**
+ * （虚拟机、远程桌面、驱动被禁、`--disable-gpu`），而这一抛会把整个界面带走——
+ * 连"描述需求"的输入框都点不了。所以拿不到 WebGL 时必须还能用，只是慢一点、糊一点。
+ *
+ * `capture` 只有 GPU 实现有：软件模式下模型截图**不绕这一圈**，主进程本来就能画
+ * （而且画得和这里一模一样——都是软件光栅器），多一次往返只是白花。
+ */
+export interface SceneViewport {
+  setRevision(revision: number): void
+  setScene(payload: ScenePayload): void
+  resize(cssWidth: number, cssHeight: number, pixelRatio: number): void
+  /** `draft`：拖动中。GPU 忽略它，软件实现会降到半分辨率并跳过叠加层。 */
+  render(view: ViewportCamera, options?: { draft?: boolean }): void
+  capture?(request: CaptureRequest): string
+}
+
+/** 让主进程画一帧。由 `main.ts` 接到 `studio:viewport` 上。 */
+export type SoftwareFrameRequest = {
+  azimuth: number
+  elevation: number
+  roll: number
+  scale?: number
+  target?: [number, number, number]
+  width: number
+  height: number
+  draft: boolean
+}
+
+export interface SoftwareFrame {
+  pixels: Uint8Array
+  width: number
+  height: number
+  revision: number
+  ms: number
+}
+
+/**
+ * 一帧画完了往哪儿放。
+ *
+ * 抽成接口是为了让 `SoftwareViewport` **不碰 DOM**——它全部的复杂度都在
+ * "请求合并""草稿降分辨率""同帧去重"上，那几件事在 Node 里能直接测
+ * （见 `test/viewport.test.ts`）。
+ */
+export interface FrameSink {
+  /** 视口尺寸（CSS 像素）。软件帧可能比它小——草稿帧是降过分辨率的。 */
+  resize(width: number, height: number): void
+  blit(frame: SoftwareFrame): void
+}
+
+/**
+ * 软件视口拖动时把分辨率降到几分之一。
+ *
+ * 软件光栅化的成本与像素数成正比，2 就是 4 倍——**这是拖动能不能用的分水岭**。
+ * 降下来的像素由 `FrameSink` 用最近邻放大回去。
+ */
+const DRAFT_DOWNSCALE = 2
+
+/**
  * 一个 three.js 视口。
  *
  * 生命周期：`mount()` 一次 → `setScene()` 每次版本变化 → `render()` 相机变化时调用。
  */
-export class Viewport {
+export class Viewport implements SceneViewport {
   private readonly renderer: THREE.WebGLRenderer
   private readonly scene = new THREE.Scene()
   private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10_000)
@@ -225,8 +285,8 @@ export class Viewport {
     )
   }
 
-  /** 相机与画布尺寸变化后重画。 */
-  render(view: ViewportCamera): void {
+  /** 相机与画布尺寸变化后重画。`draft` 在 GPU 这条路上没有意义（一帧就几毫秒）。 */
+  render(view: ViewportCamera, _options?: { draft?: boolean }): void {
     const bounds = this.bounds ?? {
       min: this.volume.min,
       max: this.volume.max,
@@ -454,6 +514,135 @@ export class Viewport {
     }
     this.opaque = undefined
     this.translucent = undefined
+  }
+}
+
+/**
+ * **没有 WebGL 时的视口**：让主进程用软件光栅器画，渲染进程只负责把 RGBA 贴上去。
+ *
+ * 它存在的唯一理由是**不能让界面打不开**。`new THREE.WebGLRenderer()` 在没有 WebGL
+ * 的机器上会抛，而这一抛会连带把对话面板一起带走——用户连"描述需求"都做不到。
+ * 慢和糊都可以忍，用不了不行。
+ *
+ * 代价说清楚：
+ * - 每帧要走一趟 IPC（~0.3–2.5 MB 的结构化克隆），拖动时降到 1/2 边长（1/4 像素）并跳过叠加层
+ * - 无抗锯齿（软件光栅器本来就没有）
+ * - **模型截图不从这里走**：主进程自己就是软件光栅器，绕这一圈只是白花
+ *
+ * 三件事值得单独说：
+ *
+ * 1. **请求要合并**。拖动时 pointermove 比光栅化快得多，排队的结果是画面越拖越落后
+ *    （"橡皮筋"）。所以同一时刻只允许一个请求在飞，飞行途中来的新相机只保留最新那个。
+ * 2. **相同的帧不要重画**。每次状态事件（对话多一条消息、自动保存）都会催一次重绘，
+ *    而同一个版本 + 同一个尺寸 + 同一个机位的图是逐像素一样的。
+ * 3. **过期帧要丢**。尺寸在飞行途中变了的话，落笔的坐标就错了。
+ */
+export class SoftwareViewport implements SceneViewport {
+  private width = 1
+  private height = 1
+  private revision = -1
+  private pending: { view: ViewportCamera; draft: boolean } | undefined
+  private pumping = false
+  private disposed = false
+  /** 上一次**真的贴上去了**的帧指纹（版本 + 尺寸 + 草稿与否 + 机位）。 */
+  private lastDrawn: string | undefined
+  /** 已经贴上去的帧数，给状态栏与测试看。 */
+  frames = 0
+  /** 草稿帧降过分辨率，测试用它断言"拖动真的省了像素"。 */
+  lastRequestSize: { width: number; height: number } | undefined
+
+  constructor(
+    private readonly sink: FrameSink,
+    private readonly requestFrame: (request: SoftwareFrameRequest) => Promise<SoftwareFrame>,
+  ) {}
+
+  setRevision(revision: number): void {
+    this.revision = revision
+  }
+
+  setScene(payload: ScenePayload): void {
+    // 几何留在主进程——这里只需要知道版本变了，下一帧自然会拉新的
+    this.revision = payload.revision
+  }
+
+  /**
+   * **忽略设备像素比**。
+   *
+   * 软件光栅器的成本与像素数成正比，而 dpr=2 意味着 4 倍的工作量换一点点锐度。
+   * 画布用 CSS 拉伸到实际尺寸，模糊一点可以接受。
+   */
+  resize(cssWidth: number, cssHeight: number, _pixelRatio: number): void {
+    this.width = Math.max(1, Math.floor(cssWidth))
+    this.height = Math.max(1, Math.floor(cssHeight))
+    this.sink.resize(this.width, this.height)
+  }
+
+  render(view: ViewportCamera, options?: { draft?: boolean }): void {
+    if (this.disposed) return
+    this.pending = { view, draft: options?.draft === true }
+    void this.pump()
+  }
+
+  dispose(): void {
+    this.disposed = true
+    this.pending = undefined
+  }
+
+  /** 这一帧的指纹。尺寸也在里面：改窗口大小必须重画。 */
+  private frameKey(request: { view: ViewportCamera; draft: boolean }): string {
+    const { view } = request
+    return [
+      this.revision,
+      `${this.width}x${this.height}`,
+      request.draft ? 'draft' : 'full',
+      view.azimuth.toFixed(3),
+      view.elevation.toFixed(3),
+      view.roll.toFixed(3),
+      view.scale.toFixed(3),
+      view.target?.map((v) => v.toFixed(2)).join(',') ?? '-',
+    ].join('|')
+  }
+
+  private async pump(): Promise<void> {
+    if (this.pumping) return
+    this.pumping = true
+    try {
+      while (this.pending !== undefined && !this.disposed) {
+        const next = this.pending
+        this.pending = undefined
+        const key = this.frameKey(next)
+        if (key === this.lastDrawn) continue
+        // 拖动时降分辨率：画完由 sink 放大回去
+        const divisor = next.draft ? DRAFT_DOWNSCALE : 1
+        const width = Math.max(1, Math.ceil(this.width / divisor))
+        const height = Math.max(1, Math.ceil(this.height / divisor))
+        this.lastRequestSize = { width, height }
+        let frame: SoftwareFrame
+        try {
+          frame = await this.requestFrame({
+            azimuth: next.view.azimuth,
+            elevation: next.view.elevation,
+            roll: next.view.roll,
+            ...(next.view.scale > 0 ? { scale: next.view.scale } : {}),
+            ...(next.view.target !== undefined ? { target: next.view.target } : {}),
+            width,
+            height,
+            draft: next.draft,
+          })
+        } catch {
+          // 主进程画不出来（世界刚被换掉之类）不该把循环卡死：丢掉这一帧等下一条。
+          // 注意**不能**记进 `lastDrawn`——这一帧根本没画出来
+          continue
+        }
+        // 飞行途中尺寸变了 → 这张的坐标已经不对了，丢掉
+        if (frame.width !== width || frame.height !== height) continue
+        this.sink.blit(frame)
+        this.lastDrawn = key
+        this.frames++
+      }
+    } finally {
+      this.pumping = false
+    }
   }
 }
 

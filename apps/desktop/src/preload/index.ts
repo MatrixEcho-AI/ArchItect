@@ -62,6 +62,31 @@ export interface StudioBridge {
     view: string
     revision: number
   }>
+  /**
+   * **没有 WebGL 时**用它要一帧：主进程的软件光栅器画完给原始 RGBA。
+   *
+   * 返回原始像素而不是 PNG，理由和从前一样：拖动时每帧编一次 PNG 再解一次纯属白花。
+   */
+  viewport(request: {
+    azimuth: number
+    elevation: number
+    roll?: number
+    scale?: number
+    target?: [number, number, number]
+    width: number
+    height: number
+    /** 拖动中：半分辨率 + 不画叠加层。 */
+    draft?: boolean
+  }): Promise<{
+    pixels: Uint8Array
+    width: number
+    height: number
+    revision: number
+    scale: number
+    target: [number, number, number]
+    meshed: boolean
+    ms: number
+  }>
   slice(request: {
     axis: 'x' | 'y' | 'z'
     index: number
@@ -122,6 +147,7 @@ const bridge: StudioBridge = {
   scene: () => call('studio:scene'),
   viewPresets: () => call('studio:viewPresets'),
   setCamera: (camera) => call('studio:setCamera', camera),
+  viewport: (request) => call('studio:viewport', request),
   slice: (request) => call('studio:slice', request),
   demo: () => call('studio:demo'),
   exportModel: (format, suggestedName) => call('studio:export', format, suggestedName),

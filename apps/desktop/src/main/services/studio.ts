@@ -85,8 +85,12 @@ export interface ViewportRequest {
   azimuth: number
   /** 仰角（度），会被夹在 1..89 之间（90 度俯视时 up 向量退化）。 */
   elevation: number
+  /** 绕视线轴的滚转（度）。机位面板能设，所以这条兜底路径也得支持。 */
+  roll?: number
   /** 每格像素。省略表示"自动取景"。 */
   scale?: number
+  /** 注视点。省略 = 内容包围盒中心（与 GPU 那条路同一套语义）。 */
+  target?: [number, number, number]
   width: number
   height: number
   /** 拖动中：用低分辨率快速出图，松手后再出一张全分辨率的。 */
@@ -609,11 +613,21 @@ export class StudioService {
     const bounds = store.contentBounds() ?? store.volume
     const azimuth = request.azimuth
     const elevation = Math.min(89, Math.max(1, request.elevation))
+    const roll = request.roll ?? 0
 
     // `scale` 省略 = 自动取景：每帧都按当前角度重新取景，转起来不会跑出画面
     const fitted = fitCamera(bounds, { azimuth, elevation }, request.width, request.height)
     const scale = request.scale ?? fitted.scale
-    const camera = { ...fitted, azimuth, elevation, scale }
+    // 自定义注视点只挪画面中心，不改缩放——和 GPU 那条路（`Viewport.render`）口径一致
+    const target = request.target
+    const camera = {
+      ...fitted,
+      azimuth,
+      elevation,
+      roll,
+      scale,
+      ...(target !== undefined ? { target: { x: target[0], y: target[1], z: target[2] } } : {}),
+    }
 
     const data = loadRenderData(store.registry.minecraftVersion)
     let geometry: WorldGeometry
@@ -638,7 +652,7 @@ export class StudioService {
         axisGizmo: true,
         volumeBox: store.volume,
         caption: [
-          `REV ${store.revision}  AZ ${azimuth.toFixed(0)}  EL ${elevation.toFixed(0)}`,
+          `REV ${store.revision}  AZ ${azimuth.toFixed(0)}  EL ${elevation.toFixed(0)}${roll !== 0 ? `  RL ${roll.toFixed(0)}` : ''}`,
           `BOUNDS ${bounds.min.x},${bounds.min.y},${bounds.min.z}..${bounds.max.x},${bounds.max.y},${bounds.max.z}`,
         ],
       })

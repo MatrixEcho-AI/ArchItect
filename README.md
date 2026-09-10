@@ -103,18 +103,24 @@ examples/    示例工程
 | `pnpm example` | 重新生成 `examples/forest-hut.mcai`（时间戳钉死，所以输出可复现） |
 | `pnpm --filter @architect/desktop package:dir` | 打一个不打签名、不做安装包的目录版（验打包用） |
 
-桌面端的几个诊断开关（都要先 `pnpm --filter @architect/desktop build`）：
+桌面端的几个诊断开关（都要先 `pnpm --filter @architect/desktop build`）。
+它们可以**叠加**，比如 `--no-webgl --drag-test` 验的是"没有 WebGL 时拖动还能不能用"：
 
 ```bash
 cd apps/desktop
 npx --no-install electron . --demo --gui-smoke             # 全链路冒烟（含"模型截图确实走了 GPU"）
 npx --no-install electron . --demo --capture /tmp/gui.png  # 抓用户看到的窗口
 npx --no-install electron . --demo --shot /tmp/eye.png     # 抓**模型收到的那张图**
+npx --no-install electron . --demo --no-webgl              # 强制走软件视口（验兜底路径）
 ```
 
 后两个不是一回事：`--capture` 是用户的视口，`--shot` 走 `ctx.shoot`，
 尺寸、叠加层、用哪条渲染路径都和模型真实收到的一致。
 排查"模型为什么看错了"时先看 `--shot` 那张。
+
+**没有 WebGL 的机器上界面照样能用**：视口会退回主进程的软件光栅器（慢、无抗锯齿、
+拖动降分辨率），并在对话面板上明说这件事。模型截图那条路不受影响——它本来就
+优先走渲染进程的 WebGL，拿不到才退回软件光栅器。
 
 ---
 

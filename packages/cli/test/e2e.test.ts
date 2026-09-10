@@ -227,3 +227,73 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
     expect(stdout).toContain('结束原因')
   }, 240_000)
 })
+
+/**
+ * **无前缀缓存的 provider 会自动切到滑动窗口**（plan §9.2 Regime B）。
+ *
+ * 这一条只能在这一层验：`ScriptedProvider` 能验循环里的裁剪逻辑，但"真正发出去的
+ * HTTP 请求体里历史被裁短了"只有在这里才看得到。`custom` 预设的
+ * `promptCache` 就是 `none`（本地模型那一类），所以这条链路就是本地模型走的那条。
+ */
+describe('端到端：无缓存 provider 的上下文窗口', () => {
+  let dir: string
+  let model: MockModel
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'architect-window-'))
+    // 十轮只调 measure：轮数够多，一定能撞上窗口（K=6）
+    model = await startMockModel({
+      apiKey: 'sk-mock-key',
+      plan: Array.from({ length: 10 }, () => ({ tools: [{ name: 'measure', args: {} }] })),
+    })
+  })
+  afterEach(async () => {
+    await model.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('**发出去的请求体里历史真的被裁了**，而且 CLI 会说出来', async () => {
+    const out = join(dir, 'windowed.mcai')
+    const { stdout } = await execFileAsync(
+      'npx',
+      [
+        '--no-install',
+        'tsx',
+        join(root, 'packages/cli/src/index.ts'),
+        'build',
+        '造一座小屋',
+        '--out',
+        out,
+        '--provider',
+        'custom',
+        '--base-url',
+        model.url,
+        '--model',
+        'mock-v4.1-flash',
+        '--max-turns',
+        '12',
+      ],
+      {
+        cwd: root,
+        env: { ...process.env, ARCHITECT_API_KEY: 'sk-mock-key', ARCHITECT_LANG: 'zh-CN' },
+        maxBuffer: 32 * 1024 * 1024,
+      },
+    )
+
+    // 假模型记录的 `assistantTurns` 就是"这次请求里带了几轮历史"
+    const turnsSeen = model.requests.map((request) => request.assistantTurns)
+    expect(turnsSeen.length).toBeGreaterThan(8)
+    // 没有窗口的话它会一路涨到 10；有窗口就封顶在 K=6
+    expect(Math.max(...turnsSeen)).toBeLessThanOrEqual(6)
+    // 而且真的**封过顶**：到后面几轮都不再涨（否则说明根本没裁）
+    const tail = turnsSeen.slice(-3)
+    expect(tail).toEqual([6, 6, 6])
+
+    // 裁剪不是无声的：档案里要有一行，stdout 里要有一句
+    expect(stdout).toContain('[上下文]')
+    const project = unpackProject(new Uint8Array(readFileSync(out)))
+    expect(project.chat.messages.some((message) => message.note === 'context')).toBe(true)
+    // **档案本身没被剪**：它是给用户回看的，不是给模型的
+    expect(project.chat.messages.filter((message) => message.toolName === 'measure').length).toBeGreaterThan(6)
+  })
+})

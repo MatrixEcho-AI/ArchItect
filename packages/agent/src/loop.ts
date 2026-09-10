@@ -5,6 +5,8 @@ import type { ToolContext, ToolRegistry, ToolResult } from '@architect/tools'
 
 import { LlmError } from './types.js'
 import type { LlmImage, LlmMessage, LlmProvider, LlmUsage } from './types.js'
+import { contextPolicyFor, windowMessages } from './context.js'
+import type { ContextPolicy } from './context.js'
 import { checkBudget, costOf } from './usage.js'
 import type { Budget } from './usage.js'
 import type { CostTable } from './providers/config.js'
@@ -47,6 +49,12 @@ export type AgentEvent =
   | { type: 'budget'; reason: 'usd' | 'tokens' | 'turns'; detail: string; usage: Required<LlmUsage>; usd?: number }
   /** 完成闸门拒绝了模型的"我做完了"，要求它先读回。 */
   | { type: 'nudge'; reason: string; pendingMutations: number }
+  /**
+   * 这一轮发出去的请求**裁过**（Regime B）。
+   *
+   * 只在真的丢了东西时发：没丢也发的话，事件流里会塞满"什么都没发生"。
+   */
+  | { type: 'context'; regime: ContextPolicy['regime']; droppedTurns: number; droppedImages: number; reason: string }
   | { type: 'stop'; reason: StopReason }
 
 export interface AgentOptions {
@@ -96,6 +104,15 @@ export interface AgentOptions {
   requireVerification?: boolean
   /** 闸门最多提醒几次，超过就以 `unverified` 结束。默认 2。 */
   maxNudges?: number
+  /**
+   * provider 声明的能力。**决定走哪套上下文策略**（plan §9.2）。
+   *
+   * 省略时按"有缓存、不裁剪"处理——宁可多花钱，也不要在未知的 provider 上
+   * 悄悄丢掉历史。探针会写回真实能力，所以正常路径不会省略。
+   */
+  capabilities?: { promptCache: 'auto' | 'explicit' | 'none'; contextWindow?: number }
+  /** 覆盖窗口参数（默认 K=6 轮 / M=3 图）。只对 `windowed` 有意义。 */
+  contextWindow?: { keepTurns?: number; keepImages?: number }
 }
 
 const UNVERIFIED_NUDGE =
@@ -143,6 +160,9 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
 
   const requireVerification = options.requireVerification !== false
   const maxNudges = options.maxNudges ?? 2
+  // 走哪套上下文策略**在循环开始前就定死**：中途换策略会让"这次请求为什么短了"
+  // 变得无法解释（而且两套的假设互相冲突）。
+  const policy = contextPolicyFor(options.capabilities, options.contextWindow ?? {})
 
   const messages: LlmMessage[] = []
   // 状态行在历史里**只出现一次**，且在最前面。之后每轮的 revision 变化由工具结果
@@ -182,9 +202,21 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
 
     let response
     try {
+      // **请求视图 ≠ 历史**：Regime B 只裁这一次发出去的东西，
+      // `messages` 本身仍然只追加（对话档案与 `.mcai` 读的是它）。
+      const view = windowMessages(messages, policy)
+      if (view.droppedTurns > 0 || view.droppedImages > 0) {
+        emit({
+          type: 'context',
+          regime: policy.regime,
+          droppedTurns: view.droppedTurns,
+          droppedImages: view.droppedImages,
+          reason: policy.reason,
+        })
+      }
       response = await chatWithRetry(provider, {
         system,
-        messages,
+        messages: view.messages,
         tools,
         ...(options.maxTokensPerCall !== undefined ? { maxTokens: options.maxTokensPerCall } : {}),
         ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),

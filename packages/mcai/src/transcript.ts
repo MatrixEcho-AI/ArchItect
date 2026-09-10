@@ -32,6 +32,13 @@ export type TranscriptEvent =
   /** 单轮输出撞上 token 上限。`toolCalls` 为 0 表示这一轮什么都没产出。 */
   | { type: 'truncated'; turn: number; out: number; toolCalls: number }
   | { type: 'nudge'; reason: string; pendingMutations: number }
+  /**
+   * 这一轮发出去的请求被**裁剪**过（无前缀缓存的 provider，见 plan §9.2 Regime B）。
+   *
+   * 必须进档案：事后看"模型为什么忘了前面那几步"，答案就在这里——
+   * 那些轮次根本没发出去。
+   */
+  | { type: 'context'; regime: string; droppedTurns: number; droppedImages: number; reason: string }
   /** 预算触顶：会话被主动刹住，不是故障。 */
   | { type: 'budget'; reason: string; detail: string; usage: { in: number; out: number; cachedIn?: number }; usd?: number }
   | { type: 'stop'; reason: string }
@@ -185,6 +192,19 @@ export class TranscriptRecorder {
             ...(event.usage.cachedIn !== undefined ? { cachedIn: event.usage.cachedIn } : {}),
           },
           ...(event.usd !== undefined ? { usd: event.usd } : {}),
+        })
+        return
+      case 'context':
+        // 裁剪也进档案：事后看"模型为什么忘了前面那几步"，答案就在这里——
+        // 那些轮次根本没发出去（不是模型没看）
+        this.messages.push({
+          id: this.nextId++,
+          role: 'assistant',
+          text:
+            `[CONTEXT] request trimmed (${event.regime}): ${event.droppedTurns} earlier turn(s)` +
+            `${event.droppedImages > 0 ? ` and ${event.droppedImages} screenshot(s)` : ''} dropped — ${event.reason}`,
+          ts: this.now(),
+          note: 'context',
         })
         return
       default:

@@ -46,8 +46,11 @@ pnpm architect shoot hut.mcai --out hut.png --view iso_ne
 pnpm architect export hut.mcai --out hut.schem       # 拿去游戏里 //schem load
 ```
 
-**不想接云模型也行**：Ollama 本地跑同样一套 Provider 配置（`--provider ollama`），
-只是没有前缀缓存，harness 会自动切到保守的上下文策略。
+**不想接云模型也行**：Ollama 本地跑同样一套 Provider 配置（`--provider ollama`）。
+它没有前缀缓存，harness 会**自动切到保守的上下文策略**：只保留最近 6 轮、最多 3 张截图，
+并在历史里留一句"前面 N 轮被裁掉了"。反过来，有前缀缓存的 provider（DeepSeek）**一轮都不裁**——
+剪掉一张旧图省下的钱，比把它后面十万 token 的缓存打掉亏掉的钱少三个数量级。
+（判据在 `packages/agent/src/context.ts`，两套只在其中一套上跑。）
 
 ---
 

@@ -243,7 +243,8 @@ export class StudioService {
       async (goal, provider, onEvent, shouldStop) => {
         // 用户设的花费上限要**真的刹车**，不能只记账。价格表来自当前 provider。
         const settings = this.chat.settingsValue
-        const cost = activeProvider(settings)?.cost
+        const active = activeProvider(settings)
+        const cost = active?.cost
         const state = await runAgent(
           {
             provider,
@@ -255,6 +256,9 @@ export class StudioService {
             shouldStop,
             ...(settings.budget !== undefined ? { budget: settings.budget } : {}),
             ...(cost !== undefined ? { costTable: cost } : {}),
+            // 上下文策略由 provider 能力决定（§9.2）：本地模型没有前缀缓存，
+            // 不切窗口的话每个请求都要把整段历史全价重算一遍
+            ...(active !== undefined ? { capabilities: active.capabilities } : {}),
           },
           goal,
         )

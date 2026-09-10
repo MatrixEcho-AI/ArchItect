@@ -378,6 +378,7 @@ export const enUS = {
       model: 'Model: {{id}} / {{model}}   Volume: {{volume}}',
       capabilities: 'Capabilities: image input {{vision}}   tool calling {{tools}}   prompt cache {{cache}}',
       turn: '— turn {{turn}} —',
+      context: '  [context] trimmed {{turns}} turn(s) / {{images}} screenshot(s): {{reason}}',
       assistant: '  [assistant] {{text}}',
       images: '  [image] {{n}} tile(s) ({{kb}} KB)',
       retry: '  [retry {{attempt}}] {{reason}}',

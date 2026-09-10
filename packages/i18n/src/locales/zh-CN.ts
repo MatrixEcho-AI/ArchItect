@@ -368,6 +368,7 @@ export const zhCN = {
       model: '模型：{{id}} / {{model}}   工区：{{volume}}',
       capabilities: '能力：图像输入 {{vision}}   工具调用 {{tools}}   前缀缓存 {{cache}}',
       turn: '— 第 {{turn}} 轮 —',
+      context: '  [上下文] 裁掉 {{turns}} 轮历史 / {{images}} 张截图：{{reason}}',
       assistant: '  [助手] {{text}}',
       images: '  [图] {{n}} 张（{{kb}} KB）',
       retry: '  [重试 {{attempt}}] {{reason}}',

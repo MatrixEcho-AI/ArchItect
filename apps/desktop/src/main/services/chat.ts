@@ -512,6 +512,18 @@ export class ChatController {
         this.budgetStop = event.detail
         break
       }
+      case 'context': {
+        // 上下文裁剪：**不是错误**，但它解释了"模型为什么忘了前面那几步"。
+        // 不显示的话，用户只会觉得模型变笨了。
+        const message = this.newMessage(
+          'assistant',
+          `[CONTEXT] 本轮请求裁掉了 ${event.droppedTurns} 轮历史` +
+            `${event.droppedImages > 0 ? `与 ${event.droppedImages} 张截图` : ''}（${event.reason}）`,
+        )
+        message.gate = true
+        this.messages.push(message)
+        break
+      }
       case 'retry': {
         const message = this.newMessage('assistant', `[retry ${event.attempt}] ${event.reason}`)
         message.gate = true

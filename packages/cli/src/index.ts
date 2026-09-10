@@ -766,6 +766,9 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
       system: session.buildSystem(),
       // volatile 状态走历史里的第一条 user 消息（§9.2），不进 system 前缀
       stateLine: session.buildStateLine(),
+      // 上下文策略由 provider 能力决定：有前缀缓存就不裁剪（剪了反而更贵），
+      // 没有缓存或窗口很小就切到滑动窗口（§9.2）
+      capabilities: config.capabilities,
       ...(inv.maxTurns !== undefined ? { maxTurns: inv.maxTurns } : {}),
       // 用户在命令行给了美元上限就必须把预算**传进去**。
       // 不要在这里判"有没有价格表"——没有价格表时 `checkBudget` 会判为越界并说明原因；
@@ -785,6 +788,9 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
             // 每一轮都打一行：第一轮可能要跑两分钟（思考模型在规划），
             // 中间什么都不打印的话，用户会以为程序挂了
             out(t('cli.build.turn', { turn: event.turn }))
+            break
+          case 'context':
+            out(t('cli.build.context', { turns: event.droppedTurns, images: event.droppedImages, reason: event.reason }))
             break
           case 'assistant':
             out(t('cli.build.assistant', { text: truncate(event.text, 200) }))

@@ -121,6 +121,17 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
   const requests: RecordedRequest[] = []
   const violations: string[] = []
   let finished = false
+  /**
+   * 剧本走到第几步。**只数"真正的 agent 轮次"**，不数探针请求。
+   *
+   * 两个都不能拿来当计数器：
+   * - 请求里的 `assistantTurns`：无前缀缓存的 provider 下循环会裁历史
+   *   （plan §9.2 Regime B），那个数字到 K 就不涨了，剧本会卡在同一步上；
+   * - 无脑数 chat 请求：能力探针也会发 chat，会把剧本提前消耗掉。
+   *
+   * 判据是**请求里带的工具集是不是真工具**：探针只带 `report_ready` 一个。
+   */
+  let agentTurns = 0
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = []
@@ -149,6 +160,10 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
         return
       }
 
+      const tools = Array.isArray(body.tools) ? (body.tools as Array<{ function?: { name?: string } }>) : []
+      const isProbe = tools.length > 0 && tools.every((tool) => tool.function?.name === 'report_ready')
+      const turnIndex = agentTurns
+      if (!isProbe && tools.length > 0) agentTurns++
       const messages = body.messages ?? []
       const images = messages.reduce((sum, message) => {
         if (!Array.isArray(message.content)) return sum
@@ -212,7 +227,7 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
 
       const promptTokens = 30 + images * imageTokens + assistantTurns * 40
 
-      const step = plan[assistantTurns]
+      const step = plan[turnIndex]
       if (step === undefined) {
         finished = true
         // 收尾：没有工具调用 + 一段文本。**文本要放进 content**，
@@ -223,7 +238,7 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
       send(
         200,
         completion(
-          assistantTurns === 0 ? '先量一下尺度，再铺地板、起墙。' : '',
+          turnIndex === 0 ? '先量一下尺度，再铺地板、起墙。' : '',
           step.tools.map((tool, index) => ({
             id: `call_${assistantTurns}_${index}`,
             type: 'function',

@@ -58,7 +58,7 @@ export interface ChatMessageRecord {
   /** 预算刹车时的累计花费（美元）。 */
   usd?: number
   /** 完成闸门、重试、预算刹车、截断一类的系统提示（不是模型说的话，界面要区别显示）。 */
-  note?: 'gate' | 'retry' | 'budget' | 'truncated'
+  note?: 'gate' | 'retry' | 'budget' | 'truncated' | 'context'
 }
 
 export interface ChatSessionRecord {

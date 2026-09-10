@@ -3,7 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import type { SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
-import type { Bounds, SliceAxis } from '@architect/core'
+import type { Bounds, SliceAxis, WorldStore } from '@architect/core'
 import {
   DATA_VERSION_1_21_4,
   exportLitematic,
@@ -24,9 +24,10 @@ import {
   fitCamera,
   loadRenderData,
   meshWorld,
+  pickBlock,
   rasterize,
 } from '@architect/render'
-import type { WorldGeometry } from '@architect/render'
+import type { CameraSpec, WorldGeometry } from '@architect/render'
 import type { SessionCamera } from '@architect/tools'
 
 import type { AutosaveService } from './autosave.js'
@@ -127,6 +128,32 @@ export interface ScenePayload {
   atlas: { size: number; data: Uint8Array }
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
+}
+
+/** 拾取请求：视口里的一个像素 + 当时那个相机。 */
+export interface PickRequest extends ViewportRequest {
+  /** 视口内的像素坐标（左上角原点，CSS 像素）。 */
+  x: number
+  y: number
+}
+
+export interface PickResult {
+  /** 命中的那一格（挖掉它）。 */
+  block: [number, number, number]
+  /** 贴着命中面外侧的那一格（放这里）。 */
+  place: [number, number, number]
+  normal: [number, number, number]
+  /** 命中的那一格现在是什么（吸管 / 状态栏）。 */
+  blockId: string
+  /** 放置目标在不在工区里。不在时界面直接拦下，不用等主进程报错。 */
+  placeInVolume: boolean
+}
+
+export interface EditBlockRequest {
+  pos: [number, number, number]
+  /** `place` 时要放什么；`break` 时忽略。 */
+  block?: string
+  mode: 'place' | 'break'
 }
 
 export interface ViewportFrame {
@@ -642,20 +669,24 @@ export class StudioService {
    * 渲染进程解码一次，纯属白花；`putImageData` 直接吃 RGBA。
    * 代价是每帧要走 ~2.5 MB 的结构化克隆，比 PNG 往返更快也更简单。
    */
-  viewport(request: ViewportRequest): ViewportFrame {
-    const started = Date.now()
-    const store = this.session.store
-    const bounds = store.contentBounds() ?? store.volume
+  /**
+   * 视口相机的**唯一**构造处。
+   *
+   * `viewport()` / `pick()` 共用它。这不是省几行代码的事：拾取要答的是
+   * "你点的那个像素下面是哪一格"，而"哪个像素画的是哪一格"完全由这个相机决定。
+   * 各建一个相机，两边就会以"差一格"的形式飘开——而且只在某些角度才飘。
+   */
+  private viewportCamera(request: ViewportRequest): CameraSpec {
+    const bounds = this.session.store.contentBounds() ?? this.session.store.volume
     const azimuth = request.azimuth
     const elevation = Math.min(89, Math.max(1, request.elevation))
     const roll = request.roll ?? 0
-
     // `scale` 省略 = 自动取景：每帧都按当前角度重新取景，转起来不会跑出画面
     const fitted = fitCamera(bounds, { azimuth, elevation }, request.width, request.height)
     const scale = request.scale ?? fitted.scale
     // 自定义注视点只挪画面中心，不改缩放——和 GPU 那条路（`Viewport.render`）口径一致
     const target = request.target
-    const camera = {
+    return {
       ...fitted,
       azimuth,
       elevation,
@@ -663,17 +694,29 @@ export class StudioService {
       scale,
       ...(target !== undefined ? { target: { x: target[0], y: target[1], z: target[2] } } : {}),
     }
+  }
+
+  /** 当前版本的网格，按 revision 缓存。绘图、截图、拾取都吃这一份。 */
+  private geometryFor(store: WorldStore): { geometry: WorldGeometry; meshed: boolean } {
+    if (this.meshCache !== undefined && this.meshCache.revision === store.revision) {
+      return { geometry: this.meshCache.geometry, meshed: false }
+    }
+    const data = loadRenderData(store.registry.minecraftVersion)
+    const geometry = meshWorld(store, data)
+    this.meshCache = { revision: store.revision, geometry }
+    return { geometry, meshed: true }
+  }
+
+  viewport(request: ViewportRequest): ViewportFrame {
+    const started = Date.now()
+    const store = this.session.store
+    const bounds = store.contentBounds() ?? store.volume
+    const camera = this.viewportCamera(request)
+    const { azimuth, elevation } = camera
+    const roll = camera.roll ?? 0
 
     const data = loadRenderData(store.registry.minecraftVersion)
-    let geometry: WorldGeometry
-    let meshed = false
-    if (this.meshCache !== undefined && this.meshCache.revision === store.revision) {
-      geometry = this.meshCache.geometry
-    } else {
-      geometry = meshWorld(store, data)
-      this.meshCache = { revision: store.revision, geometry }
-      meshed = true
-    }
+    const { geometry, meshed } = this.geometryFor(store)
 
     const canvas = new Canvas(request.width, request.height, VIEWPORT_BACKGROUND)
     const basis = cameraBasis(camera)
@@ -698,7 +741,7 @@ export class StudioService {
       width: request.width,
       height: request.height,
       revision: store.revision,
-      scale,
+      scale: camera.scale,
       target: [camera.target.x, camera.target.y, camera.target.z],
       meshed,
       ms: Date.now() - started,
@@ -714,10 +757,7 @@ export class StudioService {
   scene(): ScenePayload {
     const store = this.session.store
     const data = loadRenderData(store.registry.minecraftVersion)
-    if (this.meshCache === undefined || this.meshCache.revision !== store.revision) {
-      this.meshCache = { revision: store.revision, geometry: meshWorld(store, data) }
-    }
-    const geometry = this.meshCache.geometry
+    const { geometry } = this.geometryFor(store)
     const bounds = store.contentBounds()
     return {
       revision: store.revision,
@@ -735,6 +775,90 @@ export class StudioService {
         max: [store.volume.max.x, store.volume.max.y, store.volume.max.z],
       },
     }
+  }
+
+  /**
+   * **屏幕像素 → 世界里的那一格**（人手接管：点哪儿改哪儿）。
+   *
+   * 相机走 `viewportCamera`、几何走 `geometryFor`，和画面上看到的那一帧是同一份——
+   * 这是"点到的格子 = 看到的格子"的全部依据。
+   *
+   * 没有屏幕射线命中任何三角形时返回 `undefined`（点到天空）。
+   */
+  pick(request: PickRequest): PickResult | undefined {
+    const store = this.session.store
+    const camera = this.viewportCamera(request)
+    const { geometry } = this.geometryFor(store)
+    const hit = pickBlock(geometry, camera, request.x, request.y)
+    if (hit === undefined) return undefined
+
+    const cell = { x: hit.block.x, y: hit.block.y, z: hit.block.z }
+    const inside = store.contains(cell)
+    return {
+      block: [hit.block.x, hit.block.y, hit.block.z],
+      place: [hit.place.x, hit.place.y, hit.place.z],
+      normal: [hit.normal.x, hit.normal.y, hit.normal.z],
+      /** 命中的那一格现在是什么（吸管与状态栏用）。 */
+      blockId: inside ? store.getBlockString(cell) : 'minecraft:air',
+      /** 放置目标在工区内吗？不在的话界面直接拦下，不用等主进程报错。 */
+      placeInVolume: store.contains(hit.place),
+    }
+  }
+
+  /**
+   * **人改一格**：放置或挖掉。
+   *
+   * 走 `session.applyEdit`，所以它和模型改的**完全同权**：进日志（`source: 'user'`）、
+   * 能被撤销、能被时间线回放、能导出、能存进 `.mcai`。
+   * 给人手编辑另开一条数据通路的话，上面每一样都要重做一遍，而且迟早会漏一样。
+   */
+  editBlock(request: EditBlockRequest): StudioState {
+    const store = this.session.store
+    const pos = { x: Math.round(request.pos[0]), y: Math.round(request.pos[1]), z: Math.round(request.pos[2]) }
+
+    if (request.mode === 'break') {
+      if (!store.contains(pos)) throw new Error('这一格在工区之外，挖不动')
+      if (store.isAir(pos)) throw new Error('这一格本来就是空的')
+      this.session.applyEdit('break_block', { pos: request.pos }, () =>
+        store.write((emit) => emit(pos.x, pos.y, pos.z), 0, { mode: 'destroy', confirm: true }),
+      )
+    } else {
+      const name = request.block
+      if (name === undefined || name.length === 0) throw new Error('还没选方块')
+      // `palette.indexOf` 会把认不出的名字**悄悄追加**进调色板，所以先自己验一遍。
+      // 不验的话，手滑打错一个名字就会在工程里留下一项永远用不到的调色板条目
+      if (store.registry.blockByName(name) === undefined) throw new Error(`认不出这个方块：${name}`)
+      if (!store.contains(pos)) throw new Error('这一格在工区之外，放不下')
+      this.session.applyEdit('place_block', { pos: request.pos, block: name }, () =>
+        store.write((emit) => emit(pos.x, pos.y, pos.z), store.palette.indexOf(name), { confirm: true }),
+      )
+    }
+
+    // 人手编辑也不该把没保存的改动留在内存里：和跑完一轮一样落一次 WAL
+    this.autosaveNow()
+    this.emit({ type: 'state', state: this.state() })
+    return this.state()
+  }
+
+  /**
+   * 调色板搜索：按名字在 `minecraft-data` 里找。
+   *
+   * 为什么不给一张"所有可放置方块"的固定表：1.21.4 有 1095 种，里面混着大量
+   * 技术方块（`moving_piston`、`bubble_column`…），筛出一张正确的表本身就是个坑；
+   * 而用户真正要的多半是"我刚才用过的"（那在 `state().histogram` 里）
+   * 或"我搜得到的那几个"。
+   */
+  blocks(query: string): string[] {
+    const store = this.session.store
+    const needle = query.trim().toLowerCase()
+    if (needle.length === 0) return []
+
+    const matches = [...store.registry.blockNames]
+      .filter((name) => name.includes(needle))
+      // 排前面的是"越短越像"的那些：搜 `stone` 时 `stone` 该在 `stone_brick_stairs` 前面
+      .sort((a, b) => a.length - b.length || (a < b ? -1 : 1))
+      .slice(0, 60)
+    return matches
   }
 
   /** 切片文本。 */

@@ -532,6 +532,16 @@ export class WorldStore {
     }
   }
 
+  /**
+   * 这一格在工区里吗？
+   *
+   * 公开出来是给**界面**用的：人手接管时"能不能放在这儿"要在点击那一刻就答出来
+   * （放在工区外会被 `write` 裁掉，而"点了没反应"是最难查的一种反馈）。
+   */
+  contains(pos: Pos): boolean {
+    return this.insideVolume(pos.x, pos.y, pos.z)
+  }
+
   private insideVolume(x: number, y: number, z: number): boolean {
     return (
       x >= this.volume.min.x &&

@@ -89,6 +89,23 @@
             <p class="cam-hint" data-i18n="viewport.cam.hint"></p>
           </div>
         </div>
+        <!-- 人手接管：选一个方块，然后在视口里点哪儿改哪儿。
+             和模型改的完全同权（同一条 op 日志），所以撤销、时间线、导出、.mcai 全都照常。 -->
+        <div class="block">
+          <h2><span data-i18n="panel.palette"></span></h2>
+          <label class="cam-share">
+            <input id="edit-mode" type="checkbox" />
+            <span data-i18n="palette.editMode"></span>
+          </label>
+          <p class="cam-hint" data-i18n="palette.hint"></p>
+          <input id="block-search" type="search" spellcheck="false" data-i18n-placeholder="palette.search" />
+          <ul id="palette-matches" class="palette-list"></ul>
+          <div class="palette-current">
+            <span data-i18n="palette.current"></span>
+            <b id="palette-current">—</b>
+          </div>
+          <ul id="palette-used" class="palette-chips"></ul>
+        </div>
         <div class="block">
           <h2 data-i18n="panel.materials"></h2>
           <ul id="histogram" class="histogram"></ul>

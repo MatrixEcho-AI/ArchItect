@@ -13,7 +13,14 @@ import type { StudioEvent, TestConnectionInput } from './services/chat.js'
 import type { Cipher } from './services/settings.js'
 import { createSecretStore, loadSettings, saveSettings, secretsFile, settingsFile } from './services/settings.js'
 import { StudioService } from './services/studio.js'
-import type { ExportFormat, ShootRequest, SliceRequest, ViewportRequest } from './services/studio.js'
+import type {
+  EditBlockRequest,
+  ExportFormat,
+  PickRequest,
+  ShootRequest,
+  SliceRequest,
+  ViewportRequest,
+} from './services/studio.js'
 
 /** 按扩展名（或 `--format` 的值）判断要导成什么。 */
 function formatOf(value: string): ExportFormat {
@@ -267,6 +274,9 @@ function createWindow(): void {
   // `--undo-test`：启动时请求撤销两次，用来抓"停在历史版本上"那张图
   // （发送框禁用 + 重做可用 + 时间线不在最右）
   if (process.argv.includes('--undo-test')) debugFlags.push('undo-test')
+  // `--paint-test`：启动时打开编辑模式并在视口里合成一次点击，
+  // 用来验证"人手放一格"这条链路（拾取 → 写世界 → 记成 source:user 的一步）
+  if (process.argv.includes('--paint-test')) debugFlags.push('paint-test')
 
   void mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
     ...(debugFlags.length > 0 ? { hash: debugFlags.join(',') } : {}),
@@ -383,6 +393,13 @@ function registerIpc(): void {
   handle('studio:scene', () => studio.scene())
 
   handle('studio:slice', (request: SliceRequest) => studio.slice(request))
+
+  // ── 人手接管（点哪儿改哪儿） ────────────────────────────────────────────────
+  // 拾取与编辑都走主进程：那里才有世界与网格，而且**软件视口也要能用**
+  // （没有 WebGL 时渲染进程根本没有 three 场景可以 raycast）。
+  handle('studio:pick', (request: PickRequest) => studio.pick(request) ?? null)
+  handle('studio:edit', (request: EditBlockRequest) => studio.editBlock(request))
+  handle('studio:blocks', (query: string) => studio.blocks(query))
 
   // ── 设置 ────────────────────────────────────────────────────────────────────
   handle('settings:get', () => studio.settingsView())

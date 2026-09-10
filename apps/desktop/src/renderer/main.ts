@@ -176,6 +176,28 @@ interface ArchitectBridge {
     } | null,
   ): Promise<StudioState>
   slice(request: { axis: 'x' | 'y' | 'z'; index: number }): Promise<string>
+  /** 屏幕像素 → 世界里的那一格（`null` = 点到天空）。 */
+  pick(request: {
+    azimuth: number
+    elevation: number
+    roll?: number
+    scale?: number
+    target?: [number, number, number]
+    width: number
+    height: number
+    x: number
+    y: number
+  }): Promise<{
+    block: [number, number, number]
+    place: [number, number, number]
+    normal: [number, number, number]
+    blockId: string
+    placeInVolume: boolean
+  } | null>
+  /** 人改一格。和模型改的走同一条日志、同一套重放。 */
+  edit(request: { pos: [number, number, number]; block?: string; mode: 'place' | 'break' }): Promise<StudioState>
+  /** 调色板搜索。 */
+  blocks(query: string): Promise<string[]>
   /** 没有 WebGL 时用它要帧（软件视口）。有 WebGL 时一次都不会调。 */
   viewport(request: {
     azimuth: number
@@ -286,6 +308,11 @@ const camScale = el<HTMLInputElement>('cam-scale')
 const camEyeFields = [el<HTMLInputElement>('cam-ex'), el<HTMLInputElement>('cam-ey'), el<HTMLInputElement>('cam-ez')]
 const camLookFields = [el<HTMLInputElement>('cam-lx'), el<HTMLInputElement>('cam-ly'), el<HTMLInputElement>('cam-lz')]
 const camShare = el<HTMLInputElement>('cam-share')
+const editModeInput = el<HTMLInputElement>('edit-mode')
+const blockSearch = el<HTMLInputElement>('block-search')
+const paletteMatches = el<HTMLUListElement>('palette-matches')
+const paletteUsed = el<HTMLUListElement>('palette-used')
+const paletteCurrent = el('palette-current')
 const messagesEl = el<HTMLOListElement>('messages')
 const blockingEl = el('blocking')
 const noticeEl = el('notice')
@@ -713,6 +740,147 @@ function wireCamera(): void {
   syncCameraFields()
 }
 
+// ── 调色板与"人手接管" ────────────────────────────────────────────────────────
+//
+// 这一块让**人**也能改世界：选一个方块，在视口里点一下放上去。
+// 关键在于它和模型改的**完全同权**——都走 `editBlock` → `session.applyEdit` →
+// 同一条 op 日志，所以撤销、时间线、导出、`.mcai` 保存全都是现成的，不用另做一遍。
+//
+// 拾取放在**主进程**：那里才有世界与网格，而且没有 WebGL 的兜底视口里根本没有
+// three 场景可以 raycast。代价是每点一次走一趟 IPC——点一次的量级，不是每帧。
+
+/** 编辑模式开关。关着的时候视口就是个纯视图（避免误点改掉东西）。 */
+let editMode = false
+/** 当前要放置的方块。空串表示还没选。 */
+let currentBlock = ''
+
+/** 把方块名显示得短一点：`minecraft:` 前缀和状态属性在人眼里是噪音。 */
+const shortBlock = (name: string): string => name.replace(/^minecraft:/, '').replace(/\[.*\]$/, '')
+
+function renderPaletteSelection(): void {
+  paletteCurrent.textContent = currentBlock.length > 0 ? shortBlock(currentBlock) : '—'
+  for (const item of paletteMatches.querySelectorAll('li')) {
+    item.classList.toggle('active', item.dataset['block'] === currentBlock)
+  }
+  for (const item of paletteUsed.querySelectorAll('li')) {
+    item.classList.toggle('active', item.dataset['block'] === currentBlock)
+  }
+}
+
+/** "用过的"来自状态里的直方图（主进程已经算好了，不必再问一次）。 */
+function renderPaletteUsed(): void {
+  const entries = current?.histogram ?? []
+  paletteUsed.replaceChildren(
+    ...entries.map((entry) => {
+      const item = document.createElement('li')
+      item.textContent = `${shortBlock(entry.block)} ·${entry.count}`
+      item.dataset['block'] = entry.block
+      item.title = entry.block
+      item.addEventListener('click', () => selectBlock(entry.block))
+      return item
+    }),
+  )
+  // 第一次拿到世界时给个默认值：用最多的那个方块，省掉"还得先选一个"这一步
+  if (currentBlock.length === 0 && entries.length > 0) currentBlock = entries[0]!.block
+  renderPaletteSelection()
+}
+
+function selectBlock(name: string): void {
+  currentBlock = name
+  renderPaletteSelection()
+}
+
+function renderPaletteMatches(matches: string[]): void {
+  paletteMatches.replaceChildren(
+    ...matches.map((name) => {
+      const item = document.createElement('li')
+      item.textContent = shortBlock(name)
+      item.title = name
+      item.dataset['block'] = name
+      item.addEventListener('click', () => selectBlock(name))
+      return item
+    }),
+  )
+  renderPaletteSelection()
+}
+
+function wirePalette(): void {
+  editModeInput.addEventListener('change', () => {
+    editMode = editModeInput.checked
+    document.body.classList.toggle('editing', editMode)
+    setStatus(editMode ? t('palette.editMode') : t('app.ready'))
+  })
+
+  // 搜索节流：`studio:blocks` 要遍历 1095 个方块名，不值得每敲一个键问一次
+  let timer: number | undefined
+  blockSearch.addEventListener('input', () => {
+    if (timer !== undefined) window.clearTimeout(timer)
+    timer = window.setTimeout(() => {
+      timer = undefined
+      const query = blockSearch.value
+      void window.architect.blocks(query).then(renderPaletteMatches)
+    }, 160)
+  })
+
+  renderPaletteUsed()
+}
+
+/**
+ * 视口里点了一下 → 选格 → 改世界。
+ *
+ * 三种手势，和体素编辑器里的惯例一致：
+ * - 点一下 = 放置当前方块（放在**命中面的外侧**那一格）
+ * - ⌥/Alt + 点 = 挖掉命中的那一格
+ * - ⌘/Ctrl + 点 = 吸取命中那一格的方块，不改变世界
+ *
+ * 拖动过（超过几个像素）就不算点击——否则每次转视角都会顺手改掉一格。
+ */
+async function editAt(event: PointerEvent): Promise<void> {
+  const rect = overlayCanvas.getBoundingClientRect()
+  if (rect.width < 1 || rect.height < 1) return
+  // 相机参数与画面用的是同一套口径：CSS 像素尺寸 + 渲染进程里的相机状态
+  const hit = await window.architect.pick({
+    azimuth: camera.azimuth,
+    elevation: camera.elevation,
+    roll: camera.roll,
+    ...(camera.scale > 0 ? { scale: camera.scale } : {}),
+    ...(camera.target !== undefined ? { target: camera.target } : {}),
+    width: Math.floor(rect.width),
+    height: Math.floor(rect.height),
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+  })
+  if (hit === null) {
+    setStatus(t('palette.miss'))
+    return
+  }
+
+  if (event.metaKey || event.ctrlKey) {
+    selectBlock(hit.blockId)
+    setStatus(t('palette.picked', { block: shortBlock(hit.blockId) }))
+    return
+  }
+
+  const breaking = event.altKey || event.button === 2
+  if (!breaking && !hit.placeInVolume) {
+    setStatus(t('palette.outside'))
+    return
+  }
+  const target = breaking ? hit.block : hit.place
+  const state = await window.architect.edit({
+    pos: target,
+    ...(breaking ? {} : { block: currentBlock }),
+    mode: breaking ? 'break' : 'place',
+  })
+  renderPanel(state)
+  await shoot()
+  setStatus(
+    breaking
+      ? t('palette.broke', { block: shortBlock(hit.blockId), pos: hit.block.join(',') })
+      : t('palette.placed', { block: shortBlock(currentBlock), pos: target.join(',') }),
+  )
+}
+
 /**
  * 拉一次几何（只在 revision 变化时）。
  *
@@ -836,10 +1004,17 @@ function wireViewport(): void {
   const surface = overlayCanvas
   let dragging = false
   let dragAt = { x: 0, y: 0 }
+  /** 累计拖动距离。**用它区分"点击"和"转视角"**：手一抖就改掉一格是最烦人的事。 */
+  let moved = 0
+  /** 这次按下的是哪个键——松手时要按同一个键决定是放置还是挖掉。 */
+  let button = 0
 
   surface.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0) return
+    // 右键也接：体素编辑器的惯例是右键挖掉。下面的 contextmenu 要一起挡掉
+    if (event.button !== 0 && event.button !== 2) return
     dragging = true
+    button = event.button
+    moved = 0
     dragAt = { x: event.clientX, y: event.clientY }
     surface.setPointerCapture(event.pointerId)
     document.body.classList.add('dragging')
@@ -847,11 +1022,14 @@ function wireViewport(): void {
     viewSelect.value = 'free'
   })
 
+  surface.addEventListener('contextmenu', (event) => event.preventDefault())
+
   surface.addEventListener('pointermove', (event) => {
     if (!dragging) return
     const dx = event.clientX - dragAt.x
     const dy = event.clientY - dragAt.y
     dragAt = { x: event.clientX, y: event.clientY }
+    moved += Math.abs(dx) + Math.abs(dy)
     if (event.altKey) {
       // Alt + 拖动 = 滚转。不占额外按钮：滚转是偶尔用一次的调节
       camera.roll = (camera.roll + dx * 0.4) % 360
@@ -873,6 +1051,11 @@ function wireViewport(): void {
     if (surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId)
     // 松手补一张全分辨率的：拖动中出的都是草稿帧
     requestFrame()
+    // 编辑模式下"几乎没动"的一次按下 = 一次点击 → 改一格。
+    // 阈值 4px：手抖的幅度，同时远小于"想转视角"的幅度
+    if (editMode && event.type === 'pointerup' && event.button === button && moved <= 4) {
+      void guard(t('palette.current'), () => editAt(event))
+    }
   }
   surface.addEventListener('pointerup', endDrag)
   surface.addEventListener('pointercancel', endDrag)
@@ -964,6 +1147,34 @@ async function simulateCameraPanel(): Promise<void> {
 }
 
 /**
+ * 合成一次"人手放一格"（只给 `#paint-test` 用）。
+ *
+ * 走的是**真实的指针事件**（按下 → 抬起，中间不动），所以它验的是整条链路：
+ * 拖动阈值 → 拾取 IPC → 写世界 → 记 op → 重画。直接调 `editAt()` 会跳过阈值那一段，
+ * 而"手一抖就改掉一格"正是最需要被验到的行为。
+ */
+async function simulatePaint(): Promise<void> {
+  editModeInput.checked = true
+  editModeInput.dispatchEvent(new Event('change'))
+  const rect = overlayCanvas.getBoundingClientRect()
+  const at = { x: rect.left + rect.width / 2, y: rect.top + rect.height * 0.62 }
+  for (const type of ['pointerdown', 'pointerup'] as const) {
+    overlayCanvas.dispatchEvent(
+      new PointerEvent(type, {
+        pointerId: 1,
+        button: 0,
+        buttons: type === 'pointerdown' ? 1 : 0,
+        clientX: at.x,
+        clientY: at.y,
+        bubbles: true,
+      }),
+    )
+  }
+  // `pointerup` 里是 fire-and-forget 的，等它把 IPC 走完再让 `--capture` 抓图
+  await new Promise((resolve) => setTimeout(resolve, 600))
+}
+
+/**
  * 合成一次撤销（只给 `#undo-test` 用）：走真实按钮那条路，抓"停在历史版本上"那张图。
  *
  * 这个状态值得能自动抓出来，因为它拦着一件会丢数据的事：此时让模型改，
@@ -1002,6 +1213,9 @@ function renderPanel(next: StudioState): void {
   el('project-info').innerHTML = rows
     .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
     .join('')
+
+  // 调色板的"用过的"就是同一份直方图——一处算，两处用
+  renderPaletteUsed()
 
   el('histogram').innerHTML = next.histogram
     .map(
@@ -1348,6 +1562,7 @@ function wire(): void {
   viewport = createViewport()
   wireViewport()
   wireCamera()
+  wirePalette()
 
   el('btn-new').addEventListener('click', () => {
     void guard(t('menu.new'), async () => {
@@ -1616,6 +1831,7 @@ async function boot(): Promise<void> {
     // `#camera-test`：合成一次机位面板操作 + 共享给模型
     if (debugFlags().has('camera-test')) await simulateCameraPanel()
     if (debugFlags().has('undo-test')) await simulateUndo()
+    if (debugFlags().has('paint-test')) await simulatePaint()
     await window.architect.ready({
       ok: true,
       detail: softwareViewport

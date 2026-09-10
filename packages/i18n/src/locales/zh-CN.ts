@@ -68,6 +68,7 @@ export const zhCN = {
   panel: {
     project: '工程',
     materials: '材质',
+    palette: '调色板（人手接管）',
     ops: '编辑记录',
     tokens: '用量',
     info: {
@@ -82,6 +83,18 @@ export const zhCN = {
       camera: '模型机位',
       cameraDefault: '默认（等轴测·东北）',
     },
+  },
+  palette: {
+    editMode: '编辑模式（点方块放置）',
+    hint: '点 = 放置 · ⌥/Alt 点 = 挖掉 · ⌘/Ctrl 点 = 吸取 · 拖动仍是转视角（改错了 ⌘Z 撤销）',
+    search: '搜索方块（如 stone、oak_planks）',
+    current: '当前方块',
+    none: '还没选方块 —— 点下面「用过的」里一个，或搜一个',
+    miss: '那里没有方块',
+    outside: '工区外放不下',
+    placed: '放置 {{block}} @ {{pos}}',
+    broke: '挖掉 {{block}} @ {{pos}}',
+    picked: '吸取 {{block}}',
   },
   chat: {
     title: '对话',

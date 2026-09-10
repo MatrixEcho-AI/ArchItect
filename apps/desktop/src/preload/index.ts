@@ -91,6 +91,32 @@ export interface StudioBridge {
     meshed: boolean
     ms: number
   }>
+  /** 屏幕像素 → 世界里的那一格。`null` = 点到天空。 */
+  pick(request: {
+    azimuth: number
+    elevation: number
+    roll?: number
+    scale?: number
+    target?: [number, number, number]
+    width: number
+    height: number
+    x: number
+    y: number
+  }): Promise<{
+    block: [number, number, number]
+    place: [number, number, number]
+    normal: [number, number, number]
+    blockId: string
+    placeInVolume: boolean
+  } | null>
+  /** 人改一格（放置 / 挖掉）。和模型改的走同一条日志与重放。 */
+  edit(request: {
+    pos: [number, number, number]
+    block?: string
+    mode: 'place' | 'break'
+  }): Promise<unknown>
+  /** 调色板搜索：`minecraft-data` 里名字含 `query` 的方块（最多 60 条）。 */
+  blocks(query: string): Promise<string[]>
   slice(request: {
     axis: 'x' | 'y' | 'z'
     index: number
@@ -155,6 +181,9 @@ const bridge: StudioBridge = {
   setCamera: (camera) => call('studio:setCamera', camera),
   viewport: (request) => call('studio:viewport', request),
   slice: (request) => call('studio:slice', request),
+  pick: (request) => call('studio:pick', request),
+  edit: (request) => call('studio:edit', request),
+  blocks: (query) => call('studio:blocks', query),
   demo: () => call('studio:demo'),
   exportModel: (format, suggestedName) => call('studio:export', format, suggestedName),
   importModel: () => call('studio:import'),

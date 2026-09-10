@@ -72,6 +72,7 @@ export const enUS = {
   panel: {
     project: 'Project',
     materials: 'Materials',
+    palette: 'Palette (take over by hand)',
     ops: 'Edit history',
     tokens: 'Usage',
     info: {
@@ -86,6 +87,18 @@ export const enUS = {
       camera: 'Model camera',
       cameraDefault: 'default (isometric NE)',
     },
+  },
+  palette: {
+    editMode: 'Edit mode (click to place)',
+    hint: 'Click = place · Alt+click = break · Cmd/Ctrl+click = pick · drag still rotates (Cmd+Z undoes)',
+    search: 'Search blocks (e.g. stone, oak_planks)',
+    current: 'Current block',
+    none: 'No block selected yet — pick one from "Used" below or search for one',
+    miss: 'Nothing there',
+    outside: 'Outside the volume',
+    placed: 'Placed {{block}} @ {{pos}}',
+    broke: 'Broke {{block}} @ {{pos}}',
+    picked: 'Picked {{block}}',
   },
   chat: {
     title: 'Chat',

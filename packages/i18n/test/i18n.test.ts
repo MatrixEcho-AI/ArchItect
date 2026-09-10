@@ -177,6 +177,7 @@ describe('文案表不能整块丢失（回归：一次误操作曾把 cli/agent
       'error',
       'menu',
       'notice',
+      'palette',
       'panel',
       'settings',
       'timeline',

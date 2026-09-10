@@ -137,6 +137,10 @@ main {
 
 .panel.left {
   border-right: 1px solid var(--line);
+  /* 左栏现在有五个分区（工程/机位/调色板/材质/编辑记录），窄窗口下装不下。
+     让**整栏**滚动，而不是让最下面那块被挤成一条缝——"编辑记录忽然不见了"
+     比"要滚一下"难查得多。 */
+  overflow-y: auto;
 }
 
 .panel.chat {
@@ -150,7 +154,7 @@ main {
 }
 
 .block.grow {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
 }
 
@@ -185,6 +189,12 @@ dd {
   padding: 0;
   list-style: none;
   font-size: 12px;
+}
+
+/* 编辑记录最多 50 条，不限高的话它会把左栏撑成一屏半 */
+.ops {
+  max-height: 220px;
+  overflow: auto;
 }
 
 /* ── 机位面板 ────────────────────────────────────────────────────────────────
@@ -268,6 +278,92 @@ dd {
   font-size: 11px;
   line-height: 1.35;
   color: var(--dim);
+}
+
+/* ── 调色板 ──────────────────────────────────────────────────────────────────
+   左栏很窄，所以"用过的"用 chips 换行摆，搜索结果用竖列表。 */
+
+#block-search {
+  width: 100%;
+  margin: 6px 0 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.palette-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 168px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.palette-list li {
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-list li:hover {
+  background: var(--line);
+}
+
+.palette-chips {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.palette-chips li {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--dim);
+}
+
+.palette-chips li:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* 当前选中的方块：只有在"选了"和"被点过"两种状态下才区分得出来 */
+.palette-list li.active,
+.palette-chips li.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(92, 200, 214, 0.08);
+}
+
+.palette-current {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.palette-current b {
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 编辑模式下光标换成十字：不然用户不知道"现在点一下会改东西" */
+.editing #canvas,
+.editing #overlay {
+  cursor: crosshair;
 }
 
 .histogram li,

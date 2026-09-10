@@ -62,6 +62,7 @@ pnpm architect export hut.mcai --out hut.schem       # 拿去游戏里 //schem l
 | **成本失控** | 截图内容寻址去重、前缀缓存友好的 append-only 上下文（DeepSeek 缓存命中便宜 50 倍）、实时成本表盘 |
 | **改了却不说改没改** | 完成闸门：改过东西之后必须有一次通过的结构化读回才允许结束 |
 | **说不清"从这个角度看"** | 机位面板可以填精确的角度或相机坐标/注视点；勾上「模型用这个机位」，模型接下来的截图就从你看的那个位置拍——**人机共用机位**。截图里的标签会带上注视点（`az45/el30→(8,5,8)`），档案里能分辨"看整栋楼"和"盯着檐口" |
+| **模型改不到的地方人手补** | 左栏调色板选方块，视口里点一下 = 放置、Alt+点 = 挖掉、Cmd/Ctrl+点 = 吸取。**人改的和模型改的完全同权**：同一条 op 日志（只差 `source` 字段），所以撤销、时间线、导出、`.mcai` 保存全都照常 |
 | **改错一步只能重来** | 撤销 / 重做是**时间线游标前后移动 + 重放**，不写新的 op——所以撤销之后时间线、`.mcai` 往返、导出全都仍然自洽。停在历史版本上时发送框会锁住并说明原因：此时让模型改，它的第一笔就会把后面的步骤覆盖掉 |
 
 ---
@@ -72,7 +73,7 @@ pnpm architect export hut.mcai --out hut.schem       # 拿去游戏里 //schem l
 packages/
   core       体素内核 · 状态编解码 · 几何算子 · 世界存储 · 历史回放 · 朝向变换 · linter
   mcai       .mcai 容器 · 对话与截图存档 · 崩溃恢复 WAL
-  render     软件光栅器 · 原版方块模型网格化 · 纹理图集 · 相机与叠加层 · PNG 编解码
+  render     软件光栅器 · 原版方块模型网格化 · 纹理图集 · 相机与叠加层 · 正交射线拾取 · PNG 编解码
   tools      23 个 LLM 工具 · JSON Schema 校验 · 文档生成
   interop    .schem / .litematic / .obj · 版本迁移
   agent      Agent 循环 · 完成闸门 · Provider 适配与能力发现
@@ -113,6 +114,8 @@ npx --no-install electron . --demo --gui-smoke             # 全链路冒烟（�
 npx --no-install electron . --demo --capture /tmp/gui.png  # 抓用户看到的窗口
 npx --no-install electron . --demo --shot /tmp/eye.png     # 抓**模型收到的那张图**
 npx --no-install electron . --demo --no-webgl              # 强制走软件视口（验兜底路径）
+npx --no-install electron . --demo --undo-test             # 合成两次撤销（停在历史版本上的样子）
+npx --no-install electron . --demo --paint-test            # 合成一次"人手放一格"
 ```
 
 后两个不是一回事：`--capture` 是用户的视口，`--shot` 走 `ctx.shoot`，

@@ -436,3 +436,117 @@ describe('StudioService：measureText', () => {
     expect(text).toContain('方块')
   })
 })
+
+describe('StudioService：人手接管（点哪儿改哪儿）', () => {
+  /** 视口的相机参数：拾取与绘图必须用同一套。 */
+  const VIEW = { azimuth: 45, elevation: 30, width: 320, height: 240 }
+
+  it('画面中心打中小屋：格子、朝向、放置位置三者自洽', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const hit = studio.pick({ ...VIEW, x: VIEW.width / 2, y: VIEW.height / 2 })
+    expect(hit).toBeDefined()
+    const bounds = studio.state().bounds!
+    for (const axis of [0, 1, 2] as const) {
+      expect(hit!.block[axis]).toBeGreaterThanOrEqual(bounds.min[axis])
+      expect(hit!.block[axis]).toBeLessThanOrEqual(bounds.max[axis])
+    }
+    // 放置位置永远是命中格的相邻格（差一格，且只差一格）
+    const step = [0, 1, 2].reduce((sum, i) => sum + Math.abs(hit!.place[i]! - hit!.block[i]!), 0)
+    expect(step).toBe(1)
+    // 命中的那一格不可能是空气——空气没有面
+    expect(hit!.blockId).not.toBe('minecraft:air')
+  })
+
+  it('点到天空返回 undefined（不该改任何东西）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    // 缩到很小，画面绝大部分是空的
+    const hit = studio.pick({ ...VIEW, scale: 4, x: 2, y: 2 })
+    expect(hit).toBeUndefined()
+  })
+
+  it('**人手放的一格和模型放的一格完全同权**：进日志、记 source:user、能被撤销', () => {
+    const studio = makeStudio()
+    const before = studio.demo()
+    const target: [number, number, number] = [20, 5, 20]
+
+    const after = studio.editBlock({ pos: target, block: 'minecraft:gold_block', mode: 'place' })
+    expect(after.blocks).toBe(before.blocks + 1)
+    expect(after.revision).toBe(before.revision + 1)
+    expect(after.totalOps).toBe(before.totalOps + 1)
+    expect(studio.agentSession.store.getBlockString({ x: 20, y: 5, z: 20 })).toContain('gold_block')
+
+    // 最后一条 op 是人的（`source` 进 `.mcai`，事后分得清谁改的）
+    const op = studio.agentSession.log.at(studio.agentSession.log.length - 1)!
+    expect(op.tool).toBe('place_block')
+    expect(op.source).toBe('user')
+    expect(op.actor).toBe('user')
+
+    // 同权的最硬证据：撤销把**人的**那一笔也退掉了
+    expect(studio.undo().blocks).toBe(before.blocks)
+    expect(studio.redo().blocks).toBe(before.blocks + 1)
+  })
+
+  it('人手改的一笔**存进 .mcai 再打开还在**（不能只活在内存里）', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    studio.editBlock({ pos: [20, 5, 20], block: 'minecraft:gold_block', mode: 'place' })
+    const expected = studio.state()
+    const path = join(workspace, 'hand-edited.mcai')
+    await studio.save(path)
+
+    const reopened = makeStudio()
+    const opened = await reopened.open(path)
+    expect(opened.blocks).toBe(expected.blocks)
+    expect(opened.revision).toBe(expected.revision)
+    expect(reopened.state().histogram.some((entry) => entry.block.includes('gold_block'))).toBe(true)
+  })
+
+  it('挖掉一格也进日志', () => {
+    const studio = makeStudio()
+    const before = studio.demo()
+    const pos: [number, number, number] = [4, 1, 4] // 墙脚
+    expect(studio.agentSession.store.isAir({ x: 4, y: 1, z: 4 })).toBe(false)
+    const after = studio.editBlock({ pos, mode: 'break' })
+    expect(after.blocks).toBe(before.blocks - 1)
+    expect(studio.agentSession.store.isAir({ x: 4, y: 1, z: 4 })).toBe(true)
+    expect(studio.agentSession.log.at(studio.agentSession.log.length - 1)!.tool).toBe('break_block')
+  })
+
+  it('工区外**拒绝**而不是悄悄裁掉（悄悄裁掉的话用户只会觉得"点了没反应"）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    expect(() => studio.editBlock({ pos: [-1, 5, 5], block: 'minecraft:stone', mode: 'place' })).toThrow(/工区/)
+    expect(() => studio.editBlock({ pos: [-1, 5, 5], mode: 'break' })).toThrow(/工区/)
+  })
+
+  it('挖空气、放认不出的方块名都被拒绝（后者会污染调色板）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const empty: [number, number, number] = [2, 2, 2]
+    expect(studio.agentSession.store.isAir({ x: 2, y: 2, z: 2 })).toBe(true)
+    expect(() => studio.editBlock({ pos: empty, mode: 'break' })).toThrow(/本来就是空/)
+    expect(() => studio.editBlock({ pos: [2, 2, 2], block: 'minecraft:not_a_block', mode: 'place' })).toThrow(
+      /认不出/,
+    )
+    // 认不出的名字**不能**被悄悄追加进调色板：`palette.indexOf` 是"没有就建一个"
+    expect(studio.agentSession.store.palette.strings().some((item) => item.includes('not_a_block'))).toBe(false)
+  })
+
+  it('还没选方块时拒绝放置', () => {
+    const studio = makeStudio()
+    studio.demo()
+    expect(() => studio.editBlock({ pos: [2, 2, 2], mode: 'place' })).toThrow(/还没选方块/)
+  })
+
+  it('调色板搜得到，且**短名字排在前面**（搜 stone 时 stone 该在 stone_brick_stairs 前）', () => {
+    const studio = makeStudio()
+    const matches = studio.blocks('stone')
+    expect(matches.length).toBeGreaterThan(5)
+    expect(matches.length).toBeLessThanOrEqual(60)
+    expect(matches[0]).toBe('stone')
+    expect(matches).toContain('stone_bricks')
+    expect(studio.blocks('')).toEqual([])
+  })
+})

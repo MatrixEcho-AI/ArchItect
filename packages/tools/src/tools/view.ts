@@ -78,7 +78,7 @@ export const screenshotTool = defineTool<{
     highlightLast: bool('Highlight the affected range of the last edit, to confirm "what I just changed". Default true.'),
     plain: bool('Use the deterministic fallback palette (does not read a resource pack). Usually unnecessary.'),
   }),
-  execute: (ctx, args) => {
+  execute: async (ctx, args) => {
     const bounds = ctx.store.contentBounds()
     if (bounds === undefined) {
       return failure('NOT_FOUND', 'The world is empty, there is nothing to render', 'Build something first, then take a screenshot.')
@@ -111,7 +111,7 @@ export const screenshotTool = defineTool<{
     }
     // 显式给了角度就等于"从会话相机切回角度模式"，否则 eye/lookAt 会把角度盖掉
     const useSessionEye = args.azimuth === undefined && args.elevation === undefined && args.eye === undefined
-    const image = ctx.shoot({
+    const image = await ctx.shoot({
       view: camera.view,
       width: args.width ?? 1024,
       height: args.height ?? 768,

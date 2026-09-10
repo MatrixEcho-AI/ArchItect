@@ -322,6 +322,17 @@ describe('相机：坐标与朝向', () => {
     expect(shotCameraLabel({ ...base, azimuth: 45, elevation: 30, roll: 15 })).toBe('az45/el30/rl15')
     expect(shotCameraLabel({ ...base, view: 'top' })).toBe('top')
   })
+
+  it('**同一组角度、不同注视点是两张不同的图**，标签必须区分得开', () => {
+    // 人机共用机位那条路推的就是"角度 + 注视点"：只写角度的话，
+    // 用户在面板上把注视点挪到檐口前后，档案里两张图会长得一模一样
+    expect(shotCameraLabel({ ...base, azimuth: 45, elevation: 30, lookAt: [8, 5, 8] })).toBe(
+      'az45/el30→(8,5,8)',
+    )
+    expect(shotCameraLabel({ ...base, azimuth: 45, elevation: 30, roll: 0, target: [16, 6, 0] })).toBe(
+      'az45/el30→(16,6,0)',
+    )
+  })
 })
 
 describe('图集本身', () => {

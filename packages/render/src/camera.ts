@@ -228,6 +228,10 @@ function vec(value: readonly number[] | undefined): Vec3 | undefined {
  *
  * 自由机位拼成 `az45/el35`——只写 `view` 的话档案里所有自由机位都叫 `iso_ne`，
  * 事后回看分不清那张图是从哪个角度拍的。
+ *
+ * 注视点单独给了而且不是内容中心时，也拼进去（`az45/el35→(8,5,8)`）：
+ * **同一组角度、不同注视点是两张不同的图**（"盯着檐口看"和"看整栋楼"），
+ * 只写角度的标签会让档案里这两张图长得一模一样。
  */
 export function shotCameraLabel(request: ShotCameraRequest): string {
   if (request.eye !== undefined && request.lookAt !== undefined) {
@@ -237,7 +241,9 @@ export function shotCameraLabel(request: ShotCameraRequest): string {
   }
   if (request.azimuth === undefined && request.elevation === undefined) return request.view
   const roll = request.roll !== undefined && request.roll !== 0 ? `/rl${Math.round(request.roll)}` : ''
-  return `az${Math.round(request.azimuth ?? 0)}/el${Math.round(Math.min(89, Math.max(1, request.elevation ?? 0)))}${roll}`
+  const lookAt = request.lookAt ?? request.target
+  const at = lookAt !== undefined ? `→(${lookAt.map((v) => Math.round(v)).join(',')})` : ''
+  return `az${Math.round(request.azimuth ?? 0)}/el${Math.round(Math.min(89, Math.max(1, request.elevation ?? 0)))}${roll}${at}`
 }
 
 export type ViewPreset =

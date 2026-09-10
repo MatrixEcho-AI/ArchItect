@@ -1179,7 +1179,7 @@ async function cmdBench(inv: Invocation): Promise<number> {
         }),
       )
       if (session.store.contentBounds() !== undefined) {
-        const shot = session.ctx.shoot({ view: 'iso_ne', width: 512, height: 384 })
+        const shot = await session.ctx.shoot({ view: 'iso_ne', width: 512, height: 384 })
         await writeFile(`${base}.png`, shot.png)
       }
     }

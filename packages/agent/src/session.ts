@@ -1,12 +1,42 @@
 import { EditLog, measure, WorldStore } from '@architect/core'
 import type { Bounds, Palette } from '@architect/core'
 import { cameraForShot, createAssetColorResolver, createFallbackColorResolver, encodePng, renderIsometric, shotCameraLabel } from '@architect/render'
-import type { ColorResolver } from '@architect/render'
+import type { CameraSpec, ColorResolver, OverlayOptions } from '@architect/render'
 import { createDefaultRegistry } from '@architect/tools'
 import type { ScreenshotRequest, ToolContext, ToolImage, ToolRegistry } from '@architect/tools'
 
 import { buildStateMessage, buildSystemPrompt } from './prompts.js'
 import type { PromptContext } from './prompts.js'
+
+/**
+ * 交给外部渲染后端的一张图。
+ *
+ * 里面**没有世界**。几何由后端自己按 `revision` 取（桌面端从网格缓存里拿，
+ * 渲染进程再拉一次），所以同一份请求既能喂给软件光栅器，也能过一趟 IPC 给 GPU。
+ * 相机是**已经解算好的 `CameraSpec`**——取景只算一次，两条路的构图因此同源，
+ * 不会出现"GPU 那张和模型以为的机位不一样"。
+ */
+export interface ShotInput {
+  camera: CameraSpec
+  /** 机位标签（`iso_ne` / `az45/el30` …），会回显给模型。 */
+  view: string
+  revision: number
+  width: number
+  height: number
+  /** 叠加层，与软件路径**同一份选项**。 */
+  overlays: OverlayOptions
+  /** 是否走纹理路径。`plain: true` 的会话为 `false`。 */
+  textured: boolean
+}
+
+/**
+ * 外部渲染后端。
+ *
+ * 返回 `undefined` 表示"这一枪我画不了"（没有 GPU、窗口还没起来、revision 对不上……），
+ * 会话会退回软件光栅器。**不能因为拿不到 GPU 就没有截图**——截图是模型的眼睛，
+ * 宁可给一张差一点的，也不能让 `screenshot` 直接失败。
+ */
+export type ShotRenderer = (input: ShotInput) => ToolImage | undefined | Promise<ToolImage | undefined>
 
 export interface SessionOptions {
   minecraftVersion?: string
@@ -33,6 +63,13 @@ export interface SessionOptions {
    * 用一张只有 air 的新调色板去解释它，索引 1 就指向不存在的方块了。
    */
   palette?: Palette
+  /**
+   * 优先使用的渲染后端。**省略/返回 `undefined`/抛错时都退回软件光栅器。**
+   *
+   * 桌面端拿它把模型的眼睛接到渲染进程里的 three.js 上：模型看到的和用户拖出来的
+   * 是同一套渲染器，而不是"用户看 GPU 版、模型看软件版"。
+   */
+  render?: ShotRenderer
 }
 
 /**
@@ -48,6 +85,7 @@ export class AgentSession {
   readonly ctx: ToolContext
   private readonly resolve: ColorResolver
   private shotCount = 0
+  private fallbacks: string[] = []
 
   constructor(private readonly options: SessionOptions) {
     const version = options.minecraftVersion ?? '1.21.4'
@@ -113,6 +151,23 @@ export class AgentSession {
   }
 
   /**
+   * 最近一次"想走 GPU 但没走成"的原因，没有就是 `undefined`。
+   *
+   * 存在这里而不是抛出去：截图回落是可恢复的（图还是出来了，只是没那么好看），
+   * 但**用户需要知道**——否则"为什么聊天里的图忽然变糊了"没法解释。
+   * 界面拿它显示一行状态。
+   */
+  get renderFallback(): string | undefined {
+    return this.fallbacks.at(-1)
+  }
+
+  private recordFallback(reason: string): void {
+    this.fallbacks.push(reason)
+    // 只留最近几条：这是给人看的提示，不是日志
+    if (this.fallbacks.length > 8) this.fallbacks.shift()
+  }
+
+  /**
    * 当前会话用的配色方案。
    *
    * 暴露出来是为了让**别的导出路径**（`.obj` 的材质色）和截图用的是同一套颜色——
@@ -122,33 +177,81 @@ export class AgentSession {
     return this.resolve
   }
 
-  private shoot(request: ScreenshotRequest): ToolImage {
-    const bounds = this.store.contentBounds() ?? this.store.volume
+  /**
+   * 拍一张图。
+   *
+   * **先问外部后端，拿不到才自己画**。顺序是有意的：桌面端有 GPU，
+   * 那条路好看得多；CLI 与 CI 没有 GPU，软件光栅器保证确定性。
+   * 两边共用同一份 `CameraSpec` 与同一份叠加层选项，所以构图与标尺完全对齐，
+   * 差的只是"谁来执行这次绘制"。
+   *
+   * `plain: true` 的会话**不问外部后端**：纯色路径只有软件光栅器实现
+   * （GPU 那条路要图集），问了也是白问，还会把"按设计走纯色"记成一次回落。
+   */
+  private async shoot(request: ScreenshotRequest): Promise<ToolImage> {
+    const contentBounds = this.store.contentBounds()
+    const bounds = contentBounds ?? this.store.volume
     // 会话相机（`set_camera` 设的）在这里兜底：显式参数优先，没给才落到它。
     // 工具层已经合过一次，但桌面端与脚本也走 `ctx.shoot`，所以这里再兜一次。
-    const camera = cameraForShot(bounds, { ...this.ctx.camera, ...request, view: request.view })
+    // **合并结果同时用来算标签**：只按原始请求算的话，"机位来自会话相机"的那几张
+    // 会全部记成 `iso_ne`，事后在档案里根本认不出它们其实是同一个自定义机位。
+    const merged = { ...this.ctx.camera, ...request, view: request.view }
+    const camera = cameraForShot(bounds, merged)
+    const overlays: OverlayOptions = {
+      ruler: true,
+      axisGizmo: true,
+      volumeBox: this.store.volume,
+      ...(request.highlight !== undefined ? { highlight: request.highlight } : {}),
+      ...(request.caption !== undefined ? { caption: request.caption } : {}),
+    }
+    const label = shotCameraLabel(merged)
+    const revision = this.store.revision
+    // 默认走**纹理渲染**（真实方块模型 + 逐面纹理 + 原版光照）。
+    // 这是模型的眼睛：纯色平均色会让 `stone_bricks` 和 `stone` 看起来一模一样
+    // （平均色只差 4/255），模型就没法在截图上核对"我叫它砌的是石砖"。
+    // `plain: true` 时才退回纯色，供 golden 测试与 CI 用。
+    const textured = this.options.plain !== true
+
+    const external = textured ? this.options.render : undefined
+    if (external !== undefined) {
+      try {
+        const image = await external({
+          camera,
+          view: label,
+          revision,
+          width: request.width,
+          height: request.height,
+          overlays,
+          textured,
+        })
+        // `await` 期间主进程还可能处理别的事件（用户拖时间线、自动保存……），
+        // 所以外部分支回来之后**必须再核一次 revision**：拿一张和它自己的
+        // revision 对不上的图去下结论，正是 plan §9.4 要防的那个隐蔽 bug。
+        if (image !== undefined && this.store.revision === revision) {
+          this.shotCount++
+          return image
+        }
+        this.recordFallback(
+          image === undefined ? '外部渲染后端拒绝了这一枪' : '渲染期间世界被改动，这一枪作废',
+        )
+      } catch (error) {
+        // 外部分支坏掉不该把整轮对话带走
+        this.recordFallback(error instanceof Error ? error.message : String(error))
+      }
+    }
+
     const result = renderIsometric(this.store, {
       camera,
       resolve: this.resolve,
-      // 默认走**纹理渲染**（真实方块模型 + 逐面纹理 + 原版光照）。
-      // 这是模型的眼睛：纯色平均色会让 `stone_bricks` 和 `stone` 看起来一模一样
-      // （平均色只差 4/255），模型就没法在截图上核对"我叫它砌的是石砖"。
-      // `plain: true` 时才退回纯色，供 golden 测试与 CI 用。
-      ...(this.options.plain === true ? {} : { textured: true }),
-      overlays: {
-        ruler: true,
-        axisGizmo: true,
-        volumeBox: this.store.volume,
-        ...(request.highlight !== undefined ? { highlight: request.highlight } : {}),
-        ...(request.caption !== undefined ? { caption: request.caption } : {}),
-      },
+      ...(textured ? { textured: true } : {}),
+      overlays,
     })
     this.shotCount++
     return {
       png: encodePng(result.canvas),
       width: request.width,
       height: request.height,
-      camera: shotCameraLabel(request),
+      camera: label,
       revision: this.store.revision,
     }
   }

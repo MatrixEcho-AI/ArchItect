@@ -45,6 +45,48 @@
           <h2 data-i18n="panel.project"></h2>
           <dl id="project-info"></dl>
         </div>
+        <!-- 机位：拖动已经能转角度，这里补的是**精确输入**与**自定义注视点**。
+             「模型用这个机位」打开时，它同时写进会话的相机——用户和模型看同一个位置。 -->
+        <div class="block">
+          <h2 data-i18n="viewport.camera"></h2>
+          <div class="camera">
+            <select id="cam-mode">
+              <option value="angle" data-i18n="viewport.cam.modeAngle"></option>
+              <option value="eye" data-i18n="viewport.cam.modeEye"></option>
+            </select>
+
+            <div class="cam-grid" id="cam-angle">
+              <label><span data-i18n="viewport.cam.azimuth"></span><input id="cam-az" type="number" step="1" /></label>
+              <label><span data-i18n="viewport.cam.elevation"></span><input id="cam-el" type="number" step="1" /></label>
+            </div>
+
+            <div class="cam-grid hidden" id="cam-eye">
+              <span class="cam-label" data-i18n="viewport.cam.eye"></span>
+              <label><span>X</span><input id="cam-ex" type="number" step="1" /></label>
+              <label><span>Y</span><input id="cam-ey" type="number" step="1" /></label>
+              <label><span>Z</span><input id="cam-ez" type="number" step="1" /></label>
+              <span class="cam-label" data-i18n="viewport.cam.lookAt"></span>
+              <label><span>X</span><input id="cam-lx" type="number" step="1" /></label>
+              <label><span>Y</span><input id="cam-ly" type="number" step="1" /></label>
+              <label><span>Z</span><input id="cam-lz" type="number" step="1" /></label>
+            </div>
+
+            <div class="cam-grid">
+              <label><span data-i18n="viewport.cam.roll"></span><input id="cam-roll" type="number" step="5" /></label>
+              <label><span data-i18n="viewport.cam.scale"></span><input id="cam-scale" type="number" step="1" min="0" placeholder="auto" /></label>
+            </div>
+
+            <label class="cam-share">
+              <input id="cam-share" type="checkbox" />
+              <span data-i18n="viewport.cam.share"></span>
+            </label>
+            <div class="cam-actions">
+              <button type="button" id="cam-apply" class="mini" data-i18n="viewport.cam.apply"></button>
+              <button type="button" id="cam-reset" class="mini" data-i18n="viewport.cam.reset"></button>
+            </div>
+            <p class="cam-hint" data-i18n="viewport.cam.hint"></p>
+          </div>
+        </div>
         <div class="block">
           <h2 data-i18n="panel.materials"></h2>
           <ul id="histogram" class="histogram"></ul>

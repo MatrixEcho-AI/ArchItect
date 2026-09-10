@@ -127,9 +127,11 @@ const BACKFACE_EPSILON = 1e-9
  *
  * 它存在的理由不是画得好看，而是**确定性**：
  * WebGL 在不同 GPU 上有细微差异，做不了像素级 golden 测试；软件光栅器完全可复现。
- * 同时它也是无 GPU 环境（CI、无显示器的服务器）的兜底路径。
+ * 同时它也是无 GPU 环境（CLI、CI、无显示器的服务器）的兜底路径。
  *
- * 给 LLM 的正式评审图应该走交互视口那套渲染器，但两者共用同一份相机与颜色代码。
+ * 桌面端模型收到的图**默认不从这里出**——那是渲染进程里 three.js 画的
+ * （见 `AgentSession` 的 `render` 注入点）。但两者共用同一份相机、同一份叠加层
+ * 选项与同一套颜色代码，所以换后端不会换构图（D-50）。
  */
 export function renderIsometric(store: WorldStore, options: RenderOptions): RenderResult {
   if (options.textured === true) return renderTextured(store, options)

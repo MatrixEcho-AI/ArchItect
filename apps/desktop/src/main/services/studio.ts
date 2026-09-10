@@ -1,6 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
+import type { SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, ReplaySession, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis } from '@architect/core'
 import {
@@ -26,6 +27,7 @@ import {
   rasterize,
 } from '@architect/render'
 import type { WorldGeometry } from '@architect/render'
+import type { SessionCamera } from '@architect/tools'
 
 import type { AutosaveService } from './autosave.js'
 import { ChatController } from './chat.js'
@@ -48,6 +50,14 @@ export interface StudioState {
   histogram: Array<{ block: string; count: number; percent: number }>
   /** 一次性的提示（崩溃恢复提醒之类）。读过就没了。 */
   notice?: string
+  /**
+   * **会话语义上的机位**（`set_camera` 或界面上的机位面板设的）。
+   *
+   * 它不是"用户现在看着什么"——那是渲染进程里的相机，主进程看不到也不该看。
+   * 它表达的是"接下来让模型从哪看"。界面拿它回填机位面板，好让用户知道
+   * 自己设的机位还在。
+   */
+  camera?: SessionCamera
 }
 
 /** 能导出成什么。GUI 的"导出…"按扩展名推断，也可以让用户显式选。 */
@@ -126,6 +136,17 @@ export interface SliceRequest {
   z?: [number, number]
 }
 
+/**
+ * 渲染进程侧的 GPU 截图通道（主进程 → 渲染进程 → 主进程）。
+ *
+ * 返回 PNG 字节；返回 `undefined` 表示"这一枪画不了"（窗口没了、渲染进程还没就绪、
+ * 它的场景版本对不上）。**调用方必须能接受 `undefined`**：截图是模型的眼睛，
+ * 拿不到 GPU 就退回软件光栅器，绝不让 `screenshot` 直接失败。
+ */
+export interface ShotBridge {
+  capture(input: ShotInput): Promise<Uint8Array | undefined>
+}
+
 const opTuple = (b: Bounds): { min: [number, number, number]; max: [number, number, number] } => ({
   min: [b.min.x, b.min.y, b.min.z],
   max: [b.max.x, b.max.y, b.max.z],
@@ -145,6 +166,8 @@ export interface StudioOptions {
   minecraftVersion?: string
   plain?: boolean
   chat?: ChatOptions
+  /** GPU 截图通道。省略时（测试、无窗口）全部走软件光栅器。 */
+  shots?: ShotBridge
 }
 
 export class StudioService {
@@ -158,13 +181,16 @@ export class StudioService {
   private emit: (event: StudioEvent) => void = () => {}
   private readonly plain: boolean
   private autosave?: AutosaveService
+  /** 渲染进程侧的 GPU 截图通道。由 `attachShotBridge` 在窗口就绪后接上。 */
+  private shots?: ShotBridge
   /** 启动时从 WAL 恢复出来的提示（没有恢复过就是 undefined）。 */
   private notice: string | undefined
 
   constructor(options: StudioOptions = {}) {
     this.plain = options.plain ?? false
+    this.shots = options.shots
     const volume = options.volume ?? { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } }
-    this.session = new AgentSession({
+    this.session = this.openSession({
       volume,
       ...(options.minecraftVersion !== undefined ? { minecraftVersion: options.minecraftVersion } : {}),
       plain: options.plain ?? false,
@@ -211,6 +237,14 @@ export class StudioService {
   /** 接上自动保存。省略时（测试里）不做任何写盘。 */
   attachAutosave(service: AutosaveService): void {
     this.autosave = service
+  }
+
+  /**
+   * 建一个会话。**所有会话都必须走这里**——否则换了工程之后，新会话就悄悄
+   * 丢掉 GPU 截图通道，退回软件光栅器，而这种退化在界面上只表现为"图忽然变糊了"。
+   */
+  private openSession(options: Omit<SessionOptions, 'render'>): AgentSession {
+    return new AgentSession({ ...options, render: this.gpuShot() })
   }
 
   /**
@@ -305,7 +339,7 @@ export class StudioService {
 
   /** 新建一个空工程。 */
   newProject(volume?: Bounds): StudioState {
-    this.session = new AgentSession({
+    this.session = this.openSession({
       volume: volume ?? this.session.store.volume,
     })
     this.replay = new ReplaySession(this.session.store, this.session.log)
@@ -319,7 +353,7 @@ export class StudioService {
     const bytes = await readFile(path)
     const { project, store } = openProject(new Uint8Array(bytes))
     // 必须把工程的调色板交给新会话——快照里的索引是相对这张表编的
-    this.session = new AgentSession({
+    this.session = this.openSession({
       volume: store.volume,
       minecraftVersion: project.manifest.minecraftVersion,
       palette: project.palette,
@@ -377,9 +411,24 @@ export class StudioService {
     }
     if (this.projectPath !== undefined) snapshot.projectPath = this.projectPath
     if (stats.bounds !== undefined) snapshot.bounds = opTuple(stats.bounds)
+    if (this.session.ctx.camera !== undefined) snapshot.camera = this.session.ctx.camera
     const notice = this.takeNotice()
     if (notice !== undefined) snapshot.notice = notice
     return snapshot
+  }
+
+  /**
+   * 设置/清除**会话语义上的机位**（界面上的机位面板走这里）。
+   *
+   * 和 `set_camera` 工具写的是同一个字段，于是"用户在界面上拖到的角度"和
+   * "模型接下来从哪看"可以是同一个机位——人机共用机位。
+   *
+   * 传 `null` 表示复原：之后的截图回到默认预设。
+   */
+  setCamera(camera: SessionCamera | null): StudioState {
+    if (camera === null || Object.keys(camera).length === 0) delete this.session.ctx.camera
+    else this.session.ctx.camera = camera
+    return this.state()
   }
 
   /**
@@ -470,8 +519,14 @@ export class StudioService {
     return this.state()
   }
 
-  /** 渲染一张截图（PNG 字节）。 */
-  shoot(request: ShootRequest): { png: Uint8Array; view: string; revision: number } {
+  /**
+   * 渲染一张截图（PNG 字节）。
+   *
+   * **异步**：桌面端默认把这一枪交给渲染进程里的 three.js（走一趟 IPC 拿 PNG），
+   * 拿不到（窗口没起来、渲染进程挂了、revision 对不上）才在这里用软件光栅器画。
+   * 两条路共用同一份相机与叠加层，所以构图、标尺、高亮框完全对齐。
+   */
+  async shoot(request: ShootRequest): Promise<{ png: Uint8Array; view: string; revision: number }> {
     const store = this.session.store
     const highlightLast = request.highlightLast !== false
     let highlight: Bounds | undefined
@@ -482,7 +537,7 @@ export class StudioService {
 
     const stats = measure(store)
     const bounds = stats.bounds
-    const image = this.session.ctx.shoot({
+    const image = await this.session.ctx.shoot({
       view: request.view,
       width: request.width,
       height: request.height,
@@ -495,6 +550,45 @@ export class StudioService {
       ],
     })
     return { png: image.png, view: image.camera, revision: image.revision }
+  }
+
+  /** 主进程侧的 GPU 截图通道。取不到就返回 `undefined`，会话会退回软件光栅器。 */
+  attachShotBridge(bridge: ShotBridge): void {
+    this.shots = bridge
+  }
+
+  /** 上一次截图有没有回落、为什么。界面拿它显示一行状态。 */
+  get renderFallback(): string | undefined {
+    return this.session.renderFallback
+  }
+
+  /**
+   * 把一枪交给渲染进程里的 three.js。
+   *
+   * 几何不在这里传：渲染进程自己按 `revision` 拉 `studio:scene`（那份数据本来就
+   * 按 revision 缓存着）。所以过 IPC 的只有一个很小的 `ShotInput`，
+   * 大头的顶点数据不会被复制第二遍。
+   *
+   * **`plain` 会话强制走软件路径**：three.js 那条路只有纹理渲染，
+   * 没有"平均色快路径"，而 `plain` 的存在理由就是逐字节可复现（golden 测试）。
+   * 让它落到 GPU 上会把确定性一起丢掉。
+   */
+  private gpuShot(): ShotRenderer {
+    return async (input) => {
+      const bridge = this.shots
+      if (bridge === undefined || !input.textured) return undefined
+      const png = await bridge.capture({
+        camera: input.camera,
+        view: input.view,
+        revision: input.revision,
+        width: input.width,
+        height: input.height,
+        overlays: input.overlays,
+        textured: input.textured,
+      })
+      if (png === undefined) return undefined
+      return { png, width: input.width, height: input.height, camera: input.view, revision: input.revision }
+    }
   }
 
   /**
@@ -699,7 +793,7 @@ export class StudioService {
 
     // 工区刚好装下内容，另留 8 格便于继续扩建
     const [sx, sy, sz] = data.size
-    const session = new AgentSession({
+    const session = this.openSession({
       volume: {
         min: { x: 0, y: 0, z: 0 },
         max: { x: Math.max(sx + 7, 15), y: Math.max(sy + 7, 15), z: Math.max(sz + 7, 15) },

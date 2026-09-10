@@ -41,6 +41,22 @@ export interface StudioBridge {
     volume: { min: [number, number, number]; max: [number, number, number] }
   }>
   viewPresets(): Promise<Record<string, { azimuth: number; elevation: number }>>
+  /**
+   * 把界面上定下的机位交给主进程的会话，让**模型也从这里看**。
+   *
+   * 传 `null` 复原。和 `set_camera` 工具写的是同一个字段——所以用户和模型
+   * 可以共用同一个机位，而不是各看各的。
+   */
+  setCamera(
+    camera: {
+      azimuth?: number
+      elevation?: number
+      roll?: number
+      scale?: number
+      eye?: [number, number, number]
+      lookAt?: [number, number, number]
+    } | null,
+  ): Promise<unknown>
   shoot(request: { view: string; width: number; height: number; highlightLast?: boolean }): Promise<{
     png: Uint8Array
     view: string
@@ -105,6 +121,7 @@ const bridge: StudioBridge = {
   shoot: (request) => call('studio:shoot', request),
   scene: () => call('studio:scene'),
   viewPresets: () => call('studio:viewPresets'),
+  setCamera: (camera) => call('studio:setCamera', camera),
   slice: (request) => call('studio:slice', request),
   demo: () => call('studio:demo'),
   exportModel: (format, suggestedName) => call('studio:export', format, suggestedName),

@@ -112,8 +112,14 @@ export interface ToolContext {
   correlationId: string
   /** 记录一条 EditOp。mutating 工具写入成功后必须调用。 */
   record: (tool: string, args: unknown, result: WriteResult) => void
-  /** 截图实现。由调用方注入，避免 tools 包绑死某个渲染后端。 */
-  shoot: (request: ScreenshotRequest) => ToolImage
+  /**
+   * 截图实现。由调用方注入，避免 tools 包绑死某个渲染后端。
+   *
+   * **允许返回 Promise**：桌面端把这一枪交给渲染进程里的 three.js 去画（要过一趟 IPC），
+   * 而 CLI 与测试里是同步的软件光栅器。工具执行本来就是异步的，所以这里放开即可，
+   * 调用方只管 `await`。
+   */
+  shoot: (request: ScreenshotRequest) => ToolImage | Promise<ToolImage>
 }
 
 export interface ToolDefinition {

@@ -2,7 +2,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { detectLocale, initI18n, setLocale, t } from '@architect/i18n'
-import type { Budget, PresetKey, ProviderConfig, ProviderSettings } from '@architect/agent'
+import type { Budget, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
 import { openProject } from '@architect/mcai'
@@ -151,6 +151,51 @@ function pushEvent(event: StudioEvent): void {
   mainWindow.webContents.send('studio:event', event)
 }
 
+/**
+ * 渲染进程是否已经回报"首帧画好了"（`studio:ready`）。
+ *
+ * 在它之前不发截图请求：那时渲染进程手里还没有场景，问也是白问。
+ * 主进程的 `--smoke`（无窗口）永远走不到这里，于是自动落到软件光栅器上。
+ */
+let rendererReady = false
+
+/**
+ * 离屏截图的超时。渲染进程正常 10~60 ms 就回来了，这里是**防挂死**，不是性能预算：
+ * 渲染进程卡住时宁可退回软件光栅器，也不能让一轮对话停在这里。
+ */
+const SHOT_TIMEOUT_MS = 8000
+
+/**
+ * 把一枪交给渲染进程里的 three.js 画（模型的眼睛）。
+ *
+ * 方向是**主进程 → 渲染进程**，而 `ipcRenderer.invoke` 只能反过来，所以走
+ * `executeJavaScript`：它会 await 页面里那个函数返回的 Promise，把结果
+ * （PNG 的 data URL）带回来。省掉了自己造一套请求/应答 id 表，也就没有
+ * "哪个 id 对应哪个 Promise"这类会泄漏的状态。
+ *
+ * **任何异常都变成 `undefined`**：截图回落是可恢复的（还有软件光栅器），
+ * 不该把一轮对话带走。
+ */
+async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefined> {
+  const win = mainWindow
+  if (!rendererReady || win === undefined || win.isDestroyed()) return undefined
+  try {
+    const dataUrl: unknown = await Promise.race([
+      win.webContents.executeJavaScript(`window.__architectCaptureShot?.(${JSON.stringify(input)}) ?? null`),
+      new Promise((resolve) => setTimeout(() => resolve(null), SHOT_TIMEOUT_MS)),
+    ])
+    if (typeof dataUrl !== 'string') return undefined
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return undefined
+    return new Uint8Array(Buffer.from(dataUrl.slice(comma + 1), 'base64'))
+  } catch (error) {
+    process.stderr.write(
+      `GPU 截图失败，退回软件光栅器：${error instanceof Error ? error.message : String(error)}\n`,
+    )
+    return undefined
+  }
+}
+
 function persistSettings(): void {
   saveSettings(settingsPath(), studio.chat.settingsValue)
 }
@@ -173,6 +218,11 @@ function createWindow(): void {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
+  // 模型截图接上渲染进程里的 three.js。**接在这里而不是 `initStudio`**：
+  // 工作台先建、窗口后建，接早了那时还没有窗口可问。
+  // 渲染进程还没 `ready` 时 `captureInRenderer` 会自己返回 undefined，
+  // 会话就退回软件光栅器——所以顺序上早接不会有副作用。
+  studio.attachShotBridge({ capture: captureInRenderer })
   // 外部链接走系统浏览器，不在应用内开新窗口
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)
@@ -190,6 +240,9 @@ function createWindow(): void {
     // `--drag-test`：启动时合成一次拖动再抓图，用来验证"拖动中降分辨率"那条路
     // （不合成事件的话，`--capture` 抓到的永远是静止的第一帧，拖动路径一次都没被走到）
     ...(process.argv.includes('--drag-test') ? { hash: 'drag-test' } : {}),
+    // `--camera-test`：合成一次"在机位面板里填坐标 + 共享给模型"，
+    // 于是 `--shot` 拿到的就是**用户定的那个机位**拍的图（人机共用机位的验收）
+    ...(process.argv.includes('--camera-test') ? { hash: 'camera-test' } : {}),
   })
 }
 
@@ -278,10 +331,13 @@ function registerIpc(): void {
   handle('studio:demo', () => studio.demo())
   handle('studio:seek', (revision: number) => studio.seek(revision))
   handle('studio:seekLatest', () => studio.seekLatest())
+  // 界面上的机位面板：把用户定的机位交给会话，让模型从同一个位置看（D-52）。
+  // `null` = 复原。这是**人在环路里唯一一条直接的相机通路**——其余全归模型。
+  handle('studio:setCamera', (camera: Parameters<StudioService['setCamera']>[0]) => studio.setCamera(camera))
 
   // 截图：返回 PNG 字节（IPC 用结构化克隆传 Buffer 没问题）
-  handle('studio:shoot', (request: ShootRequest) => {
-    const { png, view, revision } = studio.shoot(request)
+  handle('studio:shoot', async (request: ShootRequest) => {
+    const { png, view, revision } = await studio.shoot(request)
     return { png: Buffer.from(png), view, revision }
   })
 
@@ -348,7 +404,29 @@ function registerIpc(): void {
   // 渲染进程的"首次渲染完成"回报。GUI 冒烟测试等它。
   ipcMain.handle('studio:ready', (_event, report: { ok: boolean; detail: string }) => {
     process.stdout.write(`[renderer] ${report.ok ? 'READY' : 'FAILED'}: ${report.detail}\n`)
-    if (guiSmoke) setTimeout(() => app.exit(report.ok ? 0 : 1), 50)
+    // 从这一刻起才允许把截图请求发给渲染进程
+    rendererReady = report.ok
+    if (guiSmoke) {
+      void assertGpuShot(report).then((result) => {
+        process.stdout.write(`[gui-smoke] ${result.ok ? 'OK' : 'FAILED'}: ${result.detail}\n`)
+        setTimeout(() => app.exit(result.ok ? 0 : 1), 50)
+      })
+    }
+    // `--shot <png>`：把**模型看到的那张图**原样写下来再退出。
+    // 抓窗口得到的是用户的视口，这个得到的才是模型的眼睛——两者的差别
+    // （叠加层、尺寸、是否 GPU）只有落在文件上才比得出来。
+    if (shotPath !== undefined) {
+      void assertGpuShot(report).then(async (result) => {
+        process.stdout.write(`[shot] ${result.ok ? 'OK' : 'FAILED'}: ${result.detail}\n`)
+        if (result.png === undefined) {
+          app.exit(1)
+          return
+        }
+        await writeFile(shotPath, result.png)
+        process.stdout.write(`已写出模型视角截图 → ${shotPath}\n`)
+        app.exit(result.ok ? 0 : 1)
+      })
+    }
     if (capturePath !== undefined) {
       // 等一下让首帧真的画上，然后抓窗口
       setTimeout(() => {
@@ -370,6 +448,36 @@ function registerIpc(): void {
 }
 
 /**
+ * GUI 冒烟里最重要的一条：**模型的眼睛真的走渲染进程的 three.js 了吗**。
+ *
+ * 只断言"截图能出来"是不够的——回落路径同样出图，而回落意味着用户看到的是
+ * GPU 版、模型看到的是软件版，正是这一版要消灭的那种不一致。
+ * 所以这里要一枪，并断言**没有回落**（回落时 `renderFallback` 会被写上原因）。
+ *
+ * 顺带把 PNG 带回去：`--shot` 要把它写到盘上给人看。
+ */
+async function assertGpuShot(report: {
+  ok: boolean
+  detail: string
+}): Promise<{ ok: boolean; detail: string; png?: Uint8Array }> {
+  if (!report.ok) return { ok: false, detail: `渲染进程自己就失败了：${report.detail}` }
+  try {
+    const image = await studio.shoot({ view: 'iso_ne', width: 512, height: 384 })
+    const fallback = studio.renderFallback
+    if (fallback !== undefined) return { ok: false, detail: `退回了软件光栅器：${fallback}` }
+    const isPng = image.png[0] === 0x89 && image.png[1] === 0x50 && image.png[2] === 0x4e && image.png[3] === 0x47
+    if (!isPng) return { ok: false, detail: `回来的不是 PNG（前 4 字节 ${[...image.png.slice(0, 4)].join(',')}）` }
+    return {
+      ok: true,
+      png: image.png,
+      detail: `截图 ${image.png.length} 字节 PNG, revision ${image.revision}, 机位 ${image.view}`,
+    }
+  } catch (error) {
+    return { ok: false, detail: `截图抛错：${error instanceof Error ? error.message : String(error)}` }
+  }
+}
+
+/**
  * 冒烟模式：不建窗口，把整条主进程链路跑一遍然后退出。
  *
  * 存在的理由是**打包后才会暴露的问题**：`minecraft-data` 与 `minecraft-assets`
@@ -381,8 +489,10 @@ async function runSmoke(): Promise<void> {
   const state = service.demo()
   lines.push(`demo: rev ${state.revision} / op ${state.totalOps} / ${state.blocks} 方块`)
 
-  const shot = service.shoot({ view: 'iso_ne', width: 320, height: 240 })
-  lines.push(`shoot: ${shot.png.length} 字节 PNG, revision ${shot.revision}`)
+  const shot = await service.shoot({ view: 'iso_ne', width: 320, height: 240 })
+  // 冒烟模式没有窗口，所以这一枪必然是软件光栅器画的——把"确实回落了"也报出来，
+  // 否则以后有人改了回落条件，这里会静默变成别的东西
+  lines.push(`shoot: ${shot.png.length} 字节 PNG, revision ${shot.revision} (无窗口 → 软件光栅器)`)
 
   const back = service.seek(Math.max(0, state.revision - 3))
   lines.push(`seek(${state.revision - 3}): rev ${back.revision} / ${back.blocks} 方块`)
@@ -548,6 +658,15 @@ const guiSmoke = process.argv.includes('--gui-smoke')
 /** `--capture <path>`：窗口渲染完成后把窗口本身抓成 PNG 再退出。不需要系统截屏权限。 */
 const captureIndex = process.argv.indexOf('--capture')
 const capturePath = captureIndex >= 0 ? process.argv[captureIndex + 1] : undefined
+/**
+ * `--shot <path>`：把**模型视角**的那张截图写到盘上再退出。
+ *
+ * 和 `--capture` 是两件事：那个抓的是用户的视口，这个走的是 `ctx.shoot` ——也就是
+ * 模型真正收到的那张图（尺寸、叠加层、用哪条渲染路径都和它一致）。
+ * 排查"模型为什么看错了"时，先看这张图，而不是看窗口。
+ */
+const shotIndex = process.argv.indexOf('--shot')
+const shotPath = shotIndex >= 0 ? process.argv[shotIndex + 1] : undefined
 if (smokeIndex >= 0) {
   void runSmoke()
     .then(() => app.exit(0))
@@ -571,7 +690,7 @@ void app.whenReady().then(() => {
   }
 
   // GUI 冒烟：窗口 + preload + 渲染进程 + IPC + 渲染全链路，10 秒内没回报就算失败
-  if (guiSmoke || capturePath !== undefined) {
+  if (guiSmoke || capturePath !== undefined || shotPath !== undefined) {
     setTimeout(() => {
       process.stderr.write('GUI 超时：渲染进程没有回报\n')
       app.exit(1)

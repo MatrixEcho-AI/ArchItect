@@ -1,7 +1,9 @@
 import { initI18n, onLocaleChange, setLocale, t } from '@architect/i18n'
+import { eyeFromOrientation, orientationFromEye } from '@architect/render/browser'
 
 import { Viewport } from './viewport.js'
 import type { MessageKey } from '@architect/i18n'
+import type { CameraSpec, OverlayOptions } from '@architect/render/browser'
 
 /**
  * 渲染进程：**一个哑视图**。
@@ -30,6 +32,15 @@ interface StudioState {
   histogram: Array<{ block: string; count: number; percent: number }>
   /** 一次性提示（崩溃恢复之类）。主进程读过就没了，所以界面要自己留住。 */
   notice?: string
+  /** 会话相机（`set_camera` 或机位面板设的）。界面只读显示，不自动改用户的视角。 */
+  camera?: {
+    azimuth?: number
+    elevation?: number
+    roll?: number
+    scale?: number
+    eye?: [number, number, number]
+    lookAt?: [number, number, number]
+  }
 }
 
 interface ChatMessageView {
@@ -138,6 +149,22 @@ interface ArchitectBridge {
   }>
   /** 预设机位的角度（唯一真相在主进程的 `VIEW_PRESETS`）。 */
   viewPresets(): Promise<Record<string, { azimuth: number; elevation: number }>>
+  /**
+   * 机位面板 → 会话相机。传 `null` 复原。
+   *
+   * 写的是 `set_camera` 工具用的那个字段，所以打开「模型用这个机位」之后，
+   * 用户看到的就是模型接下来看到的（人机共用机位）。
+   */
+  setCamera(
+    camera: {
+      azimuth?: number
+      elevation?: number
+      roll?: number
+      scale?: number
+      eye?: [number, number, number]
+      lookAt?: [number, number, number]
+    } | null,
+  ): Promise<StudioState>
   slice(request: { axis: 'x' | 'y' | 'z'; index: number }): Promise<string>
   demo(): Promise<StudioState>
   exportModel(format: string, suggestedName?: string): Promise<{ paths: string[]; summary: string } | undefined>
@@ -175,7 +202,30 @@ interface ArchitectBridge {
 declare global {
   interface Window {
     architect: ArchitectBridge
+    /**
+     * **主进程用来要一张给模型看的图**（`webContents.executeJavaScript` 调它）。
+     *
+     * 之所以挂在 window 上而不是走 IPC 通道：方向是主 → 渲染，而 `ipcRenderer.invoke`
+     * 只能渲染 → 主。`executeJavaScript` 会 await 这个函数返回的 Promise 并把结果
+     * （PNG 的 data URL）带回主进程，一行就够，不需要自己造一套请求/应答 id 表。
+     *
+     * 返回 `null` 表示"这一枪我画不了"（版本对不上、只要纯色路径），主进程会退回
+     * 软件光栅器。
+     */
+    __architectCaptureShot?: (request: CaptureShotRequest) => Promise<string | null>
   }
+}
+
+/** 主进程发来的离屏截图请求。字段与 `@architect/agent` 的 `ShotInput` 对齐。 */
+interface CaptureShotRequest {
+  camera: CameraSpec
+  view: string
+  revision: number
+  width: number
+  height: number
+  overlays: OverlayOptions
+  /** three.js 这条路只有纹理渲染，所以 `false` 时直接拒收。 */
+  textured: boolean
 }
 
 
@@ -192,6 +242,16 @@ const empty = el('empty')
 const scrub = el<HTMLInputElement>('scrub')
 const revLabel = el('rev-label')
 const viewSelect = el<HTMLSelectElement>('view')
+const camMode = el<HTMLSelectElement>('cam-mode')
+const camAngle = el('cam-angle')
+const camEye = el('cam-eye')
+const camAz = el<HTMLInputElement>('cam-az')
+const camElev = el<HTMLInputElement>('cam-el')
+const camRoll = el<HTMLInputElement>('cam-roll')
+const camScale = el<HTMLInputElement>('cam-scale')
+const camEyeFields = [el<HTMLInputElement>('cam-ex'), el<HTMLInputElement>('cam-ey'), el<HTMLInputElement>('cam-ez')]
+const camLookFields = [el<HTMLInputElement>('cam-lx'), el<HTMLInputElement>('cam-ly'), el<HTMLInputElement>('cam-lz')]
+const camShare = el<HTMLInputElement>('cam-share')
 const messagesEl = el<HTMLOListElement>('messages')
 const blockingEl = el('blocking')
 const noticeEl = el('notice')
@@ -262,8 +322,52 @@ async function guard<T>(label: string, fn: () => Promise<T>): Promise<T | undefi
 // 测试没有 GPU），这条要的是好看。但几何与相机是同一份，所以两边看到的是同一个世界。
 
 let viewport: Viewport | undefined
-/** 相机状态。`scale <= 0` 表示自动取景。 */
-const camera = { azimuth: 45, elevation: 35, roll: 0, scale: 0 }
+/**
+ * 相机状态。`scale <= 0` 表示自动取景，`target` 省略表示注视内容中心。
+ *
+ * **这是"用户在看的那个机位"**，和主进程会话里的相机（`set_camera` / 机位面板写的那份）
+ * 是两个东西：拖动只改这一份，只有勾了「模型用这个机位」才会推过去。
+ * 分开是有意的——用户随手转两下不该悄悄改掉模型下一张截图的机位。
+ */
+const camera: { azimuth: number; elevation: number; roll: number; scale: number; target?: [number, number, number] } = {
+  azimuth: 45,
+  elevation: 35,
+  roll: 0,
+  scale: 0,
+}
+/** 机位面板有没有把机位同步给模型（会话相机）。 */
+let camShared = false
+/** 推机位给主进程的节流句柄：拖动时每个 pointermove 都推一次会白写几百次 IPC。 */
+let camPushTimer: number | undefined
+/**
+ * 由角度反推"相机位置"时用的虚构距离。
+ *
+ * 正交投影下**相机到注视点的距离完全不影响成像**，所以这个数只是为了让面板上有个
+ * 能显示、能编辑的位置。面板下方的提示把这一点写明了，避免用户以为"放远了会变小"。
+ */
+const CAMERA_PROBE_DISTANCE = 64
+
+/**
+ * 会话相机 → 一行给人看的文字。
+ *
+ * 和 `shotCameraLabel` 的口径一致（那一个进的是对话档案，这一个进的是面板），
+ * 所以用户在这一行看到的标签，就是事后在档案里能对上的那一个。
+ */
+function describeModelCamera(camera: StudioState['camera']): string {
+  if (camera === undefined) return t('panel.info.cameraDefault')
+  const parts: string[] = []
+  if (camera.eye !== undefined && camera.lookAt !== undefined) {
+    parts.push(`eye(${camera.eye.map((v) => Math.round(v)).join(',')})→(${camera.lookAt.map((v) => Math.round(v)).join(',')})`)
+  } else {
+    if (camera.azimuth !== undefined) parts.push(`az${Math.round(camera.azimuth)}`)
+    if (camera.elevation !== undefined) parts.push(`el${Math.round(camera.elevation)}`)
+    if (camera.lookAt !== undefined) parts.push(`→(${camera.lookAt.map((v) => Math.round(v)).join(',')})`)
+  }
+  if (camera.roll !== undefined && camera.roll !== 0) parts.push(`rl${Math.round(camera.roll)}`)
+  if (camera.scale !== undefined) parts.push(`z${camera.scale}`)
+  return parts.length > 0 ? parts.join(' ') : t('panel.info.cameraDefault')
+}
+
 /** 预设机位的角度由主进程给（`VIEW_PRESETS` 是唯一真相）。 */
 const presetAngles = new Map<string, { azimuth: number; elevation: number }>()
 /** 当前场景对应的 revision，用来判断要不要重新拉几何。 */
@@ -291,6 +395,226 @@ function applyPreset(name: string): void {
   camera.elevation = angles.elevation
   camera.roll = 0
   camera.scale = 0
+  // 预设机位一律回到"看内容中心"，否则上一轮定的注视点会把建筑挤到画面外
+  camera.target = undefined
+  // 换机位就丢掉"用户手填的 eye"——方向变了，那三个数不再代表当前朝向
+  camTypedEye = undefined
+}
+
+// ── 机位面板 ──────────────────────────────────────────────────────────────────
+//
+// 拖动已经能转角度，这里补的是**精确输入**与**自定义注视点**。三件事值得写清楚：
+//
+// 1. 字段是**单向镜**：相机变了就刷新字段（拖动时也跟着变），但用户正在这个面板里
+//    打字时不刷新——否则每敲一个字符都被改写回去。
+// 2. `eye` 只提供**方向**。正交投影下距离不影响成像（D-46），所以由角度反推出的
+//    `eye` 与用户填的 `eye` 不在同一条射线上也没关系，只有方向一致就够了。
+// 3. 勾了「模型用这个机位」才推给主进程。推的是**角度 + 注视点**，不是 eye——因为
+//    会话相机是角度语义的（`set_camera` 也一样），eye 反解成角度是信息无损的，
+//    反过来则要凭空造一个距离。
+
+/** 内容中心。和 `fitCamera` 用的是同一个式子（+1 是"方块占一格"的补偿）。 */
+function contentCenter(): [number, number, number] {
+  const bounds = current?.bounds
+  if (bounds === undefined) return [0, 0, 0]
+  return [
+    (bounds.min[0] + bounds.max[0] + 1) / 2,
+    (bounds.min[1] + bounds.max[1] + 1) / 2,
+    (bounds.min[2] + bounds.max[2] + 1) / 2,
+  ]
+}
+
+const cameraTarget = (): [number, number, number] => camera.target ?? contentCenter()
+const round1 = (value: number): string => String(Math.round(value * 10) / 10)
+const readNum = (input: HTMLInputElement, fallback: number): number => {
+  const value = Number(input.value)
+  return input.value.trim().length > 0 && Number.isFinite(value) ? value : fallback
+}
+
+/**
+ * 用户手填过、且**方向没变**的那组 eye/lookAt。
+ *
+ * 为什么需要它：正交投影下距离不影响成像，所以用户填的 `eye` 反解成角度之后，
+ * 再按 64 格探针距离正解回来**不会是原来那三个数**。用户会看到自己输的
+ * (40,30,40) 一按应用就变成 (45.3,35.3,48.8)——数学上等价，观感上像被改错了。
+ * 所以只要方向和注视点还是他填的那一组，就把他的数字原样留在框里；
+ * 一旦视角从别处变了（拖动、预设、复位），就丢掉它、按角度重算。
+ */
+let camTypedEye: {
+  eye: [number, number, number]
+  lookAt: [number, number, number]
+  azimuth: number
+  elevation: number
+} | undefined
+
+/** 用户正在机位面板里打字时，不要用相机状态去覆盖他。 */
+function cameraPanelBusy(): boolean {
+  const active = document.activeElement
+  return active instanceof HTMLElement && active.closest('.camera') !== null
+}
+
+/** 相机 → 字段。 */
+function syncCameraFields(): void {
+  if (cameraPanelBusy()) return
+  const target = cameraTarget()
+  const eye = eyeFromOrientation(
+    {
+      target: { x: target[0], y: target[1], z: target[2] },
+      azimuth: camera.azimuth,
+      elevation: camera.elevation,
+      roll: camera.roll,
+      scale: 1,
+      width: 1,
+      height: 1,
+    },
+    CAMERA_PROBE_DISTANCE,
+  )
+  camAz.value = round1(camera.azimuth)
+  camElev.value = round1(camera.elevation)
+  camRoll.value = round1(camera.roll)
+  camScale.value = camera.scale > 0 ? round1(camera.scale) : ''
+
+  // 方向和注视点都还是用户填的那一组时，保留他填的数字（见 `camTypedEye`）
+  const typed = camTypedEye
+  const keepTyped =
+    typed !== undefined &&
+    Math.abs(typed.azimuth - camera.azimuth) < 1e-6 &&
+    Math.abs(typed.elevation - camera.elevation) < 1e-6 &&
+    typed.lookAt.every((value, index) => Math.abs(value - target[index]!) < 1e-6)
+  if (!keepTyped) camTypedEye = undefined
+  const eyeValues: [number, number, number] = keepTyped ? typed.eye : [eye.x, eye.y, eye.z]
+  const lookValues: [number, number, number] = keepTyped ? typed.lookAt : target
+  camEyeFields.forEach((input, index) => {
+    input.value = round1(eyeValues[index]!)
+  })
+  camLookFields.forEach((input, index) => {
+    input.value = round1(lookValues[index]!)
+  })
+}
+
+/** 字段 → 相机。返回是否成功（坐标不完整时不改相机）。 */
+function applyCameraFields(): boolean {
+  const roll = readNum(camRoll, camera.roll)
+  const scaleRaw = readNum(camScale, 0)
+  const scale = scaleRaw > 0 ? clamp(scaleRaw, 0.5, 120) : 0
+
+  if (camMode.value === 'eye') {
+    const eye = camEyeFields.map((input) => Number(input.value))
+    const look = camLookFields.map((input) => Number(input.value))
+    if ([...eye, ...look].some((value) => !Number.isFinite(value))) {
+      setStatus(t('viewport.cam.invalid'))
+      return false
+    }
+    try {
+      const oriented = orientationFromEye(
+        { x: eye[0]!, y: eye[1]!, z: eye[2]! },
+        { x: look[0]!, y: look[1]!, z: look[2]! },
+      )
+      camera.azimuth = oriented.azimuth
+      camera.elevation = clamp(oriented.elevation, 1, 89)
+    } catch {
+      // 两点重合，朝向无法确定
+      setStatus(t('viewport.cam.invalid'))
+      return false
+    }
+    camera.target = [look[0]!, look[1]!, look[2]!]
+    camTypedEye = {
+      eye: [eye[0]!, eye[1]!, eye[2]!],
+      lookAt: [look[0]!, look[1]!, look[2]!],
+      azimuth: camera.azimuth,
+      elevation: camera.elevation,
+    }
+  } else {
+    camera.azimuth = readNum(camAz, camera.azimuth)
+    camera.elevation = clamp(readNum(camElev, camera.elevation), 1, 89)
+    camera.target = undefined
+    camTypedEye = undefined
+  }
+
+  camera.roll = roll
+  camera.scale = scale
+  viewSelect.value = 'free'
+  return true
+}
+
+/**
+ * 把当前机位推给主进程的会话——**模型接下来的截图就从这里看**。
+ *
+ * 只在勾了「模型用这个机位」时推，并且节流。推的是角度 + 注视点（见本节开头第 3 条）。
+ */
+function pushCamera(): void {
+  if (!camShared) return
+  if (camPushTimer !== undefined) window.clearTimeout(camPushTimer)
+  camPushTimer = window.setTimeout(() => {
+    camPushTimer = undefined
+    void window.architect
+      .setCamera({
+        azimuth: camera.azimuth,
+        elevation: camera.elevation,
+        roll: camera.roll,
+        ...(camera.target !== undefined ? { lookAt: camera.target } : {}),
+        ...(camera.scale > 0 ? { scale: camera.scale } : {}),
+      })
+      // 把主进程回来的状态画出来，「模型机位」那一行才会立刻变——
+      // 否则用户勾了共享却看不到任何确认
+      .then((state) => renderPanel(state))
+  }, 120)
+}
+
+function wireCamera(): void {
+  camMode.addEventListener('change', () => {
+    const byEye = camMode.value === 'eye'
+    camAngle.classList.toggle('hidden', byEye)
+    camEye.classList.toggle('hidden', !byEye)
+    // 换模式时字段是同一台相机，所以"应用"是个空操作——不会跳视角
+    if (applyCameraFields()) {
+      requestFrame()
+      pushCamera()
+    }
+  })
+
+  for (const input of [camAz, camElev, camRoll, camScale, ...camEyeFields, ...camLookFields]) {
+    input.addEventListener('change', () => {
+      if (!applyCameraFields()) return
+      syncCameraFields()
+      requestFrame()
+      pushCamera()
+    })
+  }
+
+  el('cam-apply').addEventListener('click', () => {
+    if (!applyCameraFields()) return
+    syncCameraFields()
+    requestFrame()
+    pushCamera()
+    setStatus(t('viewport.cam.applied'))
+  })
+
+  el('cam-reset').addEventListener('click', () => {
+    applyPreset(view === 'free' ? 'iso_ne' : view)
+    if (view === 'free') viewSelect.value = 'iso_ne'
+    camTypedEye = undefined
+    syncCameraFields()
+    requestFrame()
+    camShare.checked = false
+    camShared = false
+    void window.architect.setCamera(null).then((state) => renderPanel(state))
+    setStatus(t('viewport.cam.unshared'))
+  })
+
+  camShare.addEventListener('change', () => {
+    camShared = camShare.checked
+    if (camShared) {
+      pushCamera()
+      setStatus(t('viewport.cam.shared'))
+    } else {
+      void window.architect.setCamera(null).then((state) => renderPanel(state))
+      setStatus(t('viewport.cam.unshared'))
+    }
+    requestFrame()
+  })
+
+  syncCameraFields()
 }
 
 /**
@@ -307,6 +631,37 @@ async function syncScene(): Promise<void> {
   sceneRevision = payload.revision
 }
 
+/**
+ * **主进程要一张给模型看的图**：用渲染进程里的 three.js 画，把 PNG 交回去。
+ *
+ * 这是"模型的眼睛"和"用户的眼睛"共用的那一条路（D-47 的两条路径在这里合流：
+ * 交互与模型截图共用 three.js，CLI/CI 仍然用可复现的软件光栅器）。
+ *
+ * **版本必须对得上**。主进程给的 `revision` 是它算这张图时世界的版本，而渲染进程
+ * 这边的场景可能还停在几步之前（状态事件还在队列里没处理）。所以对不上就重拉一次
+ * 几何；重拉回来**仍然**对不上，说明世界在请求飞行途中又变了——这时宁可返回 `null`
+ * 让主进程退回软件光栅器，也**绝不能**把一张旧图当新图交出去：
+ * 让模型拿着过期截图下结论是多轮视觉 agent 最隐蔽的 bug（plan §9.4）。
+ */
+async function captureShot(request: CaptureShotRequest): Promise<string | null> {
+  if (viewport === undefined) return null
+  // three.js 这条路只有纹理渲染，没有"平均色快路径"，所以纯色会话直接拒收
+  if (!request.textured) return null
+  if (sceneRevision !== request.revision) {
+    const payload = await window.architect.scene()
+    if (payload.revision !== request.revision) return null
+    viewport.setRevision(payload.revision)
+    viewport.setScene(payload)
+    sceneRevision = payload.revision
+  }
+  return viewport.capture({
+    camera: request.camera,
+    width: request.width,
+    height: request.height,
+    overlays: request.overlays,
+  })
+}
+
 /** 把一帧排到下一个动画帧。 */
 function requestFrame(): void {
   if (frameQueued) return
@@ -320,12 +675,14 @@ function requestFrame(): void {
     }
     empty.classList.remove('show')
     viewport.render(camera)
+    // 机位面板是相机的**单向镜**：拖动时数字跟着变，但用户正在面板里打字时不覆盖
+    syncCameraFields()
     setStatus(
       t('viewport.status', {
         az: camera.azimuth.toFixed(0),
         el: camera.elevation.toFixed(0),
         ms: 'GPU',
-      }),
+      }) + (camShared ? ` · ${t('viewport.cam.sharedShort')}` : ''),
     )
   })
 }
@@ -397,6 +754,8 @@ function wireViewport(): void {
   surface.addEventListener('dblclick', () => {
     camera.scale = 0
     camera.roll = 0
+    // 注视点也一起回内容中心：双击是"我转晕了，回到默认取景"
+    camera.target = undefined
     requestFrame()
   })
 
@@ -438,6 +797,34 @@ function simulateDrag(): void {
   for (let i = 1; i <= 5; i++) send('pointermove', cx + i * 14, cy + i * 4)
 }
 
+/**
+ * 合成一次"在机位面板里填坐标 + 共享给模型"（只给 `#camera-test` 用）。
+ *
+ * 走的全是真实的事件路径：切模式 → 填字段 → 点应用 → 勾共享。所以它验证的是
+ * **人机共用机位**这条链路，而不是某个内部函数：主进程 `--shot` 拍出来的那张
+ * 模型视角图，应该就是这个坐标拍出来的。
+ *
+ * 最后等一下节流的 120ms：不推过去的话，`--shot` 拍到的是旧机位。
+ */
+async function simulateCameraPanel(): Promise<void> {
+  camMode.value = 'eye'
+  camMode.dispatchEvent(new Event('change'))
+  // 注视点故意挑在**远离内容中心**的地方（小屋中心约 (9,6,9)）：这样"模型真的用了
+  // 这个机位"在图上表现为构图明显偏移，而不是"看起来差不多，大概生效了吧"
+  const eye = [40, 30, 40]
+  const look = [16, 6, 0]
+  camEyeFields.forEach((input, index) => {
+    input.value = String(eye[index])
+  })
+  camLookFields.forEach((input, index) => {
+    input.value = String(look[index])
+  })
+  el('cam-apply').dispatchEvent(new MouseEvent('click'))
+  camShare.checked = true
+  camShare.dispatchEvent(new Event('change'))
+  await new Promise((resolve) => setTimeout(resolve, 300))
+}
+
 // ── 左侧面板 ──────────────────────────────────────────────────────────────────
 
 function renderPanel(next: StudioState): void {
@@ -459,6 +846,9 @@ function renderPanel(next: StudioState): void {
   if (next.projectPath !== undefined) {
     rows.push([t('panel.info.file'), next.projectPath.split('/').pop() ?? ''])
   }
+  // 模型当前会从哪个机位截图。**只读**：自动把用户的视角改到模型那边会很难解释
+  // （"我只是想让模型看看，结果我自己的画面被拽走了"）。
+  rows.push([t('panel.info.camera'), describeModelCamera(next.camera)])
   el('project-info').innerHTML = rows
     .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
     .join('')
@@ -767,6 +1157,7 @@ function describeProbe(result: DiscoveryResult): string {
 function wire(): void {
   viewport = new Viewport(canvas, overlayCanvas)
   wireViewport()
+  wireCamera()
 
   el('btn-new').addEventListener('click', () => {
     void guard(t('menu.new'), async () => {
@@ -969,6 +1360,9 @@ async function submitChat(): Promise<void> {
 // ── 启动 ──────────────────────────────────────────────────────────────────────
 
 async function boot(): Promise<void> {
+  // 先挂上离屏截图钩子：主进程从 `ready` 之后就可能来要图，
+  // 挂晚了会白丢一枪（那一枪会退回软件光栅器，图糊一点但不会错）
+  window.__architectCaptureShot = captureShot
   try {
     const initial = await window.architect.settings()
     initI18n({ locale: initial.locale })
@@ -998,6 +1392,8 @@ async function boot(): Promise<void> {
     if (location.hash === '#settings') settingsDialog.showModal()
     // `#drag-test`：合成一次拖动，让"拖动"这条路径在自动抓图里也能被走到
     if (location.hash === '#drag-test') simulateDrag()
+    // `#camera-test`：合成一次机位面板操作 + 共享给模型
+    if (location.hash === '#camera-test') await simulateCameraPanel()
     await window.architect.ready({ ok: true, detail: `canvas ${canvas.width}x${canvas.height}` })
   } catch (error) {
     await window.architect.ready({

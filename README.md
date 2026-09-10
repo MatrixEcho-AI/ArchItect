@@ -16,6 +16,10 @@
   → 导出 .schem / .litematic / .obj 拿去游戏或三维软件里用
 ```
 
+**模型的眼睛和你的眼睛是同一套渲染器。** 桌面端模型收到的截图由渲染进程里的
+three.js 画（和视口共用同一份几何与相机）；CLI、CI 与无 GPU 环境走自研的软件光栅器，
+那条路逐字节可复现，golden 测试靠它。两条路共用相机与叠加层，所以换后端不会换构图。
+
 ---
 
 ## 5 分钟上手
@@ -57,6 +61,7 @@ pnpm architect export hut.mcai --out hut.schem       # 拿去游戏里 //schem l
 | **复制旋转之后朝向全错** | `copy_region`/`paste_region`/`symmetrize` 用**同一个矩阵**同时算坐标与朝向；在 1.21.4 全部 27 866 个 state × 9 种变换上验证过是双射 |
 | **成本失控** | 截图内容寻址去重、前缀缓存友好的 append-only 上下文（DeepSeek 缓存命中便宜 50 倍）、实时成本表盘 |
 | **改了却不说改没改** | 完成闸门：改过东西之后必须有一次通过的结构化读回才允许结束 |
+| **说不清"从这个角度看"** | 机位面板可以填精确的角度或相机坐标/注视点；勾上「模型用这个机位」，模型接下来的截图就从你看的那个位置拍——**人机共用机位**。截图里的标签会带上注视点（`az45/el30→(8,5,8)`），档案里能分辨"看整栋楼"和"盯着檐口" |
 
 ---
 
@@ -66,7 +71,7 @@ pnpm architect export hut.mcai --out hut.schem       # 拿去游戏里 //schem l
 packages/
   core       体素内核 · 状态编解码 · 几何算子 · 世界存储 · 历史回放 · 朝向变换 · linter
   mcai       .mcai 容器 · 对话与截图存档 · 崩溃恢复 WAL
-  render     软件光栅器 · 碰撞盒形状渲染 · 叠加层 · PNG 编解码
+  render     软件光栅器 · 原版方块模型网格化 · 纹理图集 · 相机与叠加层 · PNG 编解码
   tools      23 个 LLM 工具 · JSON Schema 校验 · 文档生成
   interop    .schem / .litematic / .obj · 版本迁移
   agent      Agent 循环 · 完成闸门 · Provider 适配与能力发现
@@ -97,6 +102,19 @@ examples/    示例工程
 | `pnpm desktop` | 打开桌面端 |
 | `pnpm example` | 重新生成 `examples/forest-hut.mcai`（时间戳钉死，所以输出可复现） |
 | `pnpm --filter @architect/desktop package:dir` | 打一个不打签名、不做安装包的目录版（验打包用） |
+
+桌面端的几个诊断开关（都要先 `pnpm --filter @architect/desktop build`）：
+
+```bash
+cd apps/desktop
+npx --no-install electron . --demo --gui-smoke             # 全链路冒烟（含"模型截图确实走了 GPU"）
+npx --no-install electron . --demo --capture /tmp/gui.png  # 抓用户看到的窗口
+npx --no-install electron . --demo --shot /tmp/eye.png     # 抓**模型收到的那张图**
+```
+
+后两个不是一回事：`--capture` 是用户的视口，`--shot` 走 `ctx.shoot`，
+尺寸、叠加层、用哪条渲染路径都和模型真实收到的一致。
+排查"模型为什么看错了"时先看 `--shot` 那张。
 
 ---
 

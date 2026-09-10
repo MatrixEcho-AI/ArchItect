@@ -187,6 +187,89 @@ dd {
   font-size: 12px;
 }
 
+/* ── 机位面板 ────────────────────────────────────────────────────────────────
+   左栏只有 ~220px，所以数字输入框挤在 2~3 列的网格里，标签用小字放在上方。 */
+
+.camera {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.camera > select {
+  width: 100%;
+  padding: 3px 6px;
+}
+
+.cam-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 6px;
+  align-items: end;
+}
+
+/* 相机位置/注视点三个数字一行，所以这一块是三列 */
+#cam-eye {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.cam-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cam-grid label > span,
+.cam-label {
+  font-size: 10px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.cam-grid input {
+  width: 100%;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 相机位置/注视点占满一行，三个数字跟在标签后面 */
+.cam-label {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+}
+
+.cam-share {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cam-share input {
+  width: auto;
+  margin: 0;
+}
+
+.cam-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.cam-actions button {
+  flex: 1;
+}
+
+.cam-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--dim);
+}
+
 .histogram li,
 .ops li {
   display: flex;

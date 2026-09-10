@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { measure } from '@architect/core'
+import type { ShotInput } from '@architect/agent'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { StudioService } from '../src/main/services/studio.js'
@@ -59,10 +60,10 @@ describe('StudioService：状态', () => {
 })
 
 describe('StudioService：截图', () => {
-  it('返回可用的 PNG', () => {
+  it('返回可用的 PNG', async () => {
     const studio = makeStudio()
     studio.demo()
-    const shot = studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
+    const shot = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
     expect(shot.png.length).toBeGreaterThan(500)
     expect(shot.view).toBe('iso_ne')
     expect(shot.revision).toBe(studio.state().revision)
@@ -70,17 +71,112 @@ describe('StudioService：截图', () => {
     expect([...shot.png.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
   })
 
-  it('不同机位产生不同图', () => {
+  it('不同机位产生不同图', async () => {
     const studio = makeStudio()
     studio.demo()
-    const a = studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
-    const b = studio.shoot({ view: 'top', width: 240, height: 180 })
+    const a = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
+    const b = await studio.shoot({ view: 'top', width: 240, height: 180 })
     expect([...a.png]).not.toEqual([...b.png])
   })
 
-  it('空世界也能渲染（会画出工区线框与标尺）', () => {
+  it('空世界也能渲染（会画出工区线框与标尺）', async () => {
     const studio = makeStudio()
-    expect(() => studio.shoot({ view: 'iso_ne', width: 160, height: 120 })).not.toThrow()
+    await expect(studio.shoot({ view: 'iso_ne', width: 160, height: 120 })).resolves.toBeDefined()
+  })
+})
+
+describe('StudioService：GPU 截图通道', () => {
+  /** 一个假的"渲染进程"：把请求记下来，按需要成功或失败。 */
+  const stub = (
+    behavior: 'ok' | 'refuse' | 'throw',
+  ): { bridge: { capture: (input: ShotInput) => Promise<Uint8Array | undefined> }; seen: ShotInput[] } => {
+    const seen: ShotInput[] = []
+    return {
+      seen,
+      bridge: {
+        capture: async (input) => {
+          seen.push(input)
+          if (behavior === 'refuse') return undefined
+          if (behavior === 'throw') throw new Error('渲染进程没了')
+          return new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+        },
+      },
+    }
+  }
+
+  it('接上通道之后，截图交给它，且相机已经解算好', async () => {
+    const { bridge, seen } = stub('ok')
+    const studio = new StudioService({ shots: bridge })
+    studio.demo()
+    const shot = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
+    expect(shot.png.length).toBe(7)
+    expect(seen).toHaveLength(1)
+    // 解算好的相机带着尺寸与缩放，渲染进程不重新取景
+    expect(seen[0]!.camera.width).toBe(240)
+    expect(seen[0]!.camera.height).toBe(180)
+    expect(seen[0]!.camera.scale).toBeGreaterThan(0)
+    expect(seen[0]!.revision).toBe(studio.state().revision)
+  })
+
+  it('**纯色会话不碰 GPU**：那条路要图集，问了也是白问', async () => {
+    const { bridge, seen } = stub('ok')
+    const studio = new StudioService({ plain: true, shots: bridge })
+    studio.demo()
+    const shot = await studio.shoot({ view: 'iso_ne', width: 120, height: 90 })
+    expect(seen).toEqual([])
+    // 没有回落——这是按设计走软件路径，不是"GPU 用不了"
+    expect(studio.renderFallback).toBeUndefined()
+    expect([...shot.png.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
+  })
+
+  it('通道拒绝时退回软件光栅器，并记下原因', async () => {
+    const { bridge } = stub('refuse')
+    const studio = new StudioService({ shots: bridge })
+    studio.demo()
+    const shot = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
+    expect([...shot.png.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
+    expect(shot.png.length).toBeGreaterThan(500)
+    expect(studio.renderFallback).toBe('外部渲染后端拒绝了这一枪')
+  })
+
+  it('通道抛错也不会把截图整体带走', async () => {
+    const { bridge } = stub('throw')
+    const studio = new StudioService({ shots: bridge })
+    studio.demo()
+    const shot = await studio.shoot({ view: 'iso_ne', width: 200, height: 150 })
+    expect(shot.png.length).toBeGreaterThan(500)
+    expect(studio.renderFallback).toBe('渲染进程没了')
+  })
+})
+
+describe('StudioService：人机共用机位', () => {
+  it('机位写进会话相机，并回显在状态里', () => {
+    const studio = makeStudio()
+    expect(studio.state().camera).toBeUndefined()
+    const state = studio.setCamera({ azimuth: 31, elevation: 27, lookAt: [16, 6, 0] })
+    expect(state.camera).toEqual({ azimuth: 31, elevation: 27, lookAt: [16, 6, 0] })
+    // 后续每一次 state 都带着它——界面刷新不该把它洗掉
+    expect(studio.state().camera).toEqual({ azimuth: 31, elevation: 27, lookAt: [16, 6, 0] })
+  })
+
+  it('传 null 复原（界面上的「复原」按钮走这条）', () => {
+    const studio = makeStudio()
+    studio.setCamera({ azimuth: 31, elevation: 27 })
+    const state = studio.setCamera(null)
+    expect(state.camera).toBeUndefined()
+  })
+
+  it('**设了机位之后，模型的截图真的换了机位**（不只是记了个字段）', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    const before = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
+    expect(before.view).toBe('iso_ne')
+
+    studio.setCamera({ azimuth: 31, elevation: 27, lookAt: [16, 6, 0] })
+    const after = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
+    // 标签、像素、机位三者都要变——只看标签的话，"记了字段但没真用"也能过
+    expect(after.view).toBe('az31/el27→(16,6,0)')
+    expect([...after.png]).not.toEqual([...before.png])
   })
 })
 

@@ -1,0 +1,269 @@
+import {
+  asByteArray,
+  asCompound,
+  asInt,
+  asIntArray,
+  asString,
+  byteArray,
+  child,
+  compound,
+  int,
+  intArray,
+  readNbt,
+  short,
+  string,
+  writeNbt,
+} from './nbt.js'
+import type { NbtTree, Tag } from './nbt.js'
+
+/**
+ * Sponge Schematic（`.schem`）读写。
+ *
+ * 这是 M7 的主交付物：**导出的文件要能在游戏里逐格还原**，所以布局必须严格按规范，
+ * 不能"差不多能用"。两条最容易搞错的地方：
+ *
+ * 1. **索引顺序**是 `x + z*Width + y*Width*Length`——**y 在最外层**。
+ *    写成 `x + z*Width + y*Height*Width`（或把 y 放最内层）都能自洽地往返，
+ *    但游戏里读出来会整体错位。这是本模块唯一无法靠自测发现的错误，
+ *    所以下面有专门的测试把顺序钉死在手算的期望值上。
+ * 2. **v2 与 v3 的 `Data` 编码不同**：v2 是定宽 2 字节大端，v3 是 **VarInt**。
+ *    写用 v3（1.20+ 的规范），读要两种都认——网上的 `.schem` 大多数还是 v2。
+ *
+ * 调色板的键就是**方块状态字符串**，而且和我们的规范形式完全一致
+ * （`minecraft:oak_stairs[facing=north,half=bottom,...]`），所以两边几乎零转换。
+ * 属性顺序无所谓：解析时按 `key=value` 读，不依赖顺序。
+ */
+
+/** 一个方块位置与它的状态字符串。 */
+export interface SchematicBlock {
+  x: number
+  y: number
+  z: number
+  /** 规范状态字符串，如 `minecraft:oak_stairs[facing=north]`。 */
+  state: string
+}
+
+export interface SchematicData {
+  /** `[宽度(x), 高度(y), 长度(z)]`。 */
+  size: [number, number, number]
+  /** 源文件里的原点偏移（`Offset`）。粘贴时用不到，但保留以便无损往返。 */
+  offset: [number, number, number]
+  /** **只含非空气格**。空气占绝大多数，稀疏存省内存也省时间。 */
+  blocks: SchematicBlock[]
+  /** 源文件的 `DataVersion`。缺失表示不是 Sponge 格式或没写。 */
+  dataVersion?: number
+  /** 源文件的 `Version`（2 或 3）。 */
+  formatVersion?: number
+  metadata?: Record<string, string>
+  /** 原始调色板里的方块状态字符串（含空气），诊断用。 */
+  palette?: string[]
+}
+
+export interface WriteSchematicInput {
+  size: [number, number, number]
+  blocks: Iterable<SchematicBlock>
+  /** 写进文件的 `DataVersion`。1.21.4 = 4189。 */
+  dataVersion: number
+  metadata?: Record<string, string>
+  offset?: [number, number, number]
+}
+
+/** 1.21.4 的 DataVersion。导出的文件靠它告诉游戏"这是哪个版本的方块表"。 */
+export const DATA_VERSION_1_21_4 = 4189
+
+/**
+ * 写 Sponge v3。
+ *
+ * v3 相对 v2 的差别只有两处：`Version=3`、`Data` 用 VarInt；`PaletteMax` 不再需要。
+ * 其余（尺寸、偏移、调色板、索引顺序）一模一样。
+ */
+export function writeSpongeSchematic(input: WriteSchematicInput): Uint8Array {
+  const [width, height, length] = input.size
+  if (width <= 0 || height <= 0 || length <= 0) {
+    throw new RangeError(`尺寸必须为正：收到 ${width}x${height}x${length}`)
+  }
+
+  // 调色板：第 0 项固定是空气，和游戏工具的惯例一致
+  const palette: string[] = ['minecraft:air']
+  const paletteIndex = new Map<string, number>([['minecraft:air', 0]])
+  const indices = new Int32Array(width * height * length)
+
+  for (const block of input.blocks) {
+    if (block.state === 'minecraft:air' || block.state === 'air') continue
+    if (block.x < 0 || block.x >= width || block.y < 0 || block.y >= height || block.z < 0 || block.z >= length) {
+      throw new RangeError(
+        `方块 (${block.x},${block.y},${block.z}) 超出声明尺寸 ${width}x${height}x${length}`,
+      )
+    }
+    let index = paletteIndex.get(block.state)
+    if (index === undefined) {
+      index = palette.length
+      palette.push(block.state)
+      paletteIndex.set(block.state, index)
+    }
+    // ⚠️ y 在最外层：x + z*Width + y*Width*Length
+    indices[block.x + block.z * width + block.y * width * length] = index
+  }
+
+  const paletteTree: NbtTree = {}
+  for (const [name, index] of paletteIndex) paletteTree[name] = int(index)
+
+  const metadata: NbtTree = {}
+  for (const [key, value] of Object.entries(input.metadata ?? {})) metadata[key] = string(value)
+
+  const schematic: NbtTree = {
+    Version: int(3),
+    DataVersion: int(input.dataVersion),
+    Width: short(width),
+    Height: short(height),
+    Length: short(length),
+    Offset: intArray(input.offset ?? [0, 0, 0]),
+    Blocks: compound({
+      Palette: compound(paletteTree),
+      Data: byteArray(encodeVarints(indices)),
+    }),
+  }
+  if (Object.keys(metadata).length > 0) schematic['Metadata'] = compound(metadata)
+
+  return writeNbt({ Schematic: compound(schematic) })
+}
+
+/** 读 `.schem`。**v2 与 v3 都认**，也认未压缩的输入。 */
+export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicData> {
+  const root = await readNbt(bytes)
+  const schematic = asCompound(child(root, 'Schematic'))
+  if (schematic === undefined) {
+    // 也可能是 v1 的老布局：Palette / BlockData 直接挂在根上
+    if (child(root, 'Palette') !== undefined) {
+      throw new Error(
+        '这是 Sponge v1 格式（Palette/BlockData 在根上），本工具只支持 v2/v3。' +
+          '用 WorldEdit `//schem save` 重新导出一次即可升级到 v3。',
+      )
+    }
+    throw new Error('不是合法的 .schem：根标签里没有 Schematic 复合标签')
+  }
+
+  const version = asInt(schematic['Version'], 0)
+  const width = asInt(schematic['Width'])
+  const height = asInt(schematic['Height'])
+  const length = asInt(schematic['Length'])
+  if (width <= 0 || height <= 0 || length <= 0) {
+    throw new Error(`.schem 尺寸非法：${width}x${height}x${length}`)
+  }
+
+  const blocksTag = asCompound(schematic['Blocks'])
+  if (blocksTag === undefined) throw new Error('.schem 缺少 Blocks 复合标签')
+  const paletteTree = asCompound(blocksTag['Palette'])
+  if (paletteTree === undefined) throw new Error('.schem 缺少 Blocks.Palette')
+
+  const palette: string[] = []
+  for (const [name, indexTag] of Object.entries(paletteTree)) {
+    const index = asInt(indexTag, -1)
+    if (index >= 0) palette[index] = name
+  }
+
+  const data = asByteArray(blocksTag['Data'])
+  if (data === undefined) throw new Error('.schem 缺少 Blocks.Data')
+
+  // v3 是 VarInt，v2 是定宽 2 字节大端。版本号缺失时按 v2 试——
+  // 老文件里 Version 字段本来就可能没有。
+  const indices = version >= 3 ? decodeVarints(data) : decodeFixed16(data)
+
+  const offsetRaw = asIntArray(schematic['Offset'])
+  const offset: [number, number, number] = [
+    offsetRaw?.[0] ?? 0,
+    offsetRaw?.[1] ?? 0,
+    offsetRaw?.[2] ?? 0,
+  ]
+
+  const blocks: SchematicBlock[] = []
+  const expected = width * height * length
+  const limit = Math.min(indices.length, expected)
+  for (let i = 0; i < limit; i++) {
+    const index = indices[i]!
+    if (index === 0) continue
+    const state = palette[index]
+    if (state === undefined) continue
+    if (state === 'minecraft:air' || state === 'air') continue
+    const y = Math.floor(i / (width * length))
+    const rest = i - y * width * length
+    const z = Math.floor(rest / width)
+    const x = rest - z * width
+    blocks.push({ x, y, z, state })
+  }
+
+  const dataVersion = schematic['DataVersion']
+  const metadataTree = asCompound(schematic['Metadata'])
+  const metadata: Record<string, string> = {}
+  for (const [key, tag] of Object.entries(metadataTree ?? {})) {
+    const value = asString(tag)
+    if (value.length > 0) metadata[key] = value
+  }
+
+  const result: SchematicData = { size: [width, height, length], offset, blocks, palette, formatVersion: version }
+  if (dataVersion !== undefined) result.dataVersion = asInt(dataVersion)
+  if (Object.keys(metadata).length > 0) result.metadata = metadata
+  return result
+}
+
+// ── VarInt 与定宽编码 ─────────────────────────────────────────────────────────
+
+/**
+ * 标准的 LEB128 无符号 VarInt（每字节低 7 位，最高位是继续标志）。
+ *
+ * 用二进制补码的负数会被当成"没完没了"的序列——索引永远非负，所以这里不接受负数。
+ */
+export function encodeVarints(values: ArrayLike<number>): number[] {
+  const out: number[] = []
+  for (let i = 0; i < values.length; i++) {
+    let value = values[i]!
+    if (value < 0) throw new RangeError(`VarInt 不接受负数：${value}`)
+    for (;;) {
+      const chunk = value & 0x7f
+      value >>>= 7
+      if (value === 0) {
+        out.push(chunk)
+        break
+      }
+      out.push(chunk | 0x80)
+    }
+  }
+  return out
+}
+
+export function decodeVarints(bytes: readonly number[]): number[] {
+  const out: number[] = []
+  let shift = 0
+  let current = 0
+  for (const byte of bytes) {
+    current |= (byte & 0x7f) << shift
+    if ((byte & 0x80) === 0) {
+      out.push(current >>> 0)
+      current = 0
+      shift = 0
+      continue
+    }
+    shift += 7
+    if (shift > 28) throw new Error('VarInt 超过 5 字节——数据可能不是 v3 编码')
+  }
+  return out
+}
+
+/** v2：每格两个字节，大端。 */
+function decodeFixed16(bytes: readonly number[]): number[] {
+  const out: number[] = []
+  for (let i = 0; i + 1 < bytes.length; i += 2) {
+    out.push(((bytes[i]! << 8) | bytes[i + 1]!) & 0xffff)
+  }
+  return out
+}
+
+/** 供测试与诊断：从原始 NBT 树里取一个标签。 */
+export function peekTag(tree: NbtTree, path: readonly string[]): Tag | undefined {
+  let current: Tag | undefined = { type: 'compound', value: tree } as unknown as Tag
+  for (const key of path) {
+    current = child(current, key)
+    if (current === undefined) return undefined
+  }
+  return current
+}

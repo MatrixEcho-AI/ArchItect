@@ -1,0 +1,10 @@
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+# esbuild（tsx / vite 的底层）需要跑 postinstall 准备平台二进制。
+# electron 的 postinstall 负责下载 Electron 运行时，不放行的话装出来是个空壳。
+# 不显式放行 pnpm 会拦下它们，并连带让 `pnpm test` 报 ERR_PNPM_IGNORED_BUILDS。
+allowBuilds:
+  esbuild: true
+  electron: true

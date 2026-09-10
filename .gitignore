@@ -168,3 +168,8 @@ credentials.json
 !fixtures/**/*.schem
 !fixtures/**/*.litematic
 !fixtures/**/*.mcstructure
+
+# electron-builder 打包产物。体积在 800MB 量级（大部分是资源包与方块数据），
+# 任何时候都不该进版本库——要验打包就本地跑一次：
+#   pnpm --filter @architect/desktop package:dir
+release/

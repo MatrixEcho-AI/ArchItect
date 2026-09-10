@@ -1,0 +1,22 @@
+{
+  "name": "@architect/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@architect/agent": "workspace:*",
+    "@architect/core": "workspace:*",
+    "@architect/i18n": "workspace:*",
+    "@architect/interop": "workspace:*",
+    "@architect/mcai": "workspace:*",
+    "@architect/render": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13"
+  }
+}

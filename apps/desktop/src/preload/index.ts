@@ -1,0 +1,127 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+/**
+ * 渲染进程能看到的全部能力。
+ *
+ * 刻意做得很窄：渲染进程拿不到 Node、拿不到文件系统、**拿不到 API key**。
+ * 所有能力都要经过主进程的具名通道。
+ *
+ * 密钥相关的通道是**只写不读**的：`saveProvider` 可以带上明文让主进程存进钥匙串，
+ * 但没有任何一条通道能把它读回来。
+ */
+export interface IpcResult<T> {
+  ok: boolean
+  value?: T
+  error?: string
+}
+
+async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const result = (await ipcRenderer.invoke(channel, ...args)) as IpcResult<T>
+  if (!result.ok) throw new Error(result.error ?? `${channel} 失败`)
+  return result.value as T
+}
+
+export interface StudioBridge {
+  state(): Promise<unknown>
+  measureText(): Promise<string>
+  newProject(volume?: unknown): Promise<unknown>
+  open(): Promise<unknown | undefined>
+  save(path?: string): Promise<string | undefined>
+  seek(revision: number): Promise<unknown>
+  seekLatest(): Promise<unknown>
+  shoot(request: { view: string; width: number; height: number; highlightLast?: boolean }): Promise<{
+    png: Uint8Array
+    view: string
+    revision: number
+  }>
+  slice(request: {
+    axis: 'x' | 'y' | 'z'
+    index: number
+    x?: [number, number]
+    y?: [number, number]
+    z?: [number, number]
+  }): Promise<string>
+  demo(): Promise<unknown>
+
+  /** 导出成交换格式。省略 suggestedName 时主进程按当前工程名给默认值。 */
+  exportModel(format: string, suggestedName?: string): Promise<{ paths: string[]; summary: string } | undefined>
+  /** 导入外部 schematic（会替换当前工程）。 */
+  importModel(): Promise<
+    | {
+        state: unknown
+        summary: string
+        unknown: Array<{ name: string; count: number; suggestions: string[] }>
+        renamed: Array<{ from: string; to: string; count: number }>
+        skipped: number
+      }
+    | undefined
+  >
+
+  // 设置（密钥只写不读）
+  settings(): Promise<unknown>
+  saveProvider(config: unknown, apiKeyPlain?: string): Promise<unknown>
+  removeProvider(id: string): Promise<unknown>
+  addProvider(preset: string): Promise<unknown>
+  setActive(id: string): Promise<unknown>
+  setBudget(budget: unknown): Promise<unknown>
+  setLocale(locale: string): Promise<unknown>
+  setUi(patch: unknown): Promise<unknown>
+  testConnection(input: unknown): Promise<unknown>
+
+  // 对话
+  chat(): Promise<unknown>
+  send(text: string): Promise<unknown>
+  stop(): Promise<unknown>
+  clearChat(): Promise<unknown>
+  chatImage(id: string): Promise<Uint8Array | undefined>
+
+  /** 订阅主进程推送（对话进度、世界变化）。返回取消订阅的函数。 */
+  subscribe(listener: (event: unknown) => void): () => void
+
+  /** 首次渲染完成后回报主进程——GUI 冒烟测试靠它判定整条链路通了。 */
+  ready(report: { ok: boolean; detail: string }): Promise<void>
+}
+
+const bridge: StudioBridge = {
+  state: () => call('studio:state'),
+  measureText: () => call('studio:measureText'),
+  newProject: (volume) => call('studio:new', volume),
+  open: () => call('studio:open'),
+  save: (path) => call('studio:save', path),
+  seek: (revision) => call('studio:seek', revision),
+  seekLatest: () => call('studio:seekLatest'),
+  shoot: (request) => call('studio:shoot', request),
+  slice: (request) => call('studio:slice', request),
+  demo: () => call('studio:demo'),
+  exportModel: (format, suggestedName) => call('studio:export', format, suggestedName),
+  importModel: () => call('studio:import'),
+
+  settings: () => call('settings:get'),
+  saveProvider: (config, apiKeyPlain) => call('settings:saveProvider', config, apiKeyPlain),
+  removeProvider: (id) => call('settings:removeProvider', id),
+  addProvider: (preset) => call('settings:addProvider', preset),
+  setActive: (id) => call('settings:setActive', id),
+  setBudget: (budget) => call('settings:setBudget', budget),
+  setLocale: (locale) => call('settings:setLocale', locale),
+  setUi: (patch) => call('settings:setUi', patch),
+  testConnection: (input) => call('settings:test', input),
+
+  chat: () => call('chat:view'),
+  send: (text) => call('chat:send', text),
+  stop: () => call('chat:stop'),
+  clearChat: () => call('chat:clear'),
+  chatImage: (id) => call('chat:image', id),
+
+  subscribe: (listener) => {
+    // 包一层：渲染进程永远拿不到 IpcRendererEvent（它带着 sender，能反向拿到底层对象）
+    const handler = (_event: unknown, payload: unknown): void => listener(payload)
+    ipcRenderer.on('studio:event', handler)
+    return () => {
+      ipcRenderer.off('studio:event', handler)
+    }
+  },
+
+  ready: (report) => call('studio:ready', report),
+}
+
+contextBridge.exposeInMainWorld('architect', bridge)

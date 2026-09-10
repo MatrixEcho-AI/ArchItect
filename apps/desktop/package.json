@@ -1,0 +1,76 @@
+{
+  "name": "@architect/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "start": "pnpm build && electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "package:dir": "pnpm build && electron-builder --dir",
+    "package": "pnpm build && electron-builder"
+  },
+  "dependencies": {
+    "@architect/agent": "workspace:*",
+    "@architect/core": "workspace:*",
+    "@architect/i18n": "workspace:*",
+    "@architect/interop": "workspace:*",
+    "@architect/mcai": "workspace:*",
+    "@architect/render": "workspace:*",
+    "@architect/tools": "workspace:*",
+    "fflate": "^0.8.2",
+    "minecraft-assets": "^1.19.0",
+    "minecraft-data": "^3.116.0",
+    "prismarine-block": "^1.22.0",
+    "prismarine-chunk": "^1.41.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "description": "ArchItect —— 用多模态 LLM 设计 Minecraft 建筑",
+  "author": "ArchItect",
+  "build": {
+    "appId": "dev.architect.app",
+    "productName": "ArchItect",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "mcai",
+        "name": "ArchItect 工程",
+        "role": "Editor",
+        "mimeType": "application/x-architect-mcai"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

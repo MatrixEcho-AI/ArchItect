@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:;"
+    />
+    <title>ArchItect</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <span class="brand">ArchItect</span>
+      <button id="btn-new" data-i18n="menu.new"></button>
+      <button id="btn-open" data-i18n="menu.open"></button>
+      <button id="btn-save" data-i18n="menu.save"></button>
+      <span class="sep"></span>
+      <label for="view" data-i18n="viewport.camera"></label>
+      <select id="view">
+        <option value="iso_ne" data-i18n="viewport.angles.iso_ne"></option>
+        <option value="iso_nw" data-i18n="viewport.angles.iso_nw"></option>
+        <option value="iso_se" data-i18n="viewport.angles.iso_se"></option>
+        <option value="iso_sw" data-i18n="viewport.angles.iso_sw"></option>
+        <option value="front" data-i18n="viewport.angles.front"></option>
+        <option value="back" data-i18n="viewport.angles.back"></option>
+        <option value="left" data-i18n="viewport.angles.left"></option>
+        <option value="right" data-i18n="viewport.angles.right"></option>
+        <option value="top" data-i18n="viewport.angles.top"></option>
+      </select>
+      <button id="btn-demo" data-i18n="menu.demo"></button>
+      <span class="sep"></span>
+      <button id="btn-export" data-i18n="menu.export"></button>
+      <button id="btn-import" data-i18n="menu.import"></button>
+      <span class="spacer"></span>
+      <span id="cost" class="cost"></span>
+      <button id="btn-settings" data-i18n="menu.settings"></button>
+      <span id="status" class="status"></span>
+    </header>
+
+    <main>
+      <aside class="panel left">
+        <div class="block">
+          <h2 data-i18n="panel.project"></h2>
+          <dl id="project-info"></dl>
+        </div>
+        <div class="block">
+          <h2 data-i18n="panel.materials"></h2>
+          <ul id="histogram" class="histogram"></ul>
+        </div>
+        <div class="block grow">
+          <h2 data-i18n="panel.ops"></h2>
+          <ol id="ops" class="ops"></ol>
+        </div>
+      </aside>
+
+      <section class="viewport">
+        <canvas id="canvas" width="900" height="640"></canvas>
+        <div id="empty" class="empty" data-i18n="viewport.empty"></div>
+      </section>
+
+      <aside class="panel chat">
+        <div class="chat-head">
+          <h2 data-i18n="chat.title"></h2>
+          <span class="spacer"></span>
+          <button id="btn-chat-clear" class="mini" data-i18n="chat.clear"></button>
+        </div>
+        <div id="notice" class="notice hidden"></div>
+        <div id="blocking" class="blocking hidden"></div>
+        <ol id="messages" class="messages"></ol>
+        <form id="chat-form" class="chat-form">
+          <textarea id="chat-input" rows="3" data-i18n-placeholder="chat.placeholder"></textarea>
+          <div class="chat-actions">
+            <button type="submit" id="btn-send" data-i18n="chat.send"></button>
+            <button type="button" id="btn-stop" class="hidden" data-i18n="chat.stop"></button>
+            <span id="chat-usage" class="usage"></span>
+          </div>
+        </form>
+      </aside>
+    </main>
+
+    <footer class="timeline">
+      <button id="btn-latest" data-i18n="timeline.latest"></button>
+      <input id="scrub" type="range" min="0" max="0" value="0" />
+      <span id="rev-label" class="rev"></span>
+      <span class="hint" data-i18n="timeline.drag"></span>
+    </footer>
+
+    <dialog id="settings-dialog" class="settings">
+      <div class="settings-form">
+        <h1 data-i18n="settings.title"></h1>
+
+        <div class="row wide">
+          <label data-i18n="settings.activeProvider"></label>
+          <select id="provider-select"></select>
+          <button type="button" id="btn-remove-provider" class="danger" data-i18n="settings.removeProvider"></button>
+        </div>
+
+        <div class="row wide">
+          <label data-i18n="settings.addProvider"></label>
+          <span id="preset-row" class="preset-row"></span>
+        </div>
+
+        <div class="row wide">
+          <label for="cfg-baseurl" data-i18n="settings.llm.baseURL"></label>
+          <input id="cfg-baseurl" type="text" spellcheck="false" />
+        </div>
+        <div class="row wide">
+          <label for="cfg-key" data-i18n="settings.llm.apiKey"></label>
+          <input id="cfg-key" type="password" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="row wide">
+          <label for="cfg-model" data-i18n="settings.llm.model"></label>
+          <input id="cfg-model" type="text" spellcheck="false" />
+        </div>
+
+        <p class="note" data-i18n="settings.llm.keyNote"></p>
+
+        <div class="row wide">
+          <label data-i18n="settings.budget"></label>
+          <input id="cfg-usd" type="number" min="0" step="0.5" placeholder="USD" />
+          <input id="cfg-turns" type="number" min="1" step="1" placeholder="turns" />
+          <label for="cfg-locale" data-i18n="settings.language"></label>
+          <select id="cfg-locale">
+            <option value="zh-CN">中文</option>
+            <option value="en-US">English</option>
+          </select>
+        </div>
+
+        <div class="caps">
+          <div class="row">
+            <button type="button" id="btn-test" data-i18n="settings.llm.test"></button>
+            <button type="button" id="btn-test-list" data-i18n="settings.llm.listOnly"></button>
+          </div>
+          <pre id="probe-log" class="probe-log"></pre>
+          <p class="note" data-i18n="settings.llm.capabilitySource"></p>
+        </div>
+
+        <div class="settings-actions">
+          <button type="button" id="btn-settings-cancel" data-i18n="settings.cancel"></button>
+          <button type="button" id="btn-settings-save" data-i18n="settings.apply"></button>
+        </div>
+      </div>
+    </dialog>
+
+    <script src="main.js"></script>
+  </body>
+</html>

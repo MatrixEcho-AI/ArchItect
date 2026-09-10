@@ -15,6 +15,17 @@ import {
 } from '@architect/interop'
 import type { SchematicData } from '@architect/interop'
 import { openProject, packProject } from '@architect/mcai'
+import {
+  Canvas,
+  cameraBasis,
+  drawOverlayGrid,
+  drawOverlays,
+  fitCamera,
+  loadRenderData,
+  meshWorld,
+  rasterize,
+} from '@architect/render'
+import type { WorldGeometry } from '@architect/render'
 
 import type { AutosaveService } from './autosave.js'
 import { ChatController } from './chat.js'
@@ -42,12 +53,69 @@ export interface StudioState {
 /** 能导出成什么。GUI 的"导出…"按扩展名推断，也可以让用户显式选。 */
 export type ExportFormat = 'schem' | 'litematic' | 'obj'
 
+/** 交互视口的背景色，与 `renderIsometric` 的默认值一致（拖动时不能闪烁变色）。 */
+const VIEWPORT_BACKGROUND = { r: 26, g: 28, b: 34 }
+
 export interface ShootRequest {
   view: string
   width: number
   height: number
   /** 高亮某个区域；省略时高亮最后一次编辑。 */
   highlightLast?: boolean
+}
+
+/**
+ * 交互视口的一帧请求。
+ *
+ * 与 `ShootRequest` 的差别是相机**由用户给**（拖动出来的角度），而不是预设机位；
+ * 并且没有高亮/说明文字——拖动时那些每帧都在变，视觉上只会晃。
+ */
+export interface ViewportRequest {
+  /** 水平角（度）。 */
+  azimuth: number
+  /** 仰角（度），会被夹在 1..89 之间（90 度俯视时 up 向量退化）。 */
+  elevation: number
+  /** 每格像素。省略表示"自动取景"。 */
+  scale?: number
+  width: number
+  height: number
+  /** 拖动中：用低分辨率快速出图，松手后再出一张全分辨率的。 */
+  draft?: boolean
+}
+
+/**
+ * 交互视口要的**几何 + 图集**，一次性发给渲染进程。
+ *
+ * three.js 与软件光栅器吃的是**同一份** mesher 输出（带 UV 的三角形），所以
+ * 两边画出来的东西在几何上完全一致——差别只在抗锯齿、mipmap 与帧率。
+ *
+ * 顶点位置已经是世界坐标，渲染进程不需要再做任何变换。
+ */
+export interface ScenePayload {
+  revision: number
+  positions: Float32Array
+  normals: Float32Array
+  /** 逐顶点 AO × 生物群系着色。**方向明暗没烘进去**，由渲染进程按法线乘。 */
+  colors: Float32Array
+  uvs: Float32Array
+  indices: Uint32Array
+  atlas: { size: number; data: Uint8Array }
+  bounds?: { min: [number, number, number]; max: [number, number, number] }
+  volume: { min: [number, number, number]; max: [number, number, number] }
+}
+
+export interface ViewportFrame {
+  /** 原始 RGBA，长度 = width*height*4。 */
+  pixels: Uint8Array
+  width: number
+  height: number
+  revision: number
+  /** 本次实际用的缩放与取景中心，回给界面显示。 */
+  scale: number
+  target: [number, number, number]
+  /** 网格化是否命中了缓存（没命中说明这一帧把网格重建了一遍）。 */
+  meshed: boolean
+  ms: number
 }
 
 export interface SliceRequest {
@@ -81,6 +149,8 @@ export interface StudioOptions {
 
 export class StudioService {
   private session: AgentSession
+  /** 交互视口的网格缓存，见 `viewport()`。revision 一变就失效。 */
+  private meshCache?: { revision: number; geometry: WorldGeometry }
   private replay: ReplaySession
   private projectPath?: string
   private projectName = '未命名项目'
@@ -425,6 +495,103 @@ export class StudioService {
       ],
     })
     return { png: image.png, view: image.camera, revision: image.revision }
+  }
+
+  /**
+   * 交互视口的一帧。
+   *
+   * **为什么要缓存网格**：拖动时每一帧都要重画，而"把 3 万格翻译成带 UV 的三角形"
+   * 比光栅化贵一个量级（实测 32³ 的灯塔：网格化 ~180 ms，光栅化 ~30 ms）。
+   * 网格只跟 revision 有关、与相机无关——所以按 revision 缓存，拖动时只剩光栅化，
+   * 这才可能到"跟手"的帧率。
+   *
+   * **为什么返回原始 RGBA 而不是 PNG**：拖动时每帧编码一次 PNG（~20 ms）再在
+   * 渲染进程解码一次，纯属白花；`putImageData` 直接吃 RGBA。
+   * 代价是每帧要走 ~2.5 MB 的结构化克隆，比 PNG 往返更快也更简单。
+   */
+  viewport(request: ViewportRequest): ViewportFrame {
+    const started = Date.now()
+    const store = this.session.store
+    const bounds = store.contentBounds() ?? store.volume
+    const azimuth = request.azimuth
+    const elevation = Math.min(89, Math.max(1, request.elevation))
+
+    // `scale` 省略 = 自动取景：每帧都按当前角度重新取景，转起来不会跑出画面
+    const fitted = fitCamera(bounds, { azimuth, elevation }, request.width, request.height)
+    const scale = request.scale ?? fitted.scale
+    const camera = { ...fitted, azimuth, elevation, scale }
+
+    const data = loadRenderData(store.registry.minecraftVersion)
+    let geometry: WorldGeometry
+    let meshed = false
+    if (this.meshCache !== undefined && this.meshCache.revision === store.revision) {
+      geometry = this.meshCache.geometry
+    } else {
+      geometry = meshWorld(store, data)
+      this.meshCache = { revision: store.revision, geometry }
+      meshed = true
+    }
+
+    const canvas = new Canvas(request.width, request.height, VIEWPORT_BACKGROUND)
+    const basis = cameraBasis(camera)
+    if (!request.draft) {
+      drawOverlayGrid(canvas, camera, basis, bounds, { ruler: true, axisGizmo: true, volumeBox: store.volume })
+    }
+    rasterize(geometry, { camera, atlas: data.atlas, canvas })
+    if (!request.draft) {
+      drawOverlays(canvas, camera, basis, bounds, {
+        ruler: true,
+        axisGizmo: true,
+        volumeBox: store.volume,
+        caption: [
+          `REV ${store.revision}  AZ ${azimuth.toFixed(0)}  EL ${elevation.toFixed(0)}`,
+          `BOUNDS ${bounds.min.x},${bounds.min.y},${bounds.min.z}..${bounds.max.x},${bounds.max.y},${bounds.max.z}`,
+        ],
+      })
+    }
+
+    return {
+      pixels: canvas.data,
+      width: request.width,
+      height: request.height,
+      revision: store.revision,
+      scale,
+      target: [camera.target.x, camera.target.y, camera.target.z],
+      meshed,
+      ms: Date.now() - started,
+    }
+  }
+
+  /**
+   * 给 three.js 视口的几何快照。
+   *
+   * 网格按 revision 缓存（和 `viewport()` 共用同一份），所以拖动/换版本时
+   * 只有版本真的变了才会重新网格化。图集也只在第一次发（4 MB）。
+   */
+  scene(): ScenePayload {
+    const store = this.session.store
+    const data = loadRenderData(store.registry.minecraftVersion)
+    if (this.meshCache === undefined || this.meshCache.revision !== store.revision) {
+      this.meshCache = { revision: store.revision, geometry: meshWorld(store, data) }
+    }
+    const geometry = this.meshCache.geometry
+    const bounds = store.contentBounds()
+    return {
+      revision: store.revision,
+      positions: geometry.positions,
+      normals: geometry.normals,
+      colors: geometry.colors,
+      uvs: geometry.uvs,
+      indices: geometry.indices,
+      atlas: { size: data.atlas.size, data: data.atlas.data },
+      ...(bounds !== undefined
+        ? { bounds: { min: [bounds.min.x, bounds.min.y, bounds.min.z], max: [bounds.max.x, bounds.max.y, bounds.max.z] } }
+        : {}),
+      volume: {
+        min: [store.volume.min.x, store.volume.min.y, store.volume.min.z],
+        max: [store.volume.max.x, store.volume.max.y, store.volume.max.z],
+      },
+    }
   }
 
   /** 切片文本。 */

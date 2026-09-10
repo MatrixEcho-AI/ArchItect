@@ -1,7 +1,7 @@
 import { EditLog, measure, WorldStore } from '@architect/core'
 import type { Bounds, Palette } from '@architect/core'
-import { createAssetColorResolver, createFallbackColorResolver, encodePng, fitCamera, presetAngles, renderIsometric } from '@architect/render'
-import type { ColorResolver, ViewPreset } from '@architect/render'
+import { cameraForShot, createAssetColorResolver, createFallbackColorResolver, encodePng, renderIsometric, shotCameraLabel } from '@architect/render'
+import type { ColorResolver } from '@architect/render'
 import { createDefaultRegistry } from '@architect/tools'
 import type { ScreenshotRequest, ToolContext, ToolImage, ToolRegistry } from '@architect/tools'
 
@@ -124,10 +124,17 @@ export class AgentSession {
 
   private shoot(request: ScreenshotRequest): ToolImage {
     const bounds = this.store.contentBounds() ?? this.store.volume
-    const camera = fitCamera(bounds, presetAngles(request.view as ViewPreset), request.width, request.height)
+    // 会话相机（`set_camera` 设的）在这里兜底：显式参数优先，没给才落到它。
+    // 工具层已经合过一次，但桌面端与脚本也走 `ctx.shoot`，所以这里再兜一次。
+    const camera = cameraForShot(bounds, { ...this.ctx.camera, ...request, view: request.view })
     const result = renderIsometric(this.store, {
       camera,
       resolve: this.resolve,
+      // 默认走**纹理渲染**（真实方块模型 + 逐面纹理 + 原版光照）。
+      // 这是模型的眼睛：纯色平均色会让 `stone_bricks` 和 `stone` 看起来一模一样
+      // （平均色只差 4/255），模型就没法在截图上核对"我叫它砌的是石砖"。
+      // `plain: true` 时才退回纯色，供 golden 测试与 CI 用。
+      ...(this.options.plain === true ? {} : { textured: true }),
       overlays: {
         ruler: true,
         axisGizmo: true,
@@ -141,7 +148,7 @@ export class AgentSession {
       png: encodePng(result.canvas),
       width: request.width,
       height: request.height,
-      camera: request.view,
+      camera: shotCameraLabel(request),
       revision: this.store.revision,
     }
   }

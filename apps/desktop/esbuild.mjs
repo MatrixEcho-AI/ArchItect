@@ -31,7 +31,10 @@ const EXTERNAL = new Set(Object.keys(pkg.dependencies ?? {}))
  * pnpm 下 desktop require 不到，而且打进来能让主进程 bundle 自洽、
  * 打包时不必再往 app 里塞 node_modules。
  */
-const BUNDLED = ['i18next', 'prismarine-nbt']
+// `three` 必须打进来：渲染进程那份 bundle 跑在浏览器里，external 会留下
+// 一个 `require('three')`，页面里直接 ReferenceError。主进程不用它，但
+// 一份 esbuild 配置管三个 target，打进来最省事（three 只进 renderer 的产物）。
+const BUNDLED = ['i18next', 'prismarine-nbt', 'three', 'fflate']
 
 const workspaceOnly = {
   name: 'workspace-only',

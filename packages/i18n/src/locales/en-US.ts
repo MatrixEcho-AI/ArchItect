@@ -27,9 +27,12 @@ export const enUS = {
     redo: 'Redo',
   },
   viewport: {
+    status: 'azimuth {{az}}°  elevation {{el}}° · {{ms}}',
+    hint: 'Drag to rotate · wheel to zoom · double-click to reset framing',
     camera: 'Camera',
     empty: 'Empty world — load the sample hut, or describe a building on the right',
     angles: {
+      free: 'Free view (drag to rotate)',
       iso_ne: 'Isometric · NE',
       iso_nw: 'Isometric · NW',
       iso_se: 'Isometric · SE',

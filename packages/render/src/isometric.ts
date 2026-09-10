@@ -7,6 +7,8 @@ import { Canvas } from './canvas.js'
 import type { ColorResolver } from './colors.js'
 import { drawOverlayGrid, drawOverlays } from './overlay.js'
 import type { OverlayOptions } from './overlay.js'
+import { loadRenderData, meshWorld } from './mesher.js'
+import { rasterize } from './raster.js'
 
 interface Face {
   /** 面法线（指向方块外部）。 */
@@ -68,7 +70,20 @@ function boxFaces(box: ShapeBox): Face[] {
 
 export interface RenderOptions {
   camera: CameraSpec
+  /**
+   * 纯色解析器。**只在没有 `atlas` 时用**——它给每个方块一个平均色，
+   * 材料区分度很低（`stone_bricks` 和 `stone` 的平均色只差 4/255）。
+   */
   resolve: ColorResolver
+  /**
+   * 走**和游戏一致的纹理渲染**：真实方块模型（含栅栏/楼梯/玻璃板/门）+ 逐面纹理
+   * + 原版方向明暗 + AO。
+   *
+   * 关掉时走纯色快路径（按方块平均色填面），用途是 `--plain`（CI 与 golden 测试
+   * 要逐字节确定性）和 OBJ 导出。**两条路径都保留**：golden 测试靠纯色路径的
+   * 稳定性，给人看和给模型看的图靠纹理路径。
+   */
+  textured?: boolean
   background?: { r: number; g: number; b: number }
   /** 光照方向（会归一化）。默认从左上前方。 */
   light?: Vec3
@@ -117,6 +132,8 @@ const BACKFACE_EPSILON = 1e-9
  * 给 LLM 的正式评审图应该走交互视口那套渲染器，但两者共用同一份相机与颜色代码。
  */
 export function renderIsometric(store: WorldStore, options: RenderOptions): RenderResult {
+  if (options.textured === true) return renderTextured(store, options)
+
   const { camera, resolve } = options
   const canvas = new Canvas(camera.width, camera.height, options.background ?? { r: 26, g: 28, b: 34 })
   const basis = cameraBasis(camera)
@@ -268,3 +285,53 @@ function clampByte(value: number): number {
 
 /** 只用来让 `CameraBasis` 类型在外部可见。 */
 export type { CameraBasis }
+
+/**
+ * **纹理渲染路径**：真实方块模型 + 逐面纹理 + 原版光照。
+ *
+ * 和纯色路径的差别不只是"贴了图"：
+ *
+ * | | 纯色路径 | 纹理路径 |
+ * |---|---|---|
+ * | 几何 | 碰撞盒（栅栏是一根柱子，没有横杆） | 原版方块模型（栅栏按邻居连长横杆） |
+ * | 颜色 | 整张纹理的平均色 | 逐像素采样真实纹理 |
+ * | 遮挡 | 画家算法按方块中心排序 | 三角形 z-buffer |
+ * | 光照 | 自定义半球光 | 原版方向明暗 × AO × 生物群系着色 |
+ *
+ * 之所以两条都留着，是因为纯色路径**逐字节可复现**（golden 测试用它），
+ * 而纹理路径才是"和游戏里看到的一样"。`--plain` 切换。
+ */
+function renderTextured(store: WorldStore, options: RenderOptions): RenderResult {
+  const { camera } = options
+  const canvas = new Canvas(camera.width, camera.height, options.background ?? { r: 26, g: 28, b: 34 })
+  const basis = cameraBasis(camera)
+
+  // 图集与方块状态按版本缓存：首次约 1 秒，之后是查表。
+  // 一次会话要截很多张图，绝不能每张都重新解码 1040 张纹理。
+  const data = loadRenderData(store.registry.minecraftVersion)
+
+  // 标尺网格属于地面，必须画在方块之前，否则线会横穿建筑表面
+  const contentBounds = store.contentBounds()
+  const overlays = options.overlays
+  if (overlays !== undefined && overlays !== false) {
+    const gridAnchor = contentBounds ?? overlays.volumeBox
+    if (gridAnchor !== undefined) drawOverlayGrid(canvas, camera, basis, gridAnchor, overlays)
+  }
+
+  const geometry = meshWorld(store, data)
+  const stats = rasterize(geometry, { camera, atlas: data.atlas, canvas })
+
+  let blocks = 0
+  store.forEachNonAir(() => {
+    blocks++
+  })
+
+  if (overlays !== undefined && overlays !== false) {
+    const anchor = contentBounds ?? overlays.volumeBox
+    if (anchor !== undefined) drawOverlays(canvas, camera, basis, anchor, overlays)
+  } else if (overlays === undefined) {
+    if (contentBounds !== undefined) drawOverlays(canvas, camera, basis, contentBounds, {})
+  }
+
+  return { canvas, blocks, faces: stats.drawn, bounds: contentBounds }
+}

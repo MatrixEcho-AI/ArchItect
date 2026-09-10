@@ -29,6 +29,18 @@ export interface StudioBridge {
   save(path?: string): Promise<string | undefined>
   seek(revision: number): Promise<unknown>
   seekLatest(): Promise<unknown>
+  scene(): Promise<{
+    revision: number
+    positions: Float32Array
+    normals: Float32Array
+    colors: Float32Array
+    uvs: Float32Array
+    indices: Uint32Array
+    atlas: { size: number; data: Uint8Array }
+    bounds?: { min: [number, number, number]; max: [number, number, number] }
+    volume: { min: [number, number, number]; max: [number, number, number] }
+  }>
+  viewPresets(): Promise<Record<string, { azimuth: number; elevation: number }>>
   shoot(request: { view: string; width: number; height: number; highlightLast?: boolean }): Promise<{
     png: Uint8Array
     view: string
@@ -91,6 +103,8 @@ const bridge: StudioBridge = {
   seek: (revision) => call('studio:seek', revision),
   seekLatest: () => call('studio:seekLatest'),
   shoot: (request) => call('studio:shoot', request),
+  scene: () => call('studio:scene'),
+  viewPresets: () => call('studio:viewPresets'),
   slice: (request) => call('studio:slice', request),
   demo: () => call('studio:demo'),
   exportModel: (format, suggestedName) => call('studio:export', format, suggestedName),

@@ -23,9 +23,11 @@
     "minecraft-assets": "^1.19.0",
     "minecraft-data": "^3.116.0",
     "prismarine-block": "^1.22.0",
-    "prismarine-chunk": "^1.41.0"
+    "prismarine-chunk": "^1.41.0",
+    "three": "^0.180.0"
   },
   "devDependencies": {
+    "@types/three": "^0.180.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
   },

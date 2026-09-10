@@ -129,11 +129,18 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
     // 探针的文本/视觉请求不带工具，所以只在"带工具的请求"里至少有一个
     expect(chat.some((request) => request.toolsOffered > 0), '一次都没把工具 schema 发出去').toBe(true)
 
-    // **默认不发单轮输出上限**（D-37）：官方口径是"未设置时思考模式默认 64K"，
+    // **循环请求不带单轮输出上限**（D-37）：官方口径是"未设置时思考模式默认 64K"，
     // harness 不猜这个数——猜 8192 时思考模型把额度全烧在思维链上，
     // `finish_reason: length`、正文空、工具调用零，还被报成 completed。
-    const fields = chat.map((request) => request.maxTokensField)
-    expect(fields.every((field) => field === undefined)).toBe(true)
+    //
+    // 探针请求是个例外，它**故意**只要 16/128 token（"回答一个词就够"），
+    // 所以判据是"没有任何请求带一个 harness 自己发明的大上限"。
+    const capped = chat.filter((request) => (request.maxTokensValue ?? 0) > 128)
+    expect(capped.map((request) => request.maxTokensValue)).toEqual([])
+    // 正式循环的请求（工具集是全部工具，探针只有 1 个）一个字段都不带
+    const loopRequests = chat.filter((request) => request.toolsOffered > 1)
+    expect(loopRequests.length).toBeGreaterThan(0)
+    expect(loopRequests.every((request) => request.maxTokensField === undefined)).toBe(true)
 
     // **思维链回传**：agent 循环里的 assistant 消息必须带上 reasoning_content，
     // 否则假模型会 400（DeepSeek 推理模型的真实行为）

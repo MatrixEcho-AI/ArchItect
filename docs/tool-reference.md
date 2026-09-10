@@ -36,6 +36,7 @@
 | [`search_blocks`](#search_blocks) | — | — | Search available blocks by name substring (e.g. |
 | [`analyze_structure`](#analyze_structure) | — | — | Building linter (read-only, does not change the world). |
 | [`screenshot`](#screenshot) | — | — | Render a screenshot for you to look at. |
+| [`set_camera`](#set_camera) | — | — | Position the camera explicitly and KEEP it for every later screenshot. |
 | [`undo`](#undo) | ✅ | — | Undo the last edit, rolling the world back to the state before that operation. |
 | [`redo`](#redo) | ✅ | — | Redo the edit that was undone. |
 
@@ -372,11 +373,38 @@ The result carries a revision — **check it against the current version; if the
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
 |------|------|:----:|-------------|------|------|
-| `view` | 枚举 | — | `iso_ne` / `iso_nw` / `iso_se` / `iso_sw` / `front` / `back` / `left` / `right` / `top` | `"iso_ne"` | Camera. iso_* are the four isometric corners, the rest are orthographic elevations/top. Default iso_ne. |
+| `view` | 枚举 | — | `iso_ne` / `iso_nw` / `iso_se` / `iso_sw` / `front` / `back` / `left` / `right` / `top` | `"iso_ne"` | Named camera preset. iso_* are the four isometric corners, the rest are orthographic elevations/top. Default iso_ne. Ignored when azimuth/elevation are given (it then only labels the shot). |
+| `azimuth` | 数字 | — | -360..720 | — | Free camera: horizontal angle in degrees (0 = looking from +Z toward -Z, increasing counter-clockwise seen from above). Use it when the 9 presets do not give you the direction you need to judge (e.g. an overhang seen from the side). The model is built around the content, so you do not need to compute coordinates. |
+| `elevation` | 数字 | — | -180..180 | — | Free camera: elevation angle in degrees. 1 = almost level with the horizon, 89 = almost straight down. Clamped to 1..89 (at exactly 90 the view collapses). |
+| `scale` | 数字 | — | 0.2..80 | — | Pixels per block. Omit to auto-frame the content. Set it larger for a close-up of a detail (pair it with target), smaller to see the whole site. |
+| `target` | 数组<整数> | — | 3..3 项 | — | Look-at point in world coordinates [x, y, z]. Omit to look at the centre of the content. Use it with a large scale to inspect one detail closely. |
+| `eye` | 数组<整数> | — | 3..3 项 | — | Camera position in world coordinates. Give it together with lookAt to aim the camera at a specific point instead of using an orbit angle. NOTE: the projection is orthographic, so the DISTANCE between eye and lookAt does not change the image size — only the direction matters. Use scale to zoom. |
+| `lookAt` | 数组<整数> | — | 3..3 项 | — | Point the camera looks at; also becomes the centre of the image. |
+| `roll` | 数字 | — | -180..180 | — | Roll around the view axis in degrees. 0 keeps the horizon level (the usual choice). Default 0. |
 | `width` | 整数 | — | 64..4096 | — | Image width, default 1024. |
 | `height` | 整数 | — | 64..4096 | — | Image height, default 768. |
 | `highlightLast` | 布尔 | — | — | — | Highlight the affected range of the last edit, to confirm "what I just changed". Default true. |
 | `plain` | 布尔 | — | — | — | Use the deterministic fallback palette (does not read a resource pack). Usually unnecessary. |
+
+## `set_camera`
+
+```
+Position the camera explicitly and KEEP it for every later screenshot.
+Give eye + lookAt to aim the camera at a point, or azimuth + elevation for an orbit angle.
+The projection is ORTHOGRAPHIC: the distance between eye and lookAt does NOT change the image size, only the direction does — use scale to zoom.
+This does not render anything. It only sets the camera; call screenshot afterwards to look.
+reset:true clears it and goes back to the default preset.
+```
+
+| 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
+|------|------|:----:|-------------|------|------|
+| `eye` | 数组<整数> | — | 3..3 项 | — | Camera position in world coordinates [x, y, z]. Needs lookAt to define a direction. Distance to lookAt is ignored by the orthographic projection. |
+| `lookAt` | 数组<整数> | — | 3..3 项 | — | Point the camera looks at. Also becomes the centre of the image. |
+| `azimuth` | 数字 | — | -360..720 | — | Orbit alternative to eye/lookAt: horizontal angle in degrees. |
+| `elevation` | 数字 | — | -180..180 | — | Orbit alternative to eye/lookAt: elevation angle in degrees, clamped to 1..89. |
+| `roll` | 数字 | — | -180..180 | — | Roll around the view axis in degrees. 0 keeps the horizon level. |
+| `scale` | 数字 | — | 0.2..80 | — | Pixels per block. Omit to auto-frame the content. |
+| `reset` | 布尔 | — | — | — | Clear the stored camera and go back to the default preset. |
 
 ## 其他
 

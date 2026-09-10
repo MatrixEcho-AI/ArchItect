@@ -551,7 +551,13 @@ async function cmdShoot(
 
   for (const view of inv.views) {
     const camera = fitCamera(bounds, presetAngles(view), inv.width, inv.height)
-    const result = renderIsometric(store, { camera, resolve, overlays: overlayOptions })
+    // `--plain` 之外一律走纹理渲染：给模型和人看的图要和游戏里一致
+    const result = renderIsometric(store, {
+      camera,
+      resolve,
+      ...(inv.plain ? {} : { textured: true }),
+      overlays: overlayOptions,
+    })
     const png = encodePng(result.canvas)
     const path = outputPath(inv.out, view, inv.views.length > 1)
     await writeFile(path, png)

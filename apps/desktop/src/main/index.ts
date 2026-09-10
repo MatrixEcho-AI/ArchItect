@@ -6,6 +6,7 @@ import type { Budget, PresetKey, ProviderConfig, ProviderSettings } from '@archi
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
 import { openProject } from '@architect/mcai'
+import { VIEW_PRESETS } from '@architect/render'
 
 import { AutosaveService } from './services/autosave.js'
 import type { StudioEvent, TestConnectionInput } from './services/chat.js'
@@ -186,6 +187,9 @@ function createWindow(): void {
   // `--open-settings` 让窗口直接带着设置面板起来，便于抓图做视觉检查
   void mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
     ...(process.argv.includes('--open-settings') ? { hash: 'settings' } : {}),
+    // `--drag-test`：启动时合成一次拖动再抓图，用来验证"拖动中降分辨率"那条路
+    // （不合成事件的话，`--capture` 抓到的永远是静止的第一帧，拖动路径一次都没被走到）
+    ...(process.argv.includes('--drag-test') ? { hash: 'drag-test' } : {}),
   })
 }
 
@@ -268,6 +272,9 @@ function registerIpc(): void {
     return studio.importModel(path)
   })
 
+  // 预设机位的角度：`VIEW_PRESETS` 是唯一真相，渲染进程不抄一份（抄了就会漂移）
+  handle('studio:viewPresets', () => VIEW_PRESETS)
+
   handle('studio:demo', () => studio.demo())
   handle('studio:seek', (revision: number) => studio.seek(revision))
   handle('studio:seekLatest', () => studio.seekLatest())
@@ -277,6 +284,14 @@ function registerIpc(): void {
     const { png, view, revision } = studio.shoot(request)
     return { png: Buffer.from(png), view, revision }
   })
+
+  // three.js 视口的几何与图集（一次性；网格按 revision 缓存）
+  handle('studio:scene', () => studio.scene())
+
+  // `studio:viewport` 的 IPC **没有**接：交互视口已改用渲染进程里的 three.js
+  // （见 renderer/viewport.ts）。`StudioService.viewport()` 保留着，因为
+  // 冒烟测试用它验"软件光栅器在桌面端也能跑"，以及将来"把当前视口导成 PNG"
+  // 会需要一条不依赖 GPU 的路径。
 
   handle('studio:slice', (request: SliceRequest) => studio.slice(request))
 
@@ -428,6 +443,32 @@ async function runSmoke(): Promise<void> {
   }
   lines.push(`chat: ready=${service.chatView().ready} blocking=${service.chatView().blocking.length}`)
 
+  // ── 交互视口（拖动旋转） ────────────────────────────────────────────────────
+  //
+  // 拖得动的前提是"每帧只做光栅化"：网格化按 revision 缓存，转角度不该重建网格。
+  // 这里量的就是这件事——首帧建网格，第二帧必须命中缓存，否则拖动会卡在 ~200 ms/帧。
+  const first = service.viewport({ azimuth: 45, elevation: 35, width: 900, height: 640, draft: true })
+  const t1 = Date.now()
+  const second = service.viewport({ azimuth: 75, elevation: 50, width: 900, height: 640, draft: true })
+  const warm = Date.now() - t1
+  lines.push(
+    `viewport: 首帧 ${first.ms}ms（建网格 ${first.meshed ? '是' : '否'}）→ 转 30° 后 ${warm}ms` +
+      `（建网格 ${second.meshed ? '是' : '否'}）· ${second.width}x${second.height} · ${second.pixels.length} 字节`,
+  )
+  if (second.meshed) throw new Error('换个角度不该重建网格——网格缓存没生效')
+  if (second.pixels.length !== second.width * second.height * 4) throw new Error('像素缓冲区长度不对')
+  // 图里得真有东西，而且转 30° 之后画出来的**必须不一样**——
+  // 只断言"没抛异常"的话，一个永远返回背景色的实现也能过
+  const painted = countPainted(first.pixels)
+  const painted2 = countPainted(second.pixels)
+  let changed = 0
+  for (let i = 0; i < first.pixels.length; i += 4) {
+    if (first.pixels[i] !== second.pixels[i] || first.pixels[i + 1] !== second.pixels[i + 1]) changed++
+  }
+  lines.push(`  画面：着色像素 ${painted} → ${painted2}，转角度后变化 ${((changed / (first.width * first.height)) * 100).toFixed(1)}%`)
+  if (painted < 1000) throw new Error('视口几乎是空的，渲染没画上东西')
+  if (changed / (first.width * first.height) < 0.02) throw new Error('转了 30° 画面几乎没变，相机没接上')
+
   const os = await import('node:os')
   const path = await import('node:path')
   const fs = await import('node:fs/promises')
@@ -461,6 +502,15 @@ async function runSmoke(): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true })
 
   process.stdout.write(`SMOKE OK\n${lines.map((l) => `  ${l}`).join('\n')}\n`)
+}
+
+/** 数一数有多少像素不是背景色（用来判断"图里真有东西"）。 */
+function countPainted(pixels: Uint8Array): number {
+  let n = 0
+  for (let i = 0; i < pixels.length; i += 4) {
+    if (pixels[i] !== 26 || pixels[i + 1] !== 28 || pixels[i + 2] !== 34) n++
+  }
+  return n
 }
 
 // ── 双击 `.mcai` 打开（M5 验收：fileAssociations + open-file） ────────────────

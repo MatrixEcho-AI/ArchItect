@@ -28,7 +28,7 @@ import {
   sliceTool,
   verifyTool,
 } from './tools/inspect.js'
-import { screenshotTool, undoRedoTools } from './tools/view.js'
+import { screenshotTool, setCameraTool, undoRedoTools } from './tools/view.js'
 import { copyRegionTool, pasteRegionTool } from './tools/transform.js'
 import { replaceBlocksTool, runBatchTool } from './tools/batch.js'
 import { analyzeStructureTool } from './tools/analyze.js'
@@ -62,6 +62,7 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(searchBlocksTool)
     .register(analyzeStructureTool)
     .register(screenshotTool)
+    .register(setCameraTool)
     .register(undoRedoTools[0]!)
     .register(undoRedoTools[1]!)
 }

@@ -67,7 +67,7 @@ packages/
   core       体素内核 · 状态编解码 · 几何算子 · 世界存储 · 历史回放 · 朝向变换 · linter
   mcai       .mcai 容器 · 对话与截图存档 · 崩溃恢复 WAL
   render     软件光栅器 · 碰撞盒形状渲染 · 叠加层 · PNG 编解码
-  tools      22 个 LLM 工具 · JSON Schema 校验 · 文档生成
+  tools      23 个 LLM 工具 · JSON Schema 校验 · 文档生成
   interop    .schem / .litematic / .obj · 版本迁移
   agent      Agent 循环 · 完成闸门 · Provider 适配与能力发现
   i18n       中文优先的文案层（zh-CN 是基准表）
@@ -106,7 +106,7 @@ examples/    示例工程
 |------|------|
 | [`plan.md`](plan.md) | 设计文档：世界模型、格式、渲染、工具语义、Agent 循环、里程碑、决策记录、四个附录 |
 | [`docs/mcai-format.md`](docs/mcai-format.md) | `.mcai` 格式规范（字节级） |
-| [`docs/tool-reference.md`](docs/tool-reference.md) | 22 个工具的完整参考——**从 JSON Schema 生成**，不会过期 |
+| [`docs/tool-reference.md`](docs/tool-reference.md) | 23 个工具的完整参考——**从 JSON Schema 生成**，不会过期 |
 | [`docs/prompt-library.md`](docs/prompt-library.md) | 建筑风格需求模板：住宅 / 公共建筑 / 结构装饰 / 修问题 |
 | [`examples/README.md`](examples/README.md) | 示例工程怎么看、怎么重新生成 |
 

@@ -18,6 +18,7 @@
       <span class="sep"></span>
       <label for="view" data-i18n="viewport.camera"></label>
       <select id="view">
+        <option value="free" data-i18n="viewport.angles.free"></option>
         <option value="iso_ne" data-i18n="viewport.angles.iso_ne"></option>
         <option value="iso_nw" data-i18n="viewport.angles.iso_nw"></option>
         <option value="iso_se" data-i18n="viewport.angles.iso_se"></option>
@@ -55,7 +56,10 @@
       </aside>
 
       <section class="viewport">
-        <canvas id="canvas" width="900" height="640"></canvas>
+        <canvas id="canvas" data-i18n-title="viewport.hint"></canvas>
+        <!-- 叠加层单独一层 2D 画布：three.js 画方块，标尺/坐标轴/文字画在这上面。
+             两层尺寸完全一致，共用同一份相机投影，所以线永远贴在方块上。 -->
+        <canvas id="overlay"></canvas>
         <div id="empty" class="empty" data-i18n="viewport.empty"></div>
       </section>
 

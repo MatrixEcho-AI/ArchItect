@@ -1,6 +1,6 @@
 import { EditLog, measure, WorldStore } from '@architect/core'
 import type { Bounds } from '@architect/core'
-import { createFallbackColorResolver, encodePng, fitCamera, presetAngles, renderIsometric } from '@architect/render'
+import { cameraForShot, createFallbackColorResolver, encodePng, renderIsometric, shotCameraLabel } from '@architect/render'
 import { describe, expect, it } from 'vitest'
 
 import { createDefaultRegistry } from '../src/index.js'
@@ -10,22 +10,25 @@ import type { ScreenshotRequest, ToolContext, ToolImage } from '../src/types.js'
 
 const volume: Bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } }
 
-/** 测试用的最小截图实现：真渲染，但用确定性兜底配色。 */
+/**
+ * 测试用的最小截图实现：真渲染，但用确定性兜底配色。
+ *
+ * **相机必须走 `cameraForShot` 这个共享函数**，不能在这里自己拼一遍——
+ * 自己拼的话"自由机位到底有没有生效"就变成了在验测试替身，而不是验产品代码。
+ */
 function stubShoot(store: WorldStore, request: ScreenshotRequest): ToolImage {
   const bounds = store.contentBounds() ?? volume
-  const camera = fitCamera(bounds, presetAngles(request.view as 'iso_ne'), request.width, request.height)
-  const view = request.view as 'iso_ne'
+  const camera = cameraForShot(bounds, request)
   const result = renderIsometric(store, {
     camera,
     resolve: createFallbackColorResolver(),
     overlays: false,
   })
-  void view
   return {
     png: encodePng(result.canvas),
     width: request.width,
     height: request.height,
-    camera: request.view,
+    camera: shotCameraLabel(request),
     revision: store.revision,
   }
 }
@@ -484,6 +487,130 @@ describe('截图工具', () => {
     expect(result.ok).toBe(false)
     expect(result.error?.code).toBe('NOT_FOUND')
     expect(result.error?.hint).toContain('Build something first')
+  })
+
+  it('**模型能给任意角度**：同一个世界，不同 azimuth 画出来的图不一样', async () => {
+    // 9 个预设覆盖不了"这个屋檐从侧面挑得太远了吗"这类判断。
+    // 这一条锁的是自由机位真的接上了，而不是退回了默认预设。
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [5, 5, 5], block: 'stone' })
+    await registry.call(ctx, 'fill_box', { from: [0, 6, 0], to: [5, 6, 1], block: 'red_concrete' })
+
+    const a = await registry.call(ctx, 'screenshot', { azimuth: 20, elevation: 25, width: 160, height: 120 })
+    const b = await registry.call(ctx, 'screenshot', { azimuth: 200, elevation: 25, width: 160, height: 120 })
+    expect(a.ok && b.ok).toBe(true)
+    expect(a.image!.png).not.toEqual(b.image!.png)
+    // 机位标签要如实写出角度，否则档案里所有自由机位都长得一样
+    expect(a.image!.camera).toContain('az20')
+    expect(a.summary).toContain('az20')
+    expect(b.image!.camera).toContain('az200')
+  })
+
+  it('仰角被夹到 1..89（正好 90° 时画面会退化成一条线）', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 3, 3], block: 'stone' })
+    const result = await registry.call(ctx, 'screenshot', { azimuth: 0, elevation: 90, width: 120, height: 90 })
+    expect(result.ok).toBe(true)
+    expect(result.image!.camera).toBe('az0/el89')
+  })
+
+  it('`scale` + `target` 能做局部特写（图与自动取景不同）', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [7, 0, 7], block: 'stone' })
+    await registry.call(ctx, 'place_block', { pos: [4, 1, 4], block: 'gold_block' })
+    const wide = await registry.call(ctx, 'screenshot', { view: 'iso_ne', width: 160, height: 120 })
+    const close = await registry.call(ctx, 'screenshot', {
+      azimuth: 45,
+      elevation: 30,
+      target: [4, 1, 4],
+      scale: 14,
+      width: 160,
+      height: 120,
+    })
+    expect(close.ok).toBe(true)
+    expect(close.image!.png).not.toEqual(wide.image!.png)
+  })
+
+  it('`set_camera` 定住机位，之后每次 screenshot 都用它', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [5, 5, 5], block: 'stone' })
+
+    const set = await registry.call(ctx, 'set_camera', { eye: [8, 8, 100], lookAt: [3, 3, 3] })
+    expect(set.ok).toBe(true)
+    expect(set.summary).toContain('eye 8,8,100')
+    // 不含尺寸与高亮的相机被存进上下文，后续截图自己会去读
+    expect(ctx.camera?.eye).toEqual([8, 8, 100])
+
+    const after = await registry.call(ctx, 'screenshot', { width: 160, height: 120 })
+    expect(after.ok).toBe(true)
+    expect(after.image!.camera).toBe('eye(8,8,100)→(3,3,3)')
+
+    // 显式给角度 = 从会话相机切回角度模式，单次覆盖
+    const override = await registry.call(ctx, 'screenshot', { azimuth: 0, elevation: 5, width: 160, height: 120 })
+    expect(override.image!.camera).toBe('az0/el5')
+    // 覆盖不该把会话相机改掉
+    expect(ctx.camera?.eye).toEqual([8, 8, 100])
+  })
+
+  it('`set_camera` 只改注视点/缩放时不清掉朝向', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 3, 3], block: 'stone' })
+    await registry.call(ctx, 'set_camera', { azimuth: 30, elevation: 20 })
+    const again = await registry.call(ctx, 'set_camera', { scale: 12 })
+    expect(again.ok).toBe(true)
+    expect(ctx.camera).toMatchObject({ azimuth: 30, elevation: 20, scale: 12 })
+  })
+
+  it('`set_camera` 的错要能自纠：缺一个点、两点重合、什么都没给', async () => {
+    const ctx = makeContext()
+    const onlyEye = await registry.call(ctx, 'set_camera', { eye: [1, 2, 3] })
+    expect(onlyEye.ok).toBe(false)
+    expect(onlyEye.error?.message).toContain('together')
+
+    const same = await registry.call(ctx, 'set_camera', { eye: [1, 2, 3], lookAt: [1, 2, 3] })
+    expect(same.ok).toBe(false)
+    expect(same.error?.message).toContain('same point')
+
+    const nothing = await registry.call(ctx, 'set_camera', {})
+    expect(nothing.ok).toBe(false)
+    expect(nothing.error?.message).toContain('at least one')
+
+    // 失败不该污染上下文
+    expect(ctx.camera).toBeUndefined()
+  })
+
+  it('`set_camera { reset: true }` 清掉机位，回到默认预设', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 3, 3], block: 'stone' })
+    await registry.call(ctx, 'set_camera', { azimuth: 90, elevation: 10 })
+    const reset = await registry.call(ctx, 'set_camera', { reset: true })
+    expect(reset.ok).toBe(true)
+    expect(ctx.camera).toBeUndefined()
+    const shot = await registry.call(ctx, 'screenshot', { width: 120, height: 90 })
+    expect(shot.image!.camera).toBe('iso_ne')
+  })
+
+  it('`set_camera` 设定后，`screenshot` 的 `eye`/`lookAt` 也能一次性覆盖', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 3, 3], block: 'stone' })
+    await registry.call(ctx, 'set_camera', { azimuth: 30, elevation: 20 })
+    const shot = await registry.call(ctx, 'screenshot', {
+      eye: [0, 0, 50],
+      lookAt: [1, 1, 1],
+      width: 160,
+      height: 120,
+    })
+    expect(shot.ok).toBe(true)
+    expect(shot.image!.camera).toBe('eye(0,0,50)→(1,1,1)')
+    // 一次性覆盖不该改掉会话相机
+    expect(ctx.camera?.azimuth).toBe(30)
+  })
+
+  it('预设机位仍然照旧（`view` 不带角度时标签就是预设名）', async () => {
+    const ctx = makeContext()
+    await registry.call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 3, 3], block: 'stone' })
+    const result = await registry.call(ctx, 'screenshot', { view: 'top', width: 120, height: 90 })
+    expect(result.image!.camera).toBe('top')
   })
 })
 

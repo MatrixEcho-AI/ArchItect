@@ -5,7 +5,6 @@ import { detectLocale, initI18n, setLocale, t } from '@architect/i18n'
 import type { Budget, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
-import { openProject } from '@architect/mcai'
 import { VIEW_PRESETS } from '@architect/render'
 
 import { AutosaveService } from './services/autosave.js'
@@ -94,7 +93,7 @@ function projectPathFromArgv(argv: readonly string[]): string | undefined {
  */
 async function openProjectPath(path: string): Promise<void> {
   const state = await studio.open(path)
-  autosave?.retarget('active', state.name, path)
+  autosave?.retarget('active', state.name, path, state.revision)
   pushEvent({ type: 'state', state })
   mainWindow?.show()
   mainWindow?.focus()
@@ -303,7 +302,7 @@ function registerIpc(): void {
   handle('studio:new', (volume?: Parameters<StudioService['newProject']>[0]) => {
     const state = studio.newProject(volume)
     // 新工程不该继承上一个工程的草稿
-    autosave?.retarget('active', state.name)
+    autosave?.retarget('active', state.name, undefined, state.revision)
     return state
   })
 
@@ -317,7 +316,7 @@ function registerIpc(): void {
     const path = result.filePaths[0]!
     const state = await studio.open(path)
     // 换了工程就换一卷 WAL：旧草稿属于旧工程，混在一起会恢复出莫名其妙的东西
-    autosave?.retarget('active', state.name, path)
+    autosave?.retarget('active', state.name, path, state.revision)
     return state
   })
 
@@ -334,6 +333,17 @@ function registerIpc(): void {
     }
     return studio.save(target)
   })
+
+  // 崩溃恢复的两个动作。**必须有能点的地方**：以前这里只有一句提示，
+  // 说"打开那个工程即可在此基础上继续"——而那句话在代码里根本做不到。
+  handle('studio:applyRecovery', async () => {
+    const state = await studio.applyRecovery()
+    // 恢复等于换了一个工程（打开基准 + 重放），WAL 跟着换到新基准上
+    autosave?.retarget('active', state.name, state.projectPath, state.revision)
+    return state
+  })
+
+  handle('studio:discardRecovery', () => studio.discardRecovery())
 
   // 导出到交换格式（M7）。文件对话框 + 写盘在主进程，字节在 StudioService 里算。
   handle('studio:export', async (format: string, suggestedName?: string) => {
@@ -581,20 +591,25 @@ async function runSmoke(): Promise<void> {
     const journaled = live.autosaveNow()
     const expectedHash = store.contentHash()
 
-    // —— 模拟崩溃：换一个全新的实例去读磁盘上剩下的东西 ——
+    // —— 模拟崩溃：换一个**全新的工作台**，走产品里那条恢复路径 ——
+    // （不是在这里手写 applyPatch 循环：那样只能证明 WAL 的内容对，
+    //   证明不了"界面点一下恢复真的能拿回世界"——而那才是用户要的）
+    const after = new StudioService({ plain: true })
     const reopened = new AutosaveService({ dir, projectId: 'active', name: '崩溃恢复冒烟' })
-    const pending = reopened.pending()
-    if (pending === undefined) throw new Error('WAL 里应当有可恢复的 op')
-    const { project, store: restored } = openProject(new Uint8Array(await fs.readFile(savePath)))
-    for (const op of pending.ops) restored.applyPatch(op.patch)
-    restored.setRevision(project.manifest.revision + pending.ops.length)
+    after.attachAutosave(reopened)
+    const summary = after.recover()
+    if (summary === undefined) throw new Error('WAL 里应当有可恢复的 op')
+    const recoveredState = await after.applyRecovery()
+    const restored = after.agentSession.store
 
     const recovered = restored.contentHash() === expectedHash
     lines.push(
-      `autosave: 记下 ${journaled} 条 op，崩溃后恢复 ${pending.ops.length} 条 → ` +
-        `rev ${restored.revision} / ${restored.stats().blocks} 方块 / hash ${recovered ? '一致' : '不一致'}`,
+      `autosave: 记下 ${journaled} 条 op → 崩溃后 recover() 报 ${summary.ops} 条 → ` +
+        `applyRecovery() 后 rev ${restored.revision} / ${restored.stats().blocks} 方块 / ` +
+        `hash ${recovered ? '一致' : '不一致'} / 待办${recoveredState.recovery === undefined ? '已清' : '还在'}`,
     )
     if (!recovered) throw new Error('崩溃恢复后的世界与崩溃前不一致')
+    if (recoveredState.recovery !== undefined) throw new Error('恢复之后不该还留着待办')
     await fs.rm(dir, { recursive: true, force: true })
   }
   lines.push(`chat: ready=${service.chatView().ready} blocking=${service.chatView().blocking.length}`)

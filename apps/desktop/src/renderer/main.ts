@@ -33,6 +33,11 @@ interface StudioState {
   histogram: Array<{ block: string; count: number; percent: number }>
   /** 一次性提示（崩溃恢复之类）。主进程读过就没了，所以界面要自己留住。 */
   notice?: string
+  /**
+   * 有一份崩溃前的草稿等着处理。**它不是提示，是一个待办**——
+   * 主进程会把草稿一直留着，直到用户点了恢复或丢掉。
+   */
+  recovery?: { ops: number; basePath?: string; baseExists: boolean }
   /** 游标前面还有内容（可以撤销）。 */
   canUndo: boolean
   /** 游标后面还有内容（可以重做）。 */
@@ -137,6 +142,10 @@ interface ArchitectBridge {
   save(path?: string): Promise<string | undefined>
   seek(revision: number): Promise<StudioState>
   seekLatest(): Promise<StudioState>
+  /** 崩溃恢复：打开草稿的基准工程，把没保存的那几步接上去。 */
+  applyRecovery(): Promise<StudioState>
+  /** 崩溃恢复：明确丢掉那份草稿。 */
+  discardRecovery(): Promise<StudioState>
   /** 撤销 / 重做：**游标前后移动**，不是打反向补丁（plan §6）。 */
   undo(): Promise<StudioState>
   redo(): Promise<StudioState>
@@ -1192,6 +1201,7 @@ function renderPanel(next: StudioState): void {
   current = next
   // 提示是一次性的（主进程读过就清），所以在这里留住，别让它被下一次状态刷新冲掉
   if (next.notice !== undefined) showNotice(next.notice)
+  renderRecovery(next.recovery)
 
   const rows: Array<[string, string]> = [
     [t('panel.info.name'), next.name],
@@ -1253,6 +1263,32 @@ function renderPanel(next: StudioState): void {
 }
 
 /** 可关闭的横幅。**不自动消失**——它说的是"有一份未保存的草稿"，值得用户看第二眼。 */
+/**
+ * 崩溃恢复的待办条。
+ *
+ * 为什么不是一句提示：**"上次有 3 步没保存"这件事只有配上动作才有意义**。
+ * 以前这里只有一行字，还写着"打开那个工程即可在此基础上继续"——而草稿躺在磁盘上
+ * 根本没人重放。现在两个按钮各对应主进程一个真实动作。
+ *
+ * 基准工程找不到时，"恢复"必须是禁用的：没有基准就没法知道该把这些 op 接到哪儿，
+ * 硬接出来的世界不会是崩溃前的那个。
+ */
+function renderRecovery(recovery: StudioState['recovery']): void {
+  const banner = el('recovery')
+  if (recovery === undefined) {
+    banner.classList.add('hidden')
+    return
+  }
+  banner.classList.remove('hidden')
+  el('recovery-detail').textContent = t('recovery.detail', {
+    ops: String(recovery.ops),
+    project: recovery.basePath ?? '—',
+  })
+  const apply = el('btn-recover') as HTMLButtonElement
+  apply.disabled = !recovery.baseExists
+  apply.title = recovery.baseExists ? '' : t('recovery.noBase')
+}
+
 function showNotice(text: string): void {
   noticeEl.classList.remove('hidden')
   noticeEl.replaceChildren()
@@ -1568,6 +1604,21 @@ function wire(): void {
     void guard(t('menu.new'), async () => {
       renderPanel(await window.architect.newProject())
       await shoot()
+    })
+  })
+
+  el('btn-recover').addEventListener('click', () => {
+    void guard(t('recovery.apply'), async () => {
+      renderPanel(await window.architect.applyRecovery())
+      await shoot()
+      setStatus(t('recovery.applied'))
+    })
+  })
+
+  el('btn-discard-recovery').addEventListener('click', () => {
+    void guard(t('recovery.discard'), async () => {
+      renderPanel(await window.architect.discardRecovery())
+      setStatus(t('recovery.discarded'))
     })
   })
 

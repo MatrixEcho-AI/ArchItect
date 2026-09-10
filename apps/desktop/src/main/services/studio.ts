@@ -30,7 +30,7 @@ import {
 import type { CameraSpec, WorldGeometry } from '@architect/render'
 import type { SessionCamera } from '@architect/tools'
 
-import type { AutosaveService } from './autosave.js'
+import type { AutosaveService, PendingRecovery } from './autosave.js'
 import { ChatController } from './chat.js'
 import type { ChatOptions, ChatView, SettingsView, StudioEvent, TestConnectionInput } from './chat.js'
 import { createMemorySecretStore } from './settings.js'
@@ -70,6 +70,23 @@ export interface StudioState {
    * 自己设的机位还在。
    */
   camera?: SessionCamera
+  /**
+   * 有一份**没保存进工程的草稿**等着处理（崩溃恢复）。
+   *
+   * 它只是"有这么回事 + 能不能恢复"，真正的动作是 `applyRecovery()` /
+   * `discardRecovery()`。界面据此显示两个按钮，而不是只给一句话干看着。
+   */
+  recovery?: RecoverySummary
+}
+
+/** 崩溃恢复的待办：界面上那两个按钮描述的就是它。 */
+export interface RecoverySummary {
+  /** 草稿里有几条 op。 */
+  ops: number
+  /** 基准工程（上次保存的那个文件）。 */
+  basePath?: string
+  /** 基准工程还在不在原处。不在就恢复不了，只能丢掉。 */
+  baseExists: boolean
 }
 
 /** 能导出成什么。GUI 的"导出…"按扩展名推断，也可以让用户显式选。 */
@@ -77,6 +94,13 @@ export type ExportFormat = 'schem' | 'litematic' | 'obj'
 
 /** 交互视口的背景色，与 `renderIsometric` 的默认值一致（拖动时不能闪烁变色）。 */
 const VIEWPORT_BACKGROUND = { r: 26, g: 28, b: 34 }
+
+/** 提示里显示工程名而不是一整条路径：路径太长，面板上会被截掉一半。 */
+function baseNameOf(path: string | undefined): string {
+  if (path === undefined) return '（未知）'
+  const parts = path.split(/[/\\]/)
+  return parts[parts.length - 1] ?? path
+}
 
 export interface ShootRequest {
   view: string
@@ -226,6 +250,8 @@ export class StudioService {
   private shots?: ShotBridge
   /** 启动时从 WAL 恢复出来的提示（没有恢复过就是 undefined）。 */
   private notice: string | undefined
+  /** 等着用户处理的那份草稿。"恢复"或"丢掉"之后就没有了。 */
+  private draft: PendingRecovery | undefined
 
   constructor(options: StudioOptions = {}) {
     this.plain = options.plain ?? false
@@ -308,29 +334,93 @@ export class StudioService {
   }
 
   /**
-   * 启动时尝试从 WAL 恢复。
+   * 启动时检查 WAL 里有没有上一轮没保存的改动。
    *
-   * 只在上次保存过的工程**还在原处**时自动恢复——基准丢了就说不清"恢复出来的
-   * 是什么"，那种情况宁可如实说明也不要硬凑。
+   * **只登记，不动手**：恢复会改变世界、会打开另一个文件，那是要用户点头的事。
+   * 之前这里只写一句提示，而提示里说的"打开那个工程即可在此基础上继续"
+   * **代码里根本做不到**——草稿躺在磁盘上没人重放，用户以为能拿回来，其实拿不回来。
+   * 现在提示与动作都在：`state().recovery` 给界面两个按钮，动作落在下面两个方法上。
+   *
+   * 只在上次保存过的工程**还在原处**时才谈得上恢复——基准丢了就说不清
+   * "恢复出来的是什么"，那种情况宁可如实说明也不要硬凑。
    */
-  recover(): { restored: number; message: string } | undefined {
+  recover(): RecoverySummary | undefined {
     if (this.autosave === undefined) return undefined
     const pending = this.autosave.pending()
     if (pending === undefined) return undefined
+    this.draft = pending
+
+    const basePath = pending.header.projectPath
     if (!pending.baseExists) {
-      const message =
-        `上次会话有 ${pending.ops.length} 步未保存的改动，但基准工程已经不在原处` +
-        `${pending.header.projectPath !== undefined ? `（${pending.header.projectPath}）` : ''}，无法安全恢复。`
-      this.notice = message
-      return { restored: 0, message }
+      this.notice =
+        `上次会话有 ${pending.ops.length} 步没保存进工程，但基准工程已经不在原处` +
+        `${basePath !== undefined ? `（${basePath}）` : ''}，恢复不了。` +
+        `可以丢掉这份草稿；想留住它就先别新建工程。`
+    } else {
+      this.notice =
+        `上次会话有 ${pending.ops.length} 步没保存进工程（基准：${baseNameOf(basePath)}）。` +
+        `点「恢复草稿」会打开那个工程，把这几步接上去。`
     }
-    const path = pending.header.projectPath!
-    return {
-      restored: pending.ops.length,
-      message:
-        `检测到上次会话有 ${pending.ops.length} 步未保存的改动（基准：${path.split('/').pop()}）。` +
-        `打开那个工程即可在此基础上继续——也可以新建工程把这份草稿丢掉。`,
+    return this.recoverySummary()
+  }
+
+  /** 界面要显示的恢复待办（没有待办就是 `undefined`）。 */
+  private recoverySummary(): RecoverySummary | undefined {
+    const draft = this.draft
+    if (draft === undefined) return undefined
+    const summary: RecoverySummary = { ops: draft.ops.length, baseExists: draft.baseExists }
+    if (draft.header.projectPath !== undefined) summary.basePath = draft.header.projectPath
+    return summary
+  }
+
+  /**
+   * 真的把草稿恢复出来。
+   *
+   * 三步，顺序不能换：
+   *
+   * 1. **打开基准工程**——不是"当前打开的那个"，草稿属于它自己的那个文件；
+   * 2. 把游标推到**日志末端**：`.mcai` 可能留着一段重做分支（保存时游标在中间），
+   *    而草稿里的 op 是接在日志末端之后编号的。崩溃之后"当时游标在哪"已经无从
+   *    判断，这里**以内容为准**：恢复到日志末端（见 D-69）；
+   * 3. 逐条重放草稿里的 op，再把游标设到**最后一条 op 自己的 `rev`**——
+   *    用编号而不是算术推导，编号是唯一的真相（D-57）。
+   */
+  async applyRecovery(): Promise<StudioState> {
+    const draft = this.draft
+    if (draft === undefined) return this.state()
+    const basePath = draft.header.projectPath
+    if (!draft.baseExists || basePath === undefined) {
+      this.notice =
+        '基准工程不在原处，没法安全恢复（硬凑出来的世界不会是崩溃前的那个）。可以丢掉这份草稿。'
+      return this.state()
     }
+
+    await this.open(basePath)
+    const store = this.session.store
+    const log = this.session.log
+    store.setRevision(log.length)
+    for (const op of draft.ops) {
+      store.applyPatch(op.patch)
+      log.append(op)
+    }
+    const last = draft.ops[draft.ops.length - 1]
+    if (last !== undefined) store.setRevision(last.rev)
+
+    this.draft = undefined
+    // 草稿已经进世界了：基准推到最新，免得同一个文件被恢复第二次
+    this.autosave?.clear(log.length)
+    this.notice = `已恢复 ${draft.ops.length} 步没保存的改动（基准：${baseNameOf(basePath)}）。`
+    return this.state()
+  }
+
+  /** 用户说"这份草稿不要了"。 */
+  discardRecovery(): StudioState {
+    if (this.draft === undefined) return this.state()
+    const dropped = this.draft.ops.length
+    this.draft = undefined
+    this.autosave?.discard()
+    this.notice = `已丢掉上次会话的 ${dropped} 步草稿。`
+    return this.state()
   }
 
   /** 渲染进程要显示的提示（恢复提醒之类），读过一次就清掉。 */
@@ -477,6 +567,8 @@ export class StudioService {
     if (this.projectPath !== undefined) snapshot.projectPath = this.projectPath
     if (stats.bounds !== undefined) snapshot.bounds = opTuple(stats.bounds)
     if (this.session.ctx.camera !== undefined) snapshot.camera = this.session.ctx.camera
+    const recovery = this.recoverySummary()
+    if (recovery !== undefined) snapshot.recovery = recovery
     const notice = this.takeNotice()
     if (notice !== undefined) snapshot.notice = notice
     return snapshot

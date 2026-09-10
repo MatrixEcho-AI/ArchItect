@@ -131,6 +131,13 @@
           <button id="btn-chat-clear" class="mini" data-i18n="chat.clear"></button>
         </div>
         <div id="notice" class="notice hidden"></div>
+        <!-- 崩溃恢复：草稿等着处理，两个按钮各对应主进程一个真实动作 -->
+        <div id="recovery" class="notice recovery hidden">
+          <b data-i18n="recovery.title"></b>
+          <span id="recovery-detail"></span>
+          <button type="button" id="btn-recover" class="mini" data-i18n="recovery.apply"></button>
+          <button type="button" id="btn-discard-recovery" class="mini" data-i18n="recovery.discard"></button>
+        </div>
         <!-- 停在历史版本上时挡住发送：模型的第一笔改动会从历史分叉，把后面几步截断丢掉 -->
         <div id="behind-tip" class="blocking hidden" data-i18n="chat.behindTip"></div>
         <div id="blocking" class="blocking hidden"></div>

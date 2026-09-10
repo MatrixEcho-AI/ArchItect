@@ -553,6 +553,26 @@ dd {
   font-weight: 400;
 }
 
+/* 崩溃恢复待办：它不是一句话，是两个能点的动作 */
+.notice.recovery {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.notice.recovery b {
+  flex: 0 0 100%;
+  color: var(--text);
+}
+
+.notice.recovery #recovery-detail {
+  flex: 1;
+}
+
+.notice.recovery button[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .blocking ul {
   margin: 4px 0 0;
   padding-left: 18px;

@@ -29,6 +29,10 @@ export interface StudioBridge {
   save(path?: string): Promise<string | undefined>
   seek(revision: number): Promise<unknown>
   seekLatest(): Promise<unknown>
+  /** 崩溃恢复：打开草稿的基准工程，把没保存的那几步接上去。 */
+  applyRecovery(): Promise<unknown>
+  /** 崩溃恢复：明确丢掉那份草稿（不恢复，也不再提示）。 */
+  discardRecovery(): Promise<unknown>
   /** 撤销：游标退一格 + 重放。**不写日志**，所以时间线与 `.mcai` 往返保持一致。 */
   undo(): Promise<unknown>
   /** 重做：游标进一格。只在撤销之后有意义。 */
@@ -173,6 +177,8 @@ const bridge: StudioBridge = {
   save: (path) => call('studio:save', path),
   seek: (revision) => call('studio:seek', revision),
   seekLatest: () => call('studio:seekLatest'),
+  applyRecovery: () => call('studio:applyRecovery'),
+  discardRecovery: () => call('studio:discardRecovery'),
   undo: () => call('studio:undo'),
   redo: () => call('studio:redo'),
   shoot: (request) => call('studio:shoot', request),

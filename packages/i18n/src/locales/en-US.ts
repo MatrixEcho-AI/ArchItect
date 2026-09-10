@@ -206,6 +206,15 @@ export const enUS = {
     importSkipped: '{{count}} block type(s) could not be resolved; {{cells}} cell(s) were left empty (the rest imported fine)',
     importRenamed: 'Migrated {{count}} block type(s) via the rename table',
   },
+  recovery: {
+    title: 'Unsaved changes from last session',
+    detail: '{{ops}} step(s) never made it into the project (base: {{project}}).',
+    apply: 'Recover draft',
+    discard: 'Discard',
+    noBase: 'The base project is gone, so this draft cannot be recovered — it can only be discarded.',
+    applied: 'Draft merged back into the world',
+    discarded: 'Draft discarded',
+  },
   cli: {
     usage: {
       title: 'architect — Minecraft architecture design harness',

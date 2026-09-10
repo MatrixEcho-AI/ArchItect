@@ -199,6 +199,15 @@ export const zhCN = {
     importSkipped: '有 {{count}} 种方块认不出来，共 {{cells}} 格没有写入（其余正常导入）',
     importRenamed: '按改名表迁移了 {{count}} 种方块',
   },
+  recovery: {
+    title: '上次会话有没保存的改动',
+    detail: '{{ops}} 步改动还没写进工程（基准：{{project}}）。',
+    apply: '恢复草稿',
+    discard: '丢掉',
+    noBase: '基准工程不在原处，恢复不了——只能丢掉。',
+    applied: '草稿已接回世界',
+    discarded: '草稿已丢掉',
+  },
   cli: {
     usage: {
       title: 'architect — Minecraft 建筑设计 harness',

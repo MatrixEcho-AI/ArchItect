@@ -171,7 +171,7 @@ describe('StudioService 的接线', () => {
     expect(studio.recover()).toBeUndefined()
   })
 
-  it('**基准不在原处时给出可读的说明，而不是硬凑一份恢复**', () => {
+  it('**基准不在原处时给出可读的说明，而不是硬凑一份恢复**', async () => {
     const studio = makeStudio(2)
     const autosave = make()
     studio.attachAutosave(autosave)
@@ -183,8 +183,16 @@ describe('StudioService 的接线', () => {
     studio.autosaveNow()
 
     const outcome = studio.recover()!
-    expect(outcome.restored).toBe(0)
-    expect(outcome.message).toContain('基准工程已经不在原处')
+    // 基准不在原处：只登记待办、**拒绝恢复**，并且如实说清为什么
+    // （基准是 rev 0——测试里那个"文件"根本不存在——所以草稿是全部 3 步）
+    expect(outcome.ops).toBe(3)
+    expect(outcome.baseExists).toBe(false)
+    expect(studio.state().notice).toContain('基准工程已经不在原处')
+    // 硬着头皮"恢复"只会得到一个不是崩溃前的世界，所以这里必须什么都不做
+    const before = studio.agentSession.store.contentHash()
+    const state = await studio.applyRecovery()
+    expect(state.recovery).toBeDefined()
+    expect(studio.agentSession.store.contentHash()).toBe(before)
   })
 
   it('保存之后 WAL 里不再留着已保存的那一段（不会重复恢复）', async () => {
@@ -193,6 +201,146 @@ describe('StudioService 的接线', () => {
     studio.attachAutosave(autosave)
     studio.autosaveNow()
     await studio.save(join(dir, 'p.mcai'))
+    expect(autosave.pending()).toBeUndefined()
+  })
+})
+
+describe('崩溃恢复：主进程真的把草稿接回世界', () => {
+  /** 一个改一格并把这一步记进日志的小工具（人手的写法与模型一样）。 */
+  function place(studio: StudioService, x: number): void {
+    const store = studio.agentSession.store
+    studio.agentSession.applyEdit('place_block', { pos: [x, 0, 0] }, () =>
+      store.write((emit) => emit(x, 0, 0), store.palette.indexOf('minecraft:stone'), { confirm: true }),
+    )
+  }
+
+  it('**保存 → 再改 → 崩溃 → 恢复出来的世界与崩溃前逐格一致**', async () => {
+    const savePath = join(dir, 'crash.mcai')
+
+    // —— 崩溃之前那个进程 ——
+    const before = makeStudio(3)
+    const wal = make()
+    before.attachAutosave(wal)
+    await before.save(savePath)
+    place(before, 20)
+    place(before, 21)
+    expect(before.autosaveNow()).toBe(2)
+    const expectedHash = before.agentSession.store.contentHash()
+    expect(before.agentSession.store.stats().blocks).toBe(5)
+
+    // —— 崩溃之后：换一个全新的工作台，只读磁盘上剩下的东西 ——
+    const after = new StudioService({ plain: true })
+    const reopened = make()
+    after.attachAutosave(reopened)
+
+    const pending = after.recover()!
+    expect(pending).toMatchObject({ ops: 2, baseExists: true, basePath: savePath })
+    // 只说"能恢复"不算数：此刻世界还是空的，草稿一步都没进去
+    expect(after.agentSession.store.stats().blocks).toBe(0)
+
+    const state = await after.applyRecovery()
+    expect(state.recovery).toBeUndefined()
+    expect(state.projectPath).toBe(savePath)
+    expect(after.agentSession.store.contentHash()).toBe(expectedHash)
+    expect(after.agentSession.store.stats().blocks).toBe(5)
+    // 游标用最后一条 op 自己的编号，不用算术推
+    expect(after.agentSession.store.revision).toBe(5)
+    // 草稿已经进世界了：同一卷 WAL 不该被恢复第二次
+    expect(reopened.pending()).toBeUndefined()
+  })
+
+  it('丢掉草稿：世界不变、WAL 清空、待办消失', () => {
+    const studio = makeStudio(2)
+    const autosave = make()
+    studio.attachAutosave(autosave)
+    autosave.onSaved(0, join(dir, 'somewhere.mcai'), 2)
+    const store = studio.agentSession.store
+    const result = store.write((emit) => emit(9, 0, 0), store.palette.indexOf('minecraft:stone'), { confirm: true })
+    studio.agentSession.log.record(result, { tool: 'place_block', args: {}, source: 'llm', actor: 'assistant' })
+    studio.autosaveNow()
+    const before = store.contentHash()
+
+    expect(studio.recover()).toBeDefined()
+    const state = studio.discardRecovery()
+    expect(state.recovery).toBeUndefined()
+    expect(studio.recover()).toBeUndefined()
+    expect(autosave.pending()).toBeUndefined()
+    expect(store.contentHash()).toBe(before)
+  })
+
+  it('**重启的进程接管盘上那卷草稿，不会把同几步再记一遍**', () => {
+    const studio = makeStudio(2)
+    const first = make()
+    first.journal(studio.agentSession.log)
+    expect(first.pending()!.ops.map((op) => op.rev)).toEqual([1, 2])
+
+    // 换一个进程（新的服务实例）接着写：它必须认出这卷 WAL 里已经有 rev 1..2
+    const second = make()
+    const result = studio.agentSession.store.write(
+      (emit) => emit(9, 0, 0),
+      studio.agentSession.store.palette.indexOf('minecraft:stone'),
+      { confirm: true },
+    )
+    studio.agentSession.log.record(result, { tool: 'place_block', args: {}, source: 'llm', actor: 'assistant' })
+    expect(second.journal(studio.agentSession.log)).toBe(1)
+    expect(second.pending()!.ops.map((op) => op.rev)).toEqual([1, 2, 3])
+  })
+
+  it('**撤销到保存点之后继续改：草稿整卷重写，旧的几条不会留在里面**', () => {
+    const studio = makeStudio(3)
+    const autosave = make()
+    studio.attachAutosave(autosave)
+    autosave.journal(studio.agentSession.log) // rev 1..3（还没保存过，全部是草稿）
+    const store = studio.agentSession.store
+
+    // 退回 rev 2 再改一格：日志被截断，rev 3 换成另一条内容
+    store.setRevision(2)
+    const result = store.write((emit) => emit(9, 0, 0), store.palette.indexOf('minecraft:diamond_block'), {
+      confirm: true,
+    })
+    studio.agentSession.log.record(result, {
+      tool: 'place_block',
+      args: {},
+      source: 'user',
+      actor: 'user',
+      worldRevision: store.revision,
+    })
+    expect(studio.agentSession.log.length).toBe(3)
+
+    // 整卷重写：3 条一起重写一遍（WAL 只能追加，改不了历史），
+    // 而 rev 3 是**新的**那条，不是被截断掉的那条
+    expect(autosave.journal(studio.agentSession.log)).toBe(3)
+    const pending = autosave.pending()!
+    expect(pending.ops.map((op) => op.rev)).toEqual([1, 2, 3])
+    const last = pending.ops[2]!
+    const logged = studio.agentSession.log.byRevision(3)!
+    expect(last.patch.toBuffer().equals(logged.patch.toBuffer())).toBe(true)
+  })
+
+  it('**退回保存点之前再改：草稿里不放它**（那是要保存才能固定住的事）', () => {
+    const studio = makeStudio(3)
+    const autosave = make()
+    studio.attachAutosave(autosave)
+    const savePath = join(dir, 'saved.mcai')
+    autosave.journal(studio.agentSession.log)
+    autosave.onSaved(3, savePath, 3) // 基准 = rev 3
+    expect(autosave.pending()).toBeUndefined()
+
+    const store = studio.agentSession.store
+    store.setRevision(1)
+    const result = store.write((emit) => emit(9, 0, 0), store.palette.indexOf('minecraft:stone'), { confirm: true })
+    studio.agentSession.log.record(result, {
+      tool: 'place_block',
+      args: {},
+      source: 'user',
+      actor: 'user',
+      worldRevision: store.revision,
+    })
+    expect(studio.agentSession.log.length).toBe(2)
+
+    // 这条 op 的编号（2）落在基准（3）里面，WAL 里表达不了——
+    // 硬记下来只会在恢复时与工程文件里的 op 撞号。如实什么都不记。
+    expect(autosave.journal(studio.agentSession.log)).toBe(0)
     expect(autosave.pending()).toBeUndefined()
   })
 })

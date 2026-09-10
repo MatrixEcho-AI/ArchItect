@@ -141,3 +141,30 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# ---------------------------------------------------------------------------
+# ArchItect — 密钥与本地状态（见 plan.md §13.3）
+# 红线 1：密钥不进版本库（.env 系列见上方 dotenv 段落）
+# 红线 2：密钥不进 .mcai（.mcai 是要分享给别人的工程文件）
+# ---------------------------------------------------------------------------
+*.key
+*.pem
+secrets.json
+secrets.bin
+credentials.json
+
+# 会话期解压工作目录（含 WAL 与中间态，不是最终产物）
+*.mcai.d/
+.architect/
+
+# Electron userData（safeStorage 密文落在这里，永远不该进仓库）
+**/userData/
+
+# 本地导出产物（示例/测试用的 fixture 例外，见下）
+/exports/
+*.schem
+*.litematic
+*.mcstructure
+!fixtures/**/*.schem
+!fixtures/**/*.litematic
+!fixtures/**/*.mcstructure

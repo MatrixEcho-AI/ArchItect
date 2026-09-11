@@ -78,12 +78,24 @@ export class ReplaySession {
     return this.seek(this.store.revision + 1)
   }
 
-  /** 跳到目标版本。 */
+  /**
+   * 跳到目标版本。
+   *
+   * **往后退逐条反向应用**（`ChangeSet.inverted()`），不是"清空再从头放一遍"。
+   * 两者在"rev 0 就是空世界"时结果一样，但只要有**基准内容，rev 0 就不是空的**：
+   *
+   * - 导入的工程（`.schem` / `.litematic`）：rev 0 = 导入进来的内容；
+   * - 从导入的工程存出来的 `.mcai`：快照里有内容，而游标可以从 0 开始。
+   *
+   * 用 `clear()` 的话，用户"撤销到最开始"会把导进来的东西**整栋删掉**——
+   * 那是数据丢失，不是撤销。反向应用只碰被改动过的格子，顺带还更快
+   * （不必把整个 op 流从头放一遍）。
+   */
   seek(revision: number): number {
     const target = clampRevision(revision, this.log.length)
-    if (target < this.store.revision) {
-      // 往后退只能从头重建：op 是"结果"而不是"逆操作"，没有便宜的退路
-      this.store.clear()
+    while (this.store.revision > target) {
+      this.store.applyPatch(this.log.at(this.store.revision - 1)!.patch.inverted())
+      this.store.setRevision(this.store.revision - 1)
     }
     while (this.store.revision < target) {
       this.store.applyPatch(this.log.at(this.store.revision)!.patch)

@@ -445,3 +445,48 @@ describe('EditLog：在历史版本上继续编辑（分叉）', () => {
     )
   })
 })
+
+describe('往后退不能假设"rev 0 是空世界"（导入的工程 rev 0 就是内容）', () => {
+  it('**基准内容在 rev 0：撤销到 0 之后它还在**', () => {
+    const store = new WorldStore({ minecraftVersion: '1.21.4', volume })
+    const stone = store.palette.indexOf('minecraft:stone')
+    // 模拟"导入"：直接写进世界，**不经过 op 流**（这就是基准内容）
+    const base = store.write((emit) => emit(2, 2, 2), stone, { confirm: true })
+    expect(base.ok).toBe(true)
+    store.setRevision(0)
+    const log = new EditLog()
+    const session = new ReplaySession(store, log)
+    const before = store.contentHash()
+    expect(store.stats().blocks).toBe(1)
+
+    // 在基准之上改一笔，然后撤销回 0
+    const write = store.write((emit) => emit(3, 3, 3), stone, { confirm: true })
+    log.record(write, { tool: 'place_block', args: {}, worldRevision: store.revision })
+    expect(store.stats().blocks).toBe(2)
+
+    session.undo()
+    expect(store.revision).toBe(0)
+    // 这一条以前会变成 0 格——`seek` 往后退时 `clear()` 把导入的内容一起抹了
+    expect(store.stats().blocks).toBe(1)
+    expect(store.contentHash()).toBe(before)
+  })
+
+  it('往回退多步也逐条反向、不重建（内容与"从头重放"一致）', () => {
+    const store = new WorldStore({ minecraftVersion: '1.21.4', volume })
+    const log = new EditLog()
+    const session = new ReplaySession(store, log)
+    const stone = store.palette.indexOf('minecraft:stone')
+    const dirt = store.palette.indexOf('minecraft:dirt')
+    for (let i = 0; i < 4; i++) {
+      const write = store.write((emit) => emit(i, 0, 0), i % 2 === 0 ? stone : dirt, { confirm: true })
+      log.record(write, { tool: 'place_block', args: { i }, worldRevision: store.revision })
+    }
+    const atFour = store.contentHash()
+    session.seek(1)
+    const atOne = store.contentHash()
+    session.seek(4)
+    expect(store.contentHash()).toBe(atFour)
+    session.seek(1)
+    expect(store.contentHash()).toBe(atOne)
+  })
+})

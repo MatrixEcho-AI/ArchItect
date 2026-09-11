@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -588,5 +588,40 @@ describe('StudioService：人手接管（点哪儿改哪儿）', () => {
     expect(matches[0]).toBe('stone')
     expect(matches).toContain('stone_bricks')
     expect(studio.blocks('')).toEqual([])
+  })
+})
+
+describe('StudioService：导入之后能接着改（M7 验收的另一半）', () => {
+  it('**导入的工程是"基准状态"，接着编辑从 rev 1 开始，而且能存回去**', async () => {
+    // 先造一份 .schem：把示例小屋导出去，再导进一个新工作台
+    const source = makeStudio()
+    source.demo()
+    const schem = join(workspace, 'import-then-edit.schem')
+    const exported = source.exportModel('schem', schem)
+    await writeFile(schem, exported.files[0]!.bytes)
+
+    const target = makeStudio()
+    const imported = await target.importModel(schem)
+    expect(imported.state.blocks).toBeGreaterThan(0)
+    // 导入的内容**不在 op 流里**：游标是 0，日志也是空的（rev 0 = 打开时看到的样子）
+    expect(imported.state.revision).toBe(0)
+    expect(imported.state.totalOps).toBe(0)
+
+    // 接着改一格：它必须成为 rev 1（而不是接在"虚构的历史"后面）
+    const blocksBefore = imported.state.blocks
+    const after = target.editBlock({ pos: [1, 1, 1], block: 'minecraft:gold_block', mode: 'place' })
+    expect(after.revision).toBe(1)
+    expect(after.totalOps).toBe(1)
+    expect(after.blocks).toBe(blocksBefore + 1)
+    // 撤销回到导入时那一版（基准不在 op 流里，所以退回 0 就是导入的样子）
+    expect(target.undo().blocks).toBe(blocksBefore)
+
+    // 存回去：再打开时内容一致（导入 → 编辑 → 保存 → 打开 这一圈是闭环的）
+    const saved = join(workspace, 'import-then-edit.mcai')
+    await target.save(saved)
+    const reopened = makeStudio()
+    const state = await reopened.open(saved)
+    expect(state.blocks).toBe(blocksBefore)
+    expect(state.revision).toBe(0)
   })
 })

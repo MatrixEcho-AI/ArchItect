@@ -148,3 +148,59 @@ export async function simulateCameraPanel(shell: ViewportShell | undefined): Pro
         : `[camera-test] FAILED 期望 ${want}，实际 ${actual}`
   }
 }
+
+/**
+ * 合成一次**新建**（`--new-test`）：先记下当前场景与对话，再新建，然后把前后对比
+ * 写进可见的提示条。
+ *
+ * 存在的理由：`--capture` / `--gui-smoke` 只能看到"界面上有没有更新"，而"新建之后
+ * 画布清空了没有"是**渲染器内部**的事（GPU 里的 mesh），DOM 上读不到。这个开关把它
+ * 变成一个能看见、能断言的数字。
+ *
+ * 用法：`--demo --new-test --capture <png>`。
+ */
+export async function simulateNewProject(): Promise<void> {
+  const before = window.__architectDebugScene?.() ?? { meshes: 0, triangles: 0 }
+  const beforeChat = (await window.architect.chat()).messages.length
+  const beforeBlocks = (await window.architect.state()).blocks
+
+  await window.architect.newProject()
+  /**
+   * **轮询等它稳定，别睡一个固定时长。**
+   *
+   * 新建之后的链条有好几段是异步的：主进程推 state → React 提交 → 外壳发现版本变了
+   * → 去要一份新几何（IPC）→ 重建 mesh → 画一帧。400ms 在空闲机器上够，但
+   * "够不够"取决于当时忙不忙——实测就撞上过：诊断在几何回来之前读到了旧三角形数，
+   * 于是报了一个**假的 FAILED**，而它真正的问题是等待策略。
+   */
+  await waitUntil(() => (window.__architectDebugScene?.().triangles ?? 0) === 0, 3000)
+
+  const after = window.__architectDebugScene?.() ?? { meshes: 0, triangles: 0 }
+  const afterChat = (await window.architect.chat()).messages.length
+  const afterBlocks = (await window.architect.state()).blocks
+  // 提醒：判据读的是**渲染进程真正画出来的东西**（`__architectDebugScene` 报的是
+  // GPU 里的 mesh），不是"主进程说世界空了"。前者才是用户看到的那一份。
+  const banner = document.getElementById('notice')
+  if (banner !== null) {
+    banner.classList.remove('hidden')
+    const ok = after.triangles === 0 && afterChat === 0 && afterBlocks === 0
+    banner.textContent =
+      `[new-test] ${ok ? 'OK' : 'FAILED'} 画布 ${before.triangles}→${after.triangles} 三角形 · ` +
+      `对话 ${beforeChat}→${afterChat} 条 · 方块 ${beforeBlocks}→${afterBlocks}`
+  }
+}
+
+/**
+ * 轮询等到条件成立（或超时）。
+ *
+ * 诊断脚本里**不要用固定 sleep**：要等的东西大多是"IPC + 渲染"这类时长不定的链条，
+ * 固定的数要么白等要么不够，而"不够"会伪装成一个功能 bug（见 `simulateNewProject`）。
+ */
+async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+  }
+  return predicate()
+}

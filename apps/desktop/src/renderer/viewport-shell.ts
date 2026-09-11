@@ -192,6 +192,7 @@ export class ViewportShell {
 
   /** 主进程推来一份新状态。换工程时把相机丢掉、回到自动取景。 */
   setState(state: StudioState): void {
+    const previous = this.current
     this.current = state
     const key = `${state.name}\u0000${state.projectPath ?? ''}`
     if (key !== this.projectKey) {
@@ -201,6 +202,28 @@ export class ViewportShell {
       delete this.camera.eye
       this.typedEye = undefined
       this.options.onCameraChanged()
+    }
+    /**
+     * **换了世界就把几何重新同步一遍再画。**
+     *
+     * 这里是"新建之后画布没清空"的修复，而这个 bug 的关键在于**调用的是哪个方法**：
+     * `requestFrame()` 只把**当前已有的 mesh** 重画一遍，它从不问主进程要新几何；
+     * 拉几何只发生在 `shoot()` 里（`syncScene()` + 排帧）。
+     *
+     * 而"世界换了"这条消息是通过 React 的 effect 走到这里的（界面拿到新状态 →
+     * `shell.setState`），这条路上**没有别人会去拉几何**：`App.afterState` 里那次
+     * `shoot()` 跑在 React 提交之前，读到的还是上一份状态，于是因为"版本没变"早退。
+     * 两边合起来的表现就是：状态、左栏、时间线、对话全对了，**画布上老房子一直挂着**
+     * （实测诊断数字 `1394→1394 三角形`）。
+     *
+     * 把"状态换了"本身当成需要重拉几何的事件，就不再依赖调用顺序。
+     * 同一版本内的推送（比如只多了条对话）只排一帧，不白拉一次几 MB 的几何。
+     */
+    if (previous === undefined || previous.revision !== state.revision) {
+      this.sceneRevision = -1
+      void this.shoot()
+    } else {
+      this.requestFrame()
     }
   }
 
@@ -637,6 +660,11 @@ export class ViewportShell {
 
   resizeToCurrent(): { width: number; height: number } {
     return this.viewSize
+  }
+
+  /** 诊断探针（见 `SceneViewport.debugScene` 的注释）。 */
+  debugScene(): { meshes: number; triangles: number } {
+    return this.viewport.debugScene?.() ?? { meshes: 0, triangles: 0 }
   }
 
   /**

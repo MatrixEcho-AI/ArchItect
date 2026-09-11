@@ -342,5 +342,12 @@ declare global {
      * 软件光栅器——"这台机器有没有 WebGL"只有渲染进程知道。
      */
     __architectCaptureShot?: (request: CaptureShotRequest) => Promise<CaptureAnswer>
+    /**
+     * **只给诊断用**：画布上还剩多少三角形。
+     *
+     * `SceneViewport` 的真实状态（GPU 里的 mesh）在 DOM 上完全不可见，所以
+     * "新建之后画布清空了没有"只能靠这个数字断言。见 `viewport.ts` 的 `debugScene`。
+     */
+    __architectDebugScene?: () => { meshes: number; triangles: number }
   }
 }

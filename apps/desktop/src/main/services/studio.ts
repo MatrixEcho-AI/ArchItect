@@ -593,6 +593,29 @@ export class StudioService {
     })
     this.projectPath = undefined
     this.projectName = t('desktop.untitledProject')
+    /**
+     * **新工程 = 新对话。**
+     *
+     * 少了这一句的症状很具体：新建之后左栏、时间线都归零了，右边却还挂着上一座建筑
+     * 的 22 条消息，而且**下一轮模型还记得它们**（`clear()` 会一并清掉
+     * `modelHistory`，所以这不是"只清显示"）。
+     *
+     * `clear()` 自己会 emit 一个 `chat` 事件，界面跟着更新——不需要在这里多推一次。
+     */
+    this.chat.clear()
+    /**
+     * **必须自己推一次 `state`。**
+     *
+     * `onEvent(listener)` 把 `this.emit` 与 `chat.onEvent` 接在**同一个** listener 上，
+     * 所以 `chat.clear()` 的 `chat` 事件能到界面——这也正是"对话清了、左栏没清"
+     * 那个现象的来源：`clear()` 推的是 `{type:'chat'}`，而**没有任何人推 `{type:'state'}`**。
+     *
+     * 返回值只对调用方（IPC handler）有用，推给界面是**另一件事**：
+     * 按下"新建"的如果是界面自己，它当然可以拿返回值去 setState；
+     * 但只要还有第二条调用路径（诊断脚本、菜单项、快捷键），就会漏。
+     * 让状态变化本身广播出去，比要求每个调用点都记得刷新可靠。
+     */
+    this.emit({ type: 'state', state: this.state() })
     return this.state()
   }
 

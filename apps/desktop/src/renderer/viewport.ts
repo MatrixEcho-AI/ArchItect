@@ -123,6 +123,15 @@ export interface SceneViewport {
   /** `draft`：拖动中。GPU 忽略它，软件实现会降到半分辨率并跳过叠加层。 */
   render(view: ViewportCamera, options?: { draft?: boolean }): void
   capture?(request: CaptureRequest): string
+  /**
+   * **只给诊断用**：当前场景里画着多少三角形。
+   *
+   * 为什么值得有一个探针：`SceneViewport` 的真实状态（GPU 里的 mesh）在 DOM 上
+   * **完全不可见**——"新建之后画布没清空"这类 bug，从截图上看不出来（视角变了、
+   * 房子变小了，都可能是正常的），而读 DOM 也读不到。把三角形数报出来，
+   * "清干净了没有"就变成一个能断言的数字。
+   */
+  debugScene?(): { meshes: number; triangles: number }
 }
 
 /** 让主进程画一帧。由 `main.ts` 接到 `studio:viewport` 上。 */
@@ -214,6 +223,18 @@ export class Viewport implements SceneViewport {
     this.overlayCanvas.height = h
     // `Canvas` 没有 resize（它是一个定尺寸的像素缓冲），尺寸变了就换一个
     if (this.overlay.width !== w || this.overlay.height !== h) this.overlay = new OverlayCanvas(w, h)
+  }
+
+  /** 诊断探针：场景里还剩几个 mesh、多少三角形。 */
+  debugScene(): { meshes: number; triangles: number } {
+    let meshes = 0
+    let triangles = 0
+    for (const mesh of [this.opaque, this.translucent]) {
+      if (mesh === undefined) continue
+      meshes += 1
+      triangles += (mesh.geometry.getIndex()?.count ?? 0) / 3
+    }
+    return { meshes, triangles }
   }
 
   /**
@@ -590,6 +611,14 @@ export class Viewport implements SceneViewport {
  * 3. **过期帧要丢**。尺寸在飞行途中变了的话，落笔的坐标就错了。
  */
 export class SoftwareViewport implements SceneViewport {
+  /**
+   * 软件视口**不持有场景**——几何一直在主进程中，它每帧去要一张画好的图。
+   * 所以这里如实报 0：它的"清空"由主进程的光栅器负责（那边按空世界画）。
+   */
+  debugScene(): { meshes: number; triangles: number } {
+    return { meshes: 0, triangles: 0 }
+  }
+
   private width = 1
   private height = 1
   private revision = -1

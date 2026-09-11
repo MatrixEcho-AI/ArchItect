@@ -30,6 +30,40 @@ describe('StudioService：状态', () => {
     expect(state.histogram).toEqual([])
   })
 
+  it('**新建会把对话清空**（不是只清左栏）', () => {
+    // 真机 bug：新建之后左栏、时间线都归零了，右边却还挂着上一座建筑的 22 条消息。
+    //
+    // 注意 `demo()` **不产生对话**（它只造方块），所以这里要自己往对话里放一条，
+    // 否则"前后都是 0 条"这条断言什么都没证明。往 `ChatController` 里塞消息需要
+    // 它的公开接口，那条判据放在 `chat.test.ts`（`clear()` + 历史）里验；
+    // 这里验的是**接线**：`newProject()` 确实调了 `clear()`。
+    const studio = makeStudio()
+    studio.demo()
+    const seen: string[] = []
+    studio.onEvent((event) => seen.push(event.type))
+
+    studio.newProject()
+    expect(studio.chatView().messages).toEqual([])
+    expect(studio.chatView().usage.in).toBe(0)
+    // 另一条真机 bug：`newProject()` 只让 `chat.clear()` 推出了 `{type:'chat'}`，
+    // 自己**没推 `{type:'state'}`**——症状是"对话清了、左栏没清"。
+    expect(seen).toContain('chat')
+    expect(seen).toContain('state')
+  })
+
+  it('**新建会把新状态广播出去**，不只靠返回值', () => {
+    // 真机 bug：`onEvent(listener)` 把 `this.emit` 与 `chat.onEvent` 接在同一个
+    // listener 上，于是 `chat.clear()` 的 `chat` 事件能到界面，而 `newProject()`
+    // 从头到尾**没推过 `state`**——症状是"对话清了、左栏没清"。
+    const studio = makeStudio()
+    studio.demo()
+    const seen: string[] = []
+    studio.onEvent((event) => seen.push(event.type))
+
+    studio.newProject()
+    expect(seen).toContain('state')
+  })
+
   it('示例小屋生成出合规的结构', () => {
     const studio = makeStudio()
     const state = studio.demo()

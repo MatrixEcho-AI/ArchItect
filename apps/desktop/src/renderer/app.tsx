@@ -9,7 +9,12 @@ import { Toolbar } from './components/toolbar.js'
 import { Viewport } from './components/viewport.js'
 import { ViewportShell } from './viewport-shell.js'
 import { costText, shortBlock } from './cost.js'
-import { simulateCameraPanel, simulateDrag, simulatePaint } from './simulate.js'
+import {
+  simulateCameraPanel,
+  simulateDrag,
+  simulateNewProject,
+  simulatePaint,
+} from './simulate.js'
 import { debugFlags, useStudio } from './use-studio.js'
 import type { CameraFields } from './components/left-panel.js'
 import type { SettingsView, StudioState } from './types.js'
@@ -166,6 +171,15 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
        */
       window.__architectCaptureShot = (request) => shell.capture(request)
 
+      /**
+       * **只给诊断用**的场景探针：画布上还剩多少三角形。
+       *
+       * 与 `__architectCaptureShot` 同样的理由挂在 `window` 上：方向是主 → 渲染，
+       * 而 `ipcRenderer.invoke` 只能渲染 → 主。`SceneViewport` 的真实状态在 DOM 上
+       * 看不见，"新建之后画布清空了没有"只能靠这个数字断言。
+       */
+      window.__architectDebugScene = () => shell.debugScene()
+
       // 预设角度必须在第一帧之前拿到，否则首帧用的是写死的默认角度
       await shell.loadPresets()
       await shell.shoot()
@@ -187,6 +201,7 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
         await afterState(await window.architect.undo())
       }
       if (flags.has('paint-test')) await simulatePaint()
+      if (flags.has('new-test')) await simulateNewProject()
       if (flags.has('settings')) setSettingsOpen(true)
 
       const canvas = document.getElementById('canvas') as HTMLCanvasElement | null
@@ -281,10 +296,19 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
     }
   }
 
-  /** 世界被改过之后：更新状态、重画一帧。 */
+  /**
+   * 世界被改过之后：**只把新状态交给 React**。
+   *
+   * 刻意不在这里再调 `shoot()`。状态的去向只有一条：
+   * React 更新 → `[shell, studio.state]` 那个 effect → `shell.setState()` →
+   * 外壳自己判断版本变没变、要不要重拉几何（见它的注释）。
+   *
+   * 早先这里多调了一次 `shoot()`，而它**必然早退**：React 是异步提交的，这一刻
+   * `shell.current` 还是上一份状态，版本号没变。结果就是两条路互相以为对方会干活，
+   * 画布永远停在老内容上。
+   */
   const afterState = async (next: StudioState): Promise<void> => {
     studioRef.current?.setState(next)
-    await shellRef.current?.shoot()
   }
 
   const seek = (revision: number): void => {

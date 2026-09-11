@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { LlmError, ScriptedProvider, scriptFromCalls } from '@architect/agent'
 import type {
   AgentEvent,
+  LlmMessage,
   LlmProvider,
   LlmRequest,
   ProviderConfig,
@@ -766,7 +767,11 @@ describe('流式输出', () => {
     emit: (event: AgentEvent) => void
     /** 已经推给界面的视图（合并推送意味着它比事件数少）。 */
     views: ChatView[]
+    /** 每一轮 runner 收到的 `history`（第 0 项就是第一轮）。 */
+    histories: ReadonlyArray<readonly LlmMessage[]>
     finish: () => Promise<void>
+    /** 结束**当前**这一轮（第二轮及以后用它，`finish` 只认第一轮的闸门）。 */
+    finishLatest: () => Promise<void>
   }
 
   /** 建一个由测试手动驱动的会话，并发出第一句需求。 */
@@ -774,15 +779,23 @@ describe('流式输出', () => {
     const secrets = createMemorySecretStore()
     secrets.set('DeepSeek', 'sk-test-key')
     let push: ((event: AgentEvent) => void) | undefined
+    /**
+     * **每一轮各有各的闸门**，不能共用一个 promise。
+     *
+     * 原来这里是一个只 resolve 一次的 `finished`：第一轮没问题，但第二轮
+     * `await` 一个已经 resolve 过的 promise 会**立刻放行**——测"第二轮收到的历史"
+     * 这类东西就永远拿不到正确的时序。按轮次存 resolver 才测得准。
+     */
     let done: (() => void) | undefined
-    const finished = new Promise<void>((resolve) => {
-      done = resolve
-    })
+    const histories: Array<readonly LlmMessage[]> = []
     const chat = new ChatController(
       { settings: deepseekWithKey(), secrets },
-      async (_goal, _provider, onEvent) => {
+      async (_goal, _provider, onEvent, _shouldStop, history) => {
         push = onEvent
-        await finished
+        histories.push(history ?? [])
+        await new Promise<void>((resolve) => {
+          done = resolve
+        })
         return { stopReason: 'completed', usage: { in: 1, out: 1 } }
       },
     )
@@ -794,18 +807,43 @@ describe('流式输出', () => {
     // runner 要等密钥解析完才被调到；等它把 onEvent 交出来
     for (let i = 0; i < 200 && push === undefined; i++) await new Promise((resolve) => setTimeout(resolve, 5))
     if (push === undefined) throw new Error('runner 没被调起来')
+    const settle = async (): Promise<void> => {
+      done?.()
+      for (let i = 0; i < 200 && chat.chatView().running; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+    }
     return {
       chat,
       emit: (event) => push?.(event),
       views,
-      finish: async () => {
-        done?.()
-        for (let i = 0; i < 200 && chat.chatView().running; i++) {
-          await new Promise((resolve) => setTimeout(resolve, 5))
-        }
-      },
+      histories,
+      finish: settle,
+      finishLatest: settle,
     }
   }
+
+  it('**清空对话之后，发给模型的历史也空了**（只清显示不算清）', async () => {
+    // `newProject()` 会调它。少了这一步的症状是：界面清空了，但下一轮模型
+    // 还在引用"你刚才删掉的那些话"。
+    const { chat, emit, finishLatest, histories } = await stage()
+    emit({ type: 'assistant_delta', turn: 1, text: '先说一句', reasoning: '' })
+    emit({ type: 'assistant', turn: 1, text: '先说一句' })
+    await finishLatest()
+
+    chat.clear()
+    expect(chat.chatView().messages).toEqual([])
+    expect(chat.chatView().usage.in).toBe(0)
+
+    // 再发一轮，runner 收到的历史必须是空的
+    chat.send('第二句')
+    for (let i = 0; i < 200 && histories.length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    expect(histories).toHaveLength(2)
+    expect(histories[1]).toEqual([])
+    await finishLatest()
+  })
 
   it('**「思考中…」当场进对话列表，正文逐字长出来，最后以完整响应收口**', async () => {
     const { chat, emit, views, finish } = await stage()

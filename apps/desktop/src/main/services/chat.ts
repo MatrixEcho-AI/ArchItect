@@ -548,7 +548,16 @@ export class ChatController {
     this.pendingMutations = 0
     // 录制器也要跟着重置——否则清空对话后保存，工程文件里还留着上一次的内容
     this.recorder = new TranscriptRecorder({ title: this.recorderTitle() })
-    return this.view()
+    /**
+     * **自己推一次 `chat` 事件**，与 `send` / `stop` 那些改动状态的方法一致。
+     *
+     * 不推也能"看着对"——但那是靠调用方恰好也推了 `state` 事件顺带刷新了界面，
+     * 属于**巧合**。清空是一个状态变化，就该广播出去：这样无论是"新建"、
+     * 菜单项还是快捷键触发的清空，界面都会跟着更新，不必每个调用点都记得刷新。
+     */
+    const view = this.view()
+    this.emit({ type: 'chat', view })
+    return view
   }
 
   /** 会话标题：用第一句用户输入，太长就截断。 */

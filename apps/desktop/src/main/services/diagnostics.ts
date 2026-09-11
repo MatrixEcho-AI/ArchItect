@@ -30,6 +30,8 @@ export const DEBUG_FLAGS: ReadonlyArray<readonly [flag: string, name: string]> =
   ['--no-webgl', 'no-webgl'],
   ['--undo-test', 'undo-test'],
   ['--paint-test', 'paint-test'],
+  // 合成一次"新建"：**先载入示例工程再按新建**，用来抓"新建之后该清空的东西清没清"
+  ['--new-test', 'new-test'],
 ]
 
 /** 这一趟带了哪些诊断开关（顺序与定义一致，便于做 hash 时稳定）。 */

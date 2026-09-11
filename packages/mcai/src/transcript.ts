@@ -25,6 +25,14 @@ import type { CaptureBundle, CaptureRef, ChatMessageRecord, ChatSessionRecord, C
 export type TranscriptEvent =
   | { type: 'turn'; turn: number }
   | { type: 'assistant'; turn: number; text: string }
+  /**
+   * 流式碎片。**明确列在这里，但一个字都不录**。
+   *
+   * 它是给界面逐字输出用的视图事件；档案只存**成型的消息**（下面那条 `assistant`），
+   * 否则每一条回复都会在档案里碎成几百片。列出来是为了让"事件视图与 AgentEvent
+   * 不会漂移"那条编译期断言继续成立——新的视图事件必须在这里被**显式**承认。
+   */
+  | { type: 'assistant_delta'; turn: number; text: string; reasoning: string }
   | { type: 'tool_call'; turn: number; id: string; name: string; args: unknown }
   | { type: 'tool_result'; turn: number; id: string; name: string; result: TranscriptToolResult }
   | { type: 'images'; turn: number; count: number; bytes: number }
@@ -162,6 +170,10 @@ export class TranscriptRecorder {
     if (event.type === 'tool_call') this.toolCalls++
     if (event.type === 'images') this.screenshots += event.count
     switch (event.type) {
+      case 'assistant_delta':
+        // **不录**：流式碎片是"正在生成"的中间态，录进去等于把每条回复切成几百片。
+        // 收口的那条 `assistant` 事件带着完整正文进来，那才是档案要的。
+        return
       case 'assistant':
         if (event.text.trim().length === 0) return
         this.messages.push({ id: this.nextId++, role: 'assistant', text: event.text, ts: this.now() })

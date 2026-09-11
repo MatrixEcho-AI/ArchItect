@@ -83,6 +83,10 @@ interface ChatMessageView {
   gate?: boolean
   /** 这一轮失败了（请求报错 / 空回复 / 撞上输出上限）。画红，别让用户以为是"没反应"。 */
   failed?: boolean
+  /** 这一条正在流式生成：末尾画一个光标，字是**边收边画**的。 */
+  streaming?: boolean
+  /** 还在思考、正文没开始时，已经生成的思维链字符数（只给数字，不给内容）。 */
+  thinking?: number
 }
 
 interface ChatView {
@@ -385,8 +389,10 @@ const presetLabel = (preset: string): string => t(`settings.presets.${preset}` a
  * 一行状态文字。
  *
  * ⚠️ **状态行按要求从界面上隐藏了**（`#status` 带 `hidden`，见 index.html），所以现在
- * 这些字**看不见**——包括「思考中…」「本轮结束（reason）」和各种机位提示。
- * 真正的失败反馈不靠它：失败的回合会在对话里落一条红色消息（见 `renderChat`/`ChatController.fail`），
+ * 这些字**看不见**——包括「本轮结束（reason）」和各种机位提示。
+ * 「思考中…」**不再靠这里**：它现在是对话列表里的一条（主进程在 `turn` 事件上落一条
+ * 流式占位，见 `ChatController.openStream`），逐字输出也长在那一条上。
+ * 真正的失败反馈同样不靠它：失败的回合会在对话里落一条红色消息（见 `renderChat`/`ChatController.fail`），
  * 那条**仍然可见**。要恢复状态行：去掉 index.html 上的那个 `hidden`。
  */
 function setStatus(text: string): void {
@@ -1455,6 +1461,9 @@ function renderChat(next: ChatView): void {
   }
 
   // 整列重建：消息是几十条量级，diff 不值得（也更不容易出错）
+  // 贴底才自动滚：流式生成时字一直在往下长，用户要是往上翻看早先的内容，
+  // 每次重绘都把他拽回底部就等于不让人看
+  const stick = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 40
   messagesEl.replaceChildren(...next.messages.map(renderMessage))
 
   // 用量与花费。缓存命中那一项**只在 provider 报了的时候才显示**（见 format.ts）：
@@ -1479,18 +1488,21 @@ function renderChat(next: ChatView): void {
     cache === undefined || usd.length === 0
       ? usd
       : `${usd} · ${t('cost.cachedShare', { percent: cache.percent })}`
+  // 状态行是隐藏的；「思考中…」现在长在对话列表里（见 `renderMessage`）
   if (next.running) setStatus(t('chat.thinking'))
   else if (next.budgetStop !== undefined) setStatus(next.budgetStop)
   else if (next.stopReason !== undefined) setStatus(t('chat.turnDone', { reason: next.stopReason }))
 
   // 滚到底部（正在生成时尤其重要）
-  messagesEl.scrollTop = messagesEl.scrollHeight
+  if (stick) messagesEl.scrollTop = messagesEl.scrollHeight
 }
 
 function renderMessage(message: ChatMessageView): HTMLLIElement {
   const li = document.createElement('li')
   li.className = message.gate === true ? `${message.role} gate` : message.role
   li.dataset['messageId'] = String(message.id)
+  // 只有流式的最后一条会画光标（CSS 挂在 `.streaming` 上，光标由 `::after` 补）
+  if (message.streaming === true) li.classList.add('streaming')
 
   const who = document.createElement('span')
   who.className = 'who'
@@ -1518,7 +1530,15 @@ function renderMessage(message: ChatMessageView): HTMLLIElement {
   if (message.failed === true) li.classList.add('bad')
 
   const body = document.createElement('div')
-  body.textContent = message.text
+  if (message.streaming === true && message.text.length === 0) {
+    // 正文一个字都还没来 = 模型在思考。**这条提示就长在对话列表里**，
+    // 而不是顶栏那行看不见的状态。已经想了多少字也报出来：长思考时那是"它还活着"的证据。
+    body.className = 'thinking'
+    const count = message.thinking ?? 0
+    body.textContent = count > 0 ? t('chat.thinkingLive', { count }) : t('chat.thinking')
+  } else {
+    body.textContent = message.text
+  }
   li.append(body)
 
   if (message.imageId !== undefined) {

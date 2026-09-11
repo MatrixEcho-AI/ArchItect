@@ -56,6 +56,18 @@ export interface ChatMessageView {
   gate?: boolean
   /** 这一轮**失败**了（请求报错、空回复……）。界面据此把它画红，而不是混在正常回复里。 */
   failed?: boolean
+  /**
+   * 这一条**正在流式生成**（还没收到收口的 `assistant`）。界面据此在末尾画一个光标，
+   * 而不是等整段生成完才让字出现。
+   */
+  streaming?: boolean
+  /**
+   * 流式期间**已经生成、还没吐正文**的思维链字符数。
+   *
+   * 只给数字不给内容：思维链是模型的草稿，逐字铺在对话里会把真正的回答淹掉；
+   * 但"已经想了 3000 字"能证明这条连接是活的——用户等的就是这一条。
+   */
+  thinking?: number
   ts: string
 }
 
@@ -129,6 +141,15 @@ export type ChatRunner = (
   pendingMutations?: number
 }>
 
+/**
+ * 流式增量**合并推送**的间隔。
+ *
+ * 每来一个 token 就推一份完整的 ChatView，会让 IPC 与整列重绘都跑到几十次/秒；
+ * 人眼要的只是"字在往外冒"，一帧一次就够。非增量事件（工具、报错、结束）不走这条，
+ * 那些必须立刻可见。
+ */
+const STREAM_EMIT_MS = 40
+
 export interface ChatOptions {
   settings?: ProviderSettings
   secrets?: SecretStore
@@ -167,6 +188,17 @@ export class ChatController {
   private modelHistory: LlmMessage[] = []
   /** 上一轮结束时还没读回的改动数（完成闸门的跨轮状态）。 */
   private pendingMutations = 0
+  /**
+   * 正在生成的那一条（已经进了 `messages`，还没被收口）。
+   *
+   * 它就是界面上"逐字输出"的那一条：`assistant_delta` 往里接碎片，收口的
+   * `assistant` 事件把整段盖上（最终响应是权威版本，碎片只是先看到的那部分）。
+   */
+  private live: ChatMessageView | undefined
+  /** `live` 属于第几轮。轮次对不上说明上一轮没收口，先把它关掉。 */
+  private liveTurn: number | undefined
+  /** 挂起的合并推送（见 `STREAM_EMIT_MS`）。 */
+  private streamTimer: ReturnType<typeof setTimeout> | undefined
   /**
    * 对话录制器。
    *
@@ -479,6 +511,7 @@ export class ChatController {
     this.stopReason = undefined
     this.error = undefined
     this.budgetStop = undefined
+    this.resetStream()
     // 换了工程：上一个工程的对话不能带进新工程的请求里
     this.modelHistory = []
     this.pendingMutations = 0
@@ -495,6 +528,7 @@ export class ChatController {
     this.stopReason = undefined
     this.error = undefined
     this.meter.reset()
+    this.resetStream()
     // 清空对话 = 也清掉发给模型的历史，否则下一轮它还记得你刚删掉的那些话
     this.modelHistory = []
     this.pendingMutations = 0
@@ -553,6 +587,29 @@ export class ChatController {
     this.emit({ type: 'chat', view: this.chatView() })
   }
 
+  /**
+   * 流式增量：**合并**成约 `STREAM_EMIT_MS` 一次推送。
+   *
+   * 几十个 token 一起来的场景下，逐条推会把 IPC 与整列重绘打满，而画面上不会有
+   * 任何区别。合并之后一帧最多一次。
+   */
+  private emitStream(): void {
+    if (this.streamTimer !== undefined) return
+    this.streamTimer = setTimeout(() => {
+      this.streamTimer = undefined
+      this.emitView()
+    }, STREAM_EMIT_MS)
+  }
+
+  /** 立刻推，并把挂起的合并推送吃掉（顺序不能乱：否则旧视图会盖在新视图后面）。 */
+  private flushView(): void {
+    if (this.streamTimer !== undefined) {
+      clearTimeout(this.streamTimer)
+      this.streamTimer = undefined
+    }
+    this.emitView()
+  }
+
   private newMessage(role: ChatMessageView['role'], text: string): ChatMessageView {
     return { id: this.nextId++, role, text, ts: new Date().toISOString() }
   }
@@ -594,7 +651,10 @@ export class ChatController {
       this.fail(this.error)
     } finally {
       this.running = false
-      this.emitView()
+      // 流没来得及收口就结束了（报错、被停止）：光标必须收掉，
+      // 否则界面上会永远停在"正在生成"
+      this.closeStream()
+      this.flushView()
       this.afterRun()
     }
   }
@@ -606,18 +666,101 @@ export class ChatController {
     this.messages.push(message)
   }
 
+  // ── 流式：把"思考中"和逐字输出都放进对话列表 ────────────────────────────────
+  //
+  // 顶栏那行状态（`setStatus`）是**隐藏**的，"思考中…"写在那里等于没写。所以这一轮
+  // 一开始就在对话列表里落一条占位：模型想多久、吐多少字，用户都在这条上看得见。
+
+  /** 开一条流式占位（在 `turn` 事件上）。上一轮没收口的先收掉。 */
+  private openStream(turn: number): void {
+    this.closeStream()
+    const message = this.newMessage('assistant', '')
+    message.streaming = true
+    this.messages.push(message)
+    this.live = message
+    this.liveTurn = turn
+  }
+
+  /** 碎片到达：接到这一轮的占位上。轮次对不上就重开一条（碎片不会跨轮拼）。 */
+  private appendDelta(event: Extract<AgentEvent, { type: 'assistant_delta' }>): void {
+    if (this.live === undefined || this.liveTurn !== event.turn) this.openStream(event.turn)
+    const live = this.live
+    if (live === undefined) return
+    live.text += event.text
+    if (event.reasoning.length > 0) live.thinking = (live.thinking ?? 0) + event.reasoning.length
+  }
+
+  /**
+   * 收口：**以完整响应为准**。
+   *
+   * 不用拼起来的碎片当最终结果——碎片可能因为重试或我们这边的拼接缺陷少一块，
+   * 而 `assistant` 事件带的是权威的那一份。
+   */
+  private finishStream(text: string): void {
+    const live = this.live
+    if (live === undefined) {
+      if (text.trim().length > 0) this.messages.push(this.newMessage('assistant', text))
+      return
+    }
+    if (text.length > 0) live.text = text
+    this.closeStream()
+  }
+
+  /**
+   * 关掉当前这条流式消息。
+   *
+   * 空的（一个字都没吐出来，比如"这一轮只调工具"）**直接摘掉**：留着就是一个
+   * 永远空着的空气泡。有内容的留下，只是把光标收掉。
+   */
+  private closeStream(): void {
+    const live = this.live
+    this.live = undefined
+    this.liveTurn = undefined
+    if (live === undefined) return
+    live.streaming = false
+    delete live.thinking
+    if (live.text.trim().length === 0) this.messages = this.messages.filter((message) => message !== live)
+  }
+
+  /** 丢掉当前这条（重试时用）：上次尝试的碎片要作废，重试会从头再吐一遍。 */
+  private discardStream(): void {
+    const live = this.live
+    this.live = undefined
+    this.liveTurn = undefined
+    if (live !== undefined) this.messages = this.messages.filter((message) => message !== live)
+  }
+
+  /** 换工程 / 清空对话：流式状态与挂起的推送一并丢掉（那些碎片已不属于这批消息）。 */
+  private resetStream(): void {
+    this.discardStream()
+    if (this.streamTimer !== undefined) {
+      clearTimeout(this.streamTimer)
+      this.streamTimer = undefined
+    }
+  }
+
   private handle(event: AgentEvent): void {
     // 先录制，再更新界面：录制是"档案"，界面是"视图"，档案不该因为界面某条分支
     // 提前 return 就丢掉内容
     this.recorder.onEvent(event)
+    // 增量走合并推送（字往外冒，一帧一次够了）；其余事件必须立刻可见
+    let streaming = false
     switch (event.type) {
       case 'turn':
         this.meter.turn()
+        // 「思考中…」进对话列表：这一轮到出字之前，用户就盯着这条
+        this.openStream(event.turn)
+        break
+      case 'assistant_delta':
+        this.appendDelta(event)
+        streaming = true
         break
       case 'assistant':
-        if (event.text.trim().length > 0) this.messages.push(this.newMessage('assistant', event.text))
+        this.finishStream(event.text)
         break
       case 'tool_call': {
+        // 只看不说的那一轮（只调工具、正文空）：把占位收掉，别留空气泡
+        this.closeStream()
         const message = this.newMessage('tool', event.name)
         message.toolName = event.name
         message.args = compactJson(event.args)
@@ -672,6 +815,8 @@ export class ChatController {
         break
       }
       case 'retry': {
+        // 上一次尝试的碎片**作废**：重试会从头再吐一遍，留着就是同一句话出现两次
+        this.discardStream()
         const message = this.newMessage('assistant', `[retry ${event.attempt}] ${event.reason}`)
         message.gate = true
         this.messages.push(message)
@@ -691,7 +836,8 @@ export class ChatController {
       default:
         break
     }
-    this.emitView()
+    if (streaming) this.emitStream()
+    else this.flushView()
   }
 
   private lastToolMessage(name: string): ChatMessageView | undefined {

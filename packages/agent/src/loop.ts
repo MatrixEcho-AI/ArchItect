@@ -4,7 +4,7 @@ import { t } from '@architect/i18n'
 import type { ToolContext, ToolRegistry, ToolResult } from '@architect/tools'
 
 import { LlmError } from './types.js'
-import type { LlmImage, LlmMessage, LlmProvider, LlmUsage } from './types.js'
+import type { LlmDelta, LlmImage, LlmMessage, LlmProvider, LlmUsage } from './types.js'
 import { contextPolicyFor, DEFAULT_TOOL_RESULT_CHARS, windowMessages } from './context.js'
 import type { ContextPolicy } from './context.js'
 import { checkBudget, costOf } from './usage.js'
@@ -41,6 +41,15 @@ export interface AgentState {
 export type AgentEvent =
   | { type: 'turn'; turn: number }
   | { type: 'assistant'; turn: number; text: string }
+  /**
+   * 这一轮正文（或思维链）的**一小片**，随字节到达即发。
+   *
+   * 它是**视图事件**，不是历史：`assistant` 才是收口的那一条（完整、权威）。
+   * 界面拿它逐字输出；档案不录它（`.mcai` 只存成型的消息，见 `TranscriptEvent`）。
+   * 重试时这一轮的碎片**作废**——重试会从头再吐一遍，所以先发的 `retry` 事件
+   * 就是"把刚才那些碎片丢掉"的信号。
+   */
+  | { type: 'assistant_delta'; turn: number; text: string; reasoning: string }
   | { type: 'tool_call'; turn: number; id: string; name: string; args: unknown }
   | { type: 'tool_result'; turn: number; id: string; name: string; result: ToolResult }
   | { type: 'images'; turn: number; count: number; bytes: number }
@@ -253,6 +262,16 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
           ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
         }),
         emit,
+        // 片段原样往上抛：谁在听（CLI / 桌面端）自己决定要不要画出来
+        (delta) => {
+          if ((delta.text?.length ?? 0) === 0 && (delta.reasoning?.length ?? 0) === 0) return
+          emit({
+            type: 'assistant_delta',
+            turn: state.turn,
+            text: delta.text ?? '',
+            reasoning: delta.reasoning ?? '',
+          })
+        },
       )
     } catch (error) {
       state.stopReason = 'error'
@@ -460,11 +479,12 @@ async function chatWithRetry(
   provider: LlmProvider,
   buildRequest: () => Parameters<LlmProvider['chat']>[0],
   emit: (event: AgentEvent) => void,
+  onDelta?: (delta: LlmDelta) => void,
 ): Promise<Awaited<ReturnType<LlmProvider['chat']>>> {
   let lastError: unknown
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await provider.chat(buildRequest())
+      return await provider.chat(buildRequest(), onDelta)
     } catch (error) {
       lastError = error
       const retryable = error instanceof LlmError ? error.retryable : true

@@ -60,12 +60,31 @@ export interface LlmResponse {
   finishReason: string
 }
 
+/**
+ * 流式增量：一次只带一小片正文或思维链。
+ *
+ * 它**不是**响应的一部分——拼好的完整响应仍然由 `chat()` 返回。这一路只是让调用方
+ * 在字节到达的当下就能把字画出来（"逐字输出"），而不是等整段生成完。
+ */
+export interface LlmDelta {
+  /** 正文碎片。 */
+  text?: string
+  /** 思维链碎片（DeepSeek 的 `reasoning_content`）。 */
+  reasoning?: string
+}
+
 export interface LlmProvider {
   readonly id: string
   readonly model: string
   /** 是否支持图像输入。不支持时调用方要把图换成文字描述。 */
   readonly supportsImages: boolean
-  chat(request: LlmRequest): Promise<LlmResponse>
+  /**
+   * 发一次请求。
+   *
+   * 给了 `onDelta` 就**边收边报**：每收到一片就调一次，调用方可以立刻显示。
+   * 不给也不影响正确性，只是要等整段生成完才看得到内容。
+   */
+  chat(request: LlmRequest, onDelta?: (delta: LlmDelta) => void): Promise<LlmResponse>
 }
 
 export class LlmError extends Error {

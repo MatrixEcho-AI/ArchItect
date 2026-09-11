@@ -274,6 +274,48 @@ describe('Agent 循环', () => {
     expect(events.filter((e) => e.type === 'retry')).toHaveLength(2)
   })
 
+  it('**流式碎片原样往上抛，收口的仍是完整响应**', async () => {
+    const session = makeSession()
+    const provider = {
+      id: 'streaming',
+      model: 'streaming',
+      supportsImages: false,
+      chat: async (
+        _request: unknown,
+        onDelta?: (delta: { text?: string; reasoning?: string }) => void,
+      ) => {
+        // 一个真实 provider 的样子：边收边报，最后还是把整段返回
+        for (const piece of ['你', '好', '，', '世界']) onDelta?.({ text: piece })
+        onDelta?.({ reasoning: '先想一下' })
+        return {
+          text: '你好，世界',
+          toolCalls: [],
+          usage: { in: 1, out: 4 },
+          finishReason: 'stop',
+        }
+      },
+    }
+    const events: AgentEvent[] = []
+    const state = await runAgent(
+      {
+        provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        onEvent: (event) => events.push(event),
+      },
+      '打个招呼',
+    )
+
+    const deltas = events.filter((event) => event.type === 'assistant_delta')
+    expect(deltas.map((event) => event.text).join('')).toBe('你好，世界')
+    expect(deltas.map((event) => event.reasoning).join('')).toBe('先想一下')
+    // 碎片之后一定有条收口事件带着**完整**正文——界面以它为准，不是拿碎片拼
+    const assistant = events.find((event) => event.type === 'assistant')
+    expect(assistant).toMatchObject({ text: '你好，世界' })
+    expect(state.finalText).toBe('你好，世界')
+  })
+
   it('不可重试的错误直接终止并如实报告', async () => {
     const session = makeSession()
     const provider = {

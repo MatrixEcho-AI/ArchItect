@@ -500,6 +500,30 @@ dd {
   font-size: 11.5px;
 }
 
+/* 流式生成：末尾一个一闪一闪的光标——字是边收边画的，光标证明它还在往外冒 */
+.messages li.streaming > div::after {
+  content: '▌';
+  margin-left: 1px;
+  color: var(--accent);
+  animation: caret 1s steps(1) infinite;
+}
+
+@keyframes caret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 正文还没开始 = 模型在思考。这条提示就在对话列表里，不在（隐藏的）顶栏状态行上 */
+.messages li.streaming div.thinking {
+  color: var(--dim);
+}
+
 .messages .who {
   display: block;
   font-size: 10px;

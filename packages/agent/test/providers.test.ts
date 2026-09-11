@@ -648,9 +648,12 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
       apiKey: 'k',
       fetchImpl: impl,
     })
-    const response = await provider.chat(base)
+    // 逐字输出靠这条旁路：碎片按到达顺序报出来，一次一片
+    const deltas: Array<{ text?: string; reasoning?: string }> = []
+    const response = await provider.chat(base, (delta) => deltas.push(delta))
     expect(response.text).toBe('好')
     expect(response.reasoningContent).toBe('先想一下')
+    expect(deltas).toEqual([{ reasoning: '先想' }, { reasoning: '一下' }, { text: '好' }])
     // 参数是跨 chunk 拼起来的，拼完才是合法 JSON
     expect(response.toolCalls).toEqual([
       { id: 'call_1', name: 'fill_box', args: { from: [0, 0, 0], to: [1, 1, 1], block: 'minecraft:stone' } },

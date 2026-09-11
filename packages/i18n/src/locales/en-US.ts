@@ -137,6 +137,7 @@ export const enUS = {
     stop: 'Stop',
     clear: 'Clear',
     thinking: 'Thinking…',
+    thinkingLive: 'Thinking… {{count}} characters so far',
     toolCall: 'Tool call',
     toolResult: 'Result',
     attached: '{{count}} screenshot(s) attached',

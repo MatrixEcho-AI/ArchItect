@@ -133,6 +133,7 @@ export const zhCN = {
     stop: '停止',
     clear: '清空',
     thinking: '思考中…',
+    thinkingLive: '思考中… 已经想了 {{count}} 字',
     toolCall: '调用工具',
     toolResult: '结果',
     attached: '附带 {{count}} 张截图',

@@ -1,7 +1,7 @@
 import { t } from '@architect/i18n'
 
 import { LlmError } from '../types.js'
-import type { LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from '../types.js'
+import type { LlmDelta, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from '../types.js'
 
 /** 请求侧的可序列化快照。图像只记数量与哈希——把 PNG 塞进录音会让文件大到没法用。 */
 export interface RecordedRequest {
@@ -55,9 +55,11 @@ export class RecordingProvider implements LlmProvider {
     this.supportsImages = inner.supportsImages
   }
 
-  async chat(request: LlmRequest): Promise<LlmResponse> {
+  async chat(request: LlmRequest, onDelta?: (delta: LlmDelta) => void): Promise<LlmResponse> {
     const started = Date.now()
-    const response = await this.inner.chat(request)
+    // 增量**原样透传**：录音要录的是"最终响应"，而界面要的是"字在往外冒"，
+    // 这两件事互不干扰，在这一层不需要做任何取舍
+    const response = await this.inner.chat(request, onDelta)
     this.turn++
     this.sink({
       turn: this.turn,
@@ -139,7 +141,7 @@ export class ReplayProvider implements LlmProvider {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async chat(request: LlmRequest): Promise<LlmResponse> {
+  async chat(request: LlmRequest, onDelta?: (delta: LlmDelta) => void): Promise<LlmResponse> {
     const exchange = this.exchanges[this.cursor]
     if (exchange === undefined) {
       if (this.options.onExhausted === 'stop') {
@@ -174,6 +176,12 @@ export class ReplayProvider implements LlmProvider {
       finishReason: response.finishReason,
     }
     if (response.reasoningContent !== undefined) result.reasoningContent = response.reasoningContent
+    // 重放没有真实的碎片（录音里存的是成型响应），所以**一次报完**：
+    // 界面走的仍是同一条流式路径，只是"逐字"退化成"一次性出现"
+    if (typeof onDelta === 'function') {
+      if (result.text.length > 0) onDelta({ text: result.text })
+      if (result.reasoningContent !== undefined) onDelta({ reasoning: result.reasoningContent })
+    }
     return result
   }
 }

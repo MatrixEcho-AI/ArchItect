@@ -15,6 +15,7 @@ import type {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { ChatController } from '../src/main/services/chat.js'
+import type { ChatView } from '../src/main/services/chat.js'
 import type { Cipher, SecretStore } from '../src/main/services/settings.js'
 import {
   createMemorySecretStore,
@@ -749,5 +750,133 @@ describe('接续提问：把上一轮真的发给模型', () => {
     expect(failed).toHaveLength(1)
     expect(failed[0]!.text).toContain('402')
     expect(view.error).toContain('402')
+  })
+})
+
+/**
+ * **流式：字是边收边画的，「思考中…」也在对话列表里。**
+ *
+ * 时序由测试掌握（runner 就是一段可手动推事件的闭包）：真跑一遍 `runAgent`
+ * 的话这些中间态一眨眼就过去了，断言不到。"思考中…"曾经只写在顶栏那行状态上，
+ * 而那行是**隐藏**的——所以这里断言的是它真的落进了消息数组。
+ */
+describe('流式输出', () => {
+  interface Stage {
+    chat: ChatController
+    emit: (event: AgentEvent) => void
+    /** 已经推给界面的视图（合并推送意味着它比事件数少）。 */
+    views: ChatView[]
+    finish: () => Promise<void>
+  }
+
+  /** 建一个由测试手动驱动的会话，并发出第一句需求。 */
+  async function stage(): Promise<Stage> {
+    const secrets = createMemorySecretStore()
+    secrets.set('DeepSeek', 'sk-test-key')
+    let push: ((event: AgentEvent) => void) | undefined
+    let done: (() => void) | undefined
+    const finished = new Promise<void>((resolve) => {
+      done = resolve
+    })
+    const chat = new ChatController(
+      { settings: deepseekWithKey(), secrets },
+      async (_goal, _provider, onEvent) => {
+        push = onEvent
+        await finished
+        return { stopReason: 'completed', usage: { in: 1, out: 1 } }
+      },
+    )
+    const views: ChatView[] = []
+    chat.onEvent((event) => {
+      if (event.type === 'chat') views.push(event.view)
+    })
+    chat.send('做个房子')
+    // runner 要等密钥解析完才被调到；等它把 onEvent 交出来
+    for (let i = 0; i < 200 && push === undefined; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    if (push === undefined) throw new Error('runner 没被调起来')
+    return {
+      chat,
+      emit: (event) => push?.(event),
+      views,
+      finish: async () => {
+        done?.()
+        for (let i = 0; i < 200 && chat.chatView().running; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+      },
+    }
+  }
+
+  it('**「思考中…」当场进对话列表，正文逐字长出来，最后以完整响应收口**', async () => {
+    const { chat, emit, views, finish } = await stage()
+
+    // 一轮开始：正文一个字都没有，但列表里已经有一条"正在生成"的了
+    emit({ type: 'turn', turn: 1 })
+    expect(chat.chatView().messages.at(-1)).toMatchObject({ role: 'assistant', text: '', streaming: true })
+
+    emit({ type: 'assistant_delta', turn: 1, text: '先', reasoning: '' })
+    emit({ type: 'assistant_delta', turn: 1, text: '铺', reasoning: '' })
+    // 思维链只计数不显示内容：它证明"这条连接还活着"
+    emit({ type: 'assistant_delta', turn: 1, text: '', reasoning: '想一想' })
+    const growing = chat.chatView().messages.at(-1)!
+    expect(growing.text).toBe('先铺')
+    expect(growing.streaming).toBe(true)
+    expect(growing.thinking).toBe(3)
+    // 还是一条消息，不是每个碎片一条
+    expect(chat.chatView().messages.filter((message) => message.role === 'assistant')).toHaveLength(1)
+
+    // 收口：**以完整响应为准**（碎片可能少一块，最终响应不会）
+    emit({ type: 'assistant', turn: 1, text: '先铺地板。' })
+    const settled = chat.chatView().messages.at(-1)!
+    expect(settled.text).toBe('先铺地板。')
+    expect(settled.streaming).toBe(false)
+    expect(settled.thinking).toBeUndefined()
+
+    await finish()
+    expect(views.at(-1)!.running).toBe(false)
+    expect(views.at(-1)!.messages.at(-1)!.text).toBe('先铺地板。')
+  })
+
+  it('增量**合并**推送：同步连发不会一个碎片推一次，但最终一定会到', async () => {
+    const { emit, views } = await stage()
+    emit({ type: 'turn', turn: 1 })
+    const before = views.length
+    for (const piece of ['一', '二', '三', '四', '五']) {
+      emit({ type: 'assistant_delta', turn: 1, text: piece, reasoning: '' })
+    }
+    // 合并窗口内一次都不推（几十次/秒的 IPC 与整列重绘就是这么省下来的）
+    expect(views.length).toBe(before)
+    await new Promise((resolve) => setTimeout(resolve, 90))
+    expect(views.length).toBeGreaterThan(before)
+    expect(views.at(-1)!.messages.at(-1)!.text).toBe('一二三四五')
+  })
+
+  it('**重试不留重复的半句话**：上一次尝试的碎片作废，只留重试后的完整正文', async () => {
+    const { chat, emit, finish } = await stage()
+    emit({ type: 'turn', turn: 1 })
+    emit({ type: 'assistant_delta', turn: 1, text: '半句话', reasoning: '' })
+    emit({ type: 'retry', attempt: 1, reason: '连接被掐断' })
+    emit({ type: 'turn', turn: 1 })
+    emit({ type: 'assistant_delta', turn: 1, text: '好', reasoning: '' })
+    emit({ type: 'assistant_delta', turn: 1, text: '的。', reasoning: '' })
+    emit({ type: 'assistant', turn: 1, text: '好的。' })
+    await finish()
+
+    const assistant = chat.chatView().messages.filter((message) => message.role === 'assistant')
+    // 一条 [retry] 提示 + 一条正文，半句话那条已经被丢掉
+    expect(assistant.map((message) => message.text)).toEqual(['[retry 1] 连接被掐断', '好的。'])
+    expect(assistant.some((message) => message.streaming === true)).toBe(false)
+  })
+
+  it('**只调工具的那一轮不留空气泡**（正文一个字都没有）', async () => {
+    const { chat, emit, finish } = await stage()
+    emit({ type: 'turn', turn: 1 })
+    emit({ type: 'assistant_delta', turn: 1, text: '', reasoning: '它在想' })
+    emit({ type: 'tool_call', turn: 1, id: 'c1', name: 'fill_box', args: { block: 'minecraft:stone' } })
+    await finish()
+
+    const messages = chat.chatView().messages
+    expect(messages.at(-1)).toMatchObject({ role: 'tool', toolName: 'fill_box' })
+    expect(messages.some((message) => message.role === 'assistant')).toBe(false)
   })
 })

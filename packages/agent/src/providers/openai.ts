@@ -1,7 +1,7 @@
 import { t } from '@architect/i18n'
 
 import { LlmError } from '../types.js'
-import type { LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from '../types.js'
+import type { LlmDelta, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from '../types.js'
 
 export interface OpenAiCompatibleConfig {
   id?: string
@@ -89,12 +89,12 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     this.fetchImpl = config.fetchImpl ?? globalThis.fetch
   }
 
-  async chat(request: LlmRequest): Promise<LlmResponse> {
+  async chat(request: LlmRequest, onDelta?: (delta: LlmDelta) => void): Promise<LlmResponse> {
     const fields = this.maxTokensFields()
     let lastError: unknown
     for (const [index, field] of fields.entries()) {
       try {
-        return await this.streamOnce(request, field)
+        return await this.streamOnce(request, field, onDelta)
       } catch (error) {
         lastError = error
         const canRetry = index < fields.length - 1 && isWrongMaxTokensField(error, field)
@@ -114,15 +114,22 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   private async streamOnce(
     request: LlmRequest,
     maxTokensField: 'max_tokens' | 'max_completion_tokens',
+    onDelta?: (delta: LlmDelta) => void,
   ): Promise<LlmResponse> {
     try {
-      const parsed = await this.readStream(await this.send(this.buildBody(request, maxTokensField, this.wantUsage)))
+      const parsed = await this.readStream(
+        await this.send(this.buildBody(request, maxTokensField, this.wantUsage)),
+        onDelta,
+      )
       this.learnedMaxTokensField = maxTokensField
       return parsed
     } catch (error) {
       if (!this.wantUsage || !isUsageOptionRejection(error)) throw error
       this.wantUsage = false
-      const parsed = await this.readStream(await this.send(this.buildBody(request, maxTokensField, false)))
+      const parsed = await this.readStream(
+        await this.send(this.buildBody(request, maxTokensField, false)),
+        onDelta,
+      )
       this.learnedMaxTokensField = maxTokensField
       return parsed
     }
@@ -279,8 +286,11 @@ export class OpenAiCompatibleProvider implements LlmProvider {
    *
    * 用量要走 `stream_options.include_usage`，服务端才会在 `[DONE]` 之前补一个
    * 只有 `usage` 的 chunk。
+   *
+   * `onDelta` 是一条**旁路**：每片碎片在到达的当下就报出去（界面靠它逐字输出），
+   * 而返回值仍然是拼好的整段——两边的口径必须一致，否则画面与历史会各说各话。
    */
-  private async readStream(response: Response): Promise<LlmResponse> {
+  private async readStream(response: Response, onDelta?: (delta: LlmDelta) => void): Promise<LlmResponse> {
     const body = response.body
     if (body === null) {
       // 没有 body 说明这个端点根本没打算流式回话（或者被中间层吃掉了）
@@ -319,8 +329,16 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       // `delta` 可能是 `{}`、也可能是 `null`（收尾那一帧），两种都要当"没有内容"处理
       const delta = choice?.delta ?? undefined
       if (delta !== undefined && delta !== null) {
-        if (typeof delta.content === 'string') text.push(delta.content)
-        if (typeof delta.reasoning_content === 'string') reasoning.push(delta.reasoning_content)
+        // 碎片**先报出去**（能报一片就报一片），再照样累积——界面靠这一路逐字输出，
+        // 而返回给循环的仍然是拼好的完整响应。空字符串不报：那只是帧的边界，不是内容。
+        if (typeof delta.content === 'string' && delta.content.length > 0) {
+          text.push(delta.content)
+          onDelta?.({ text: delta.content })
+        }
+        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+          reasoning.push(delta.reasoning_content)
+          onDelta?.({ reasoning: delta.reasoning_content })
+        }
         for (const part of delta.tool_calls ?? []) {
           const index = typeof part.index === 'number' ? part.index : 0
           const entry = calls.get(index) ?? { id: '', name: '', args: '' }

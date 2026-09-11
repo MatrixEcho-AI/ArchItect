@@ -430,7 +430,12 @@ export class StudioService {
   /** 保存成功后推进 WAL 基准。 */
   private commitAutosave(): void {
     if (this.autosave === undefined) return
-    this.autosave.onSaved(this.session.log.length, this.projectPath, this.session.log.length)
+    // 基准必须是**世界游标**，不是日志长度。撤销之后游标会退到日志长度之前
+    // （`log.length` 仍是 10，而 `store.revision` 已经回到 5），两者不再相等。
+    // 写成 log.length 会让 journal() 的 `op.rev > baseRevision` 把游标之后重放出来的
+    // op 整段漏掉——用户自这次保存之后的改动永远不会进 WAL，崩溃时静默丢失。
+    // 同一个文件里 state().revision、以及 retarget() 用的都是游标，只有这里不是。
+    this.autosave.onSaved(this.session.store.revision, this.projectPath)
   }
 
   /**
@@ -1272,7 +1277,12 @@ export class StudioService {
     this.session = session
     this.projectPath = undefined
     this.projectName =
-      path.split('/').pop()?.replace(/\.(schem|schematic|litematic)$/i, '') ?? t('desktop.importedProject')
+      // 用本文件已有的 `baseNameOf`：它按 `[/\\]` 切，Windows 路径也对。原来这里
+      // 单独写了一遍 `split('/')`，在 Windows 上切不开反斜杠，工程名会变成完整路径
+      // （`C:\Users\me\Downloads\house`）——而这个名字要写进 `manifest.name`，
+      // `.mcai` 又是拿来分享的，路径里带着用户名不合适。
+      // 兜底同时从 `??` 改成 `||`：`split` 永远返回非空数组，`??` 那一支是死代码。
+      baseNameOf(path).replace(/\.(schem|schematic|litematic)$/i, '') || t('desktop.importedProject')
     this.chat.clear()
 
     return {

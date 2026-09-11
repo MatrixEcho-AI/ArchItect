@@ -27,7 +27,7 @@ import type { MessageKey } from '@architect/i18n'
  *    自动化抓元素时它比图标好认）。
  * 2. **「机位」下拉与「生成示例」已移除**（代码注释在下面）。理由分别是：
  *    机位那条路现在由视口直接操作（WASD / 拖动 / 双击回自动取景），下拉框是重复入口；
- *    示例工程仍然能从欢迎提示里生成，按钮不属于高频动作。
+ *    示例工程在界面上就没有入口了（`--demo` 那条诊断路径还在）。
  * 3. 底色换成极淡的浅蓝，在 `theme.ts` 的 `Layout.headerBg` 里。
  *
  * 两个**隐藏但保留**的元素照旧，它们不是残留（`dom-ids` 测试与 gui-smoke 都盯着）：
@@ -105,7 +105,10 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
 
       <Divider />
 
-          **生成示例**：示例工程仍然能从欢迎提示里生成。
+          **生成示例**：界面上**已经没有这个入口了**（欢迎提示里那句指引也一并删了，
+          因为它指向的就是这个按钮）。`StudioService.demo()` 与 `studio:demo` 通道
+          都还在，`--demo` 诊断开关也用着它——所以恢复时只需要把这个按钮加回来，
+          再把 `viewport.empty` 的文案改回去。
 
       <IconButton id="btn-demo" label="menu.demo" disabled={busy} onClick={props.onDemo} icon={<AppstoreAddOutlined />} />
 

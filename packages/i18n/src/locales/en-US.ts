@@ -33,7 +33,7 @@ export const enUS = {
     statusAt: 'azimuth {{az}}°  elevation {{el}}° · at {{pos}} · {{ms}}',
     hint: 'First-person perspective: WASD to move, Space to rise, Shift to descend · drag = the view follows your hand (drag right to look left) · wheel to zoom · double-click to reset framing',
     camera: 'Camera',
-    empty: 'Empty world — load the sample hut, or describe a building on the right',
+    empty: 'Empty world — describe a building on the right',
     angles: {
       free: 'Free view (drag to rotate)',
       iso_ne: 'Isometric · NE',

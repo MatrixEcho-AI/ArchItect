@@ -466,10 +466,12 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
                 studioRef.current?.setState(await window.architect.state())
               })
             }
-            /* 「生成示例」按钮已按用户要求移除。`window.architect.demo()` 仍然在
-               （preload 的 `studio:demo` 通道、`StudioService.demo()` 都没动），
-               欢迎提示里那一条仍然指向它——所以这个能力没有消失，只是不再占顶栏。
-               要恢复：把 `onDemo` 加回 props，并在 toolbar.tsx 里取消那段注释。 */
+            /* 「生成示例」按钮已按用户要求移除，界面上**没有这个入口**了
+               （欢迎提示里那句指引也一并删了，它指的就是这个按钮）。
+               `window.architect.demo()` 仍然在（preload 的 `studio:demo` 通道、
+               `StudioService.demo()` 都没动，`--demo` 诊断开关也用着它）。
+               要恢复：把 `onDemo` 加回 props，取消 toolbar.tsx 里那段注释，
+               并把 `viewport.empty` 的文案改回去。 */
             onExport={() =>
               void run(t('menu.export'), async () => {
                 // 扩展名决定格式；`.schem` / `.litematic` / `.obj` 三种

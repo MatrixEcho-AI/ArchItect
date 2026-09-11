@@ -108,6 +108,10 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
     expect(project.chat.messages.some((message) => message.toolName === 'run_batch')).toBe(true)
     expect(project.chat.messages.some((message) => message.usage !== undefined)).toBe(true)
     expect(project.manifest.counters.llmCalls).toBeGreaterThan(0)
+    // **模型写下的设计笔记进了 manifest**（§9.2 阶段摘要 + D-71）：
+    // 重开工程时它会被交回会话，所以这条链路必须端到端通
+    expect(project.chat.messages.some((message) => message.toolName === 'update_notes')).toBe(true)
+    expect(project.manifest.designNotes).toContain('云杉墙')
     expect(project.captures.refs.length).toBe(1)
     const png = project.captures.files.get(project.captures.refs[0]!.id)!
     expect(Array.from(png.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47])

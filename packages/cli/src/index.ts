@@ -852,6 +852,8 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
     settings: { volume: session.store.volume, ...(inv.provider !== undefined ? { providerId: inv.provider } : {}) },
     chat: recording.transcript,
     captures: recording.captures,
+    // 模型写的设计笔记也跟着工程走（§9.2）：重开之后它不该失忆
+    ...(session.currentDesignNotes !== undefined ? { designNotes: session.currentDesignNotes } : {}),
   })
   await writeFile(inv.out, bytes)
 

@@ -78,6 +78,10 @@ export function buildSystemPrompt(context: PromptContext): string {
     ``,
     `[WORKFLOW] Plan -> build in stages -> after each stage, slice or verify to read back`,
     `         -> holistic review when complete -> revise.`,
+    `12. At every milestone (plan settled, one stage finished, a constraint discovered), call`,
+    `    update_notes with your COMPLETE current plan in under 1200 characters. Older turns may be`,
+    `    dropped from your context, and the notes are the only thing that survives.`,
+    `    Record decisions a later turn must not undo (facing, dimensions, materials).`,
     `[OUTPUT LANGUAGE] Reply to the user in Chinese. Keep tool arguments and coordinates in ASCII.`,
   )
 

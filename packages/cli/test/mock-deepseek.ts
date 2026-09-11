@@ -66,6 +66,15 @@ export interface MockModel {
 }
 
 const DEEPSEEK_PLAN = [
+  // 先写下计划（`update_notes`，§9.2）：这条也让端到端测试覆盖"笔记进 manifest"那一段
+  {
+    tools: [
+      {
+        name: 'update_notes',
+        args: { notes: '8x8 小屋：橡木地板、云杉墙、南面开门；门洞净高 2 格' },
+      },
+    ],
+  },
   { tools: [{ name: 'measure', args: {} }] },
   {
     tools: [

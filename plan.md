@@ -907,6 +907,7 @@ slice(axis=y, index=3)  range x[0..15] z[0..15]   legend:
 | 图像剪枝（M=3 张，从**最新往回**数） | ✅ 同上；被剪的那条消息留一句 `(N screenshot(s) omitted)‵，位置与轮次关系不变 |
 | 丢掉哪几轮的说明 | ✅ 一句机械生成的 `[CONTEXT]` 占位（头之后、保留轮之前）。**不额外花一次 LLM 调用** |
 | 阶段摘要（让 LLM 写 `DesignNotes`） | ✅ `update_notes` 工具（D-71）：**替换式**写入、上限 1200 字符，从**下一轮**起进系统提示的 `[DESIGN NOTES]` 段；落进 `manifest.designNotes`，重开工程不失忆 |
+| 阶段摘要（真模型实测） | ✅ `deepseek-flash` 20 轮 / 30 次工具 / 4105 方块 / 6 张截图 / **$0.0386**（98% 缓存命中，`completed`）：模型在**计划确定**与**完工**时各写了一次 `update_notes`，内容确实是"坐标 + 尺寸 + 不允许改的约束"，不是复述需求 |
 | 工具结果压缩 | ✅ `formatToolResult` 在进对话前按**策略里的上限**截断：A 12 000 字符、B 4 000 字符（约 3K / 1K token）。截断标记写明少了几百字符、切在行边界上——模型必须知道“这不是全部”，否则会在缺数据的基础上接着下结论。事件与档案发的是**同一份被压过的文本**（否则“模型为什么漏看后半截”在档案里查不出来） |
 | "优先文本"的 prompt 指示 | ✅ 现有 prompt 已经有（"精确坐标用 slice，截图只用来看观感"） |
 
@@ -942,6 +943,10 @@ You are ArchItect, a design engine for Minecraft voxel architecture.
     If they differ, discard that judgement and take a fresh screenshot.
 11. When a tool reports willOverwriteNonAir > 0, first explain what is being overwritten
     and why that is acceptable.
+
+12. At every milestone (plan settled / one stage done / a constraint discovered), call
+    update_notes with the COMPLETE current plan (<1200 chars). Older turns may be trimmed away,
+    and the notes are the only thing that survives; record what a later turn must not undo.
 
 [COMPLETION CHECKLIST] All must pass before you claim the build is done:
  [ ] measure() confirms the dimensions match the request
@@ -1715,6 +1720,7 @@ secrets.bin
 
 | 风险 | 影响 | 对策 |
 |------|------|------|
+| **单轮输出不设上限时，连接可能被掐** | 中 | 实测：不设 `maxOutputTokens` 时，`deepseek-flash` 的一轮思考可能超过 **50 秒**，网关在 50 s 处把连接切断（客户端表现为 `agent.network.invalidJson` + `terminated`，重试两次都在同一秒数失败）；设 `--max-output-tokens 8000` 之后同一需求 20 轮跑完。**这不是 harness 的 bug**，但长思考 + 慢网络下它是真实的可用性风险：默认不设上限（D-37）的前提是"连接不会被掐"，而那个前提不总是成立 |
 | **LLM 空间推理弱**：看不出自己错在哪，反复改不对 | 高 | ① 坐标标尺/坐标轴/高亮叠加层 ② 优先 ASCII slice 做精确编辑 ③ 用确定性几何工具（extrude/symmetrize）替代逐格操作 ④ 小体量起步（v0 工区 ≤ 64³）⑤ 批评者模型二次评审 |
 | **成本失控**：截图多、轮次多 | 高 | 内容寻址缓存、contact sheet 合并视图、图像剪枝、prompt 缓存、模型分级、硬预算上限 |
 | **方块 state 错误**（楼梯朝向、栅栏不连） | 中 | 自动推断 + `fix_states` 后处理 + linter 检查 + 专门测试 |

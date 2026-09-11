@@ -27,7 +27,8 @@ export const zhCN = {
   },
   viewport: {
     status: '视角 方位 {{az}}° / 仰角 {{el}}° · {{ms}}',
-    hint: '拖动旋转 · 滚轮缩放 · 双击恢复自动取景',
+    statusAt: '视角 方位 {{az}}° / 仰角 {{el}}° · 位置 {{pos}} · {{ms}}',
+    hint: 'WASD 移动（Shift 加速）· 拖动原地转视角 · 滚轮缩放 · 双击回到自动取景',
     camera: '机位',
     empty: '空世界 —— 点「生成示例」看一座房子，或在右边描述你想造的建筑',
     angles: {

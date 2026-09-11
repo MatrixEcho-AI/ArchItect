@@ -623,6 +623,70 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       blocked ? action !== null : true,
       blocked ? '被挡且有打开设置的按钮' : '没有被挡（模型已配置）',
     );
+
+    // **WASD 真的在移动相机**。
+    // 断言的是那行隐藏的状态行——它是渲染进程里唯一读得到的相机快照，相机落地之后
+    // 会写上"位置 x,y,z"。所以走一步、再走一步，那三个数必须跟着变。
+    // 走的是真实的键盘事件路径（window 上的 keydown/keyup），不是调内部函数。
+    const status = document.querySelector('#status');
+    const walk = async (key, steps) => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      for (let i = 0; i < steps; i++) await frames();
+      window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
+      await frames();
+      return status === null ? '' : status.textContent;
+    };
+    const positionOf = (text) => {
+      const found = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
+      return found === null ? null : found.slice(1).join(',');
+    };
+    const afterW = positionOf(await walk('w', 8));
+    const afterA = positionOf(await walk('a', 8));
+    check(
+      'wasd-move',
+      afterW !== null && afterA !== null && afterW !== afterA,
+      '相机位置 ' + afterW + ' →（按 A 横移）' + afterA,
+    );
+
+    // **拖动 = 原地转头**：角度变了，位置一动不动。
+    // 以前拖动是"绕着画面中心转"（位置在这套语义里根本不存在），现在相机有一个真实位置，
+    // 拖动只改朝向——所以这条断言同时钉住了"拖动仍然能转"和"转的时候人不跟着飞"。
+    const poseOf = (text) => {
+      const angles = /(-?\\d+)°[^\\d-]*(-?\\d+)°/.exec(text);
+      const at = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
+      return {
+        azimuth: angles === null ? null : angles[1],
+        position: at === null ? null : at.slice(1).join(','),
+      };
+    };
+    const overlay = document.querySelector('#overlay');
+    const rect = overlay.getBoundingClientRect();
+    const send = (type, x, y) =>
+      overlay.dispatchEvent(
+        new PointerEvent(type, {
+          pointerId: 7,
+          button: 0,
+          buttons: type === 'pointerup' ? 0 : 1,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+        }),
+      );
+    const beforeTurn = poseOf(status === null ? '' : status.textContent);
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    send('pointerdown', cx, cy);
+    for (let i = 1; i <= 4; i++) send('pointermove', cx + i * 12, cy + i * 3);
+    send('pointerup', cx + 48, cy + 12);
+    await frames();
+    const afterTurn = poseOf(status === null ? '' : status.textContent);
+    check(
+      'drag-turn-in-place',
+      beforeTurn.position !== null &&
+        beforeTurn.position === afterTurn.position &&
+        beforeTurn.azimuth !== afterTurn.azimuth,
+      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°，位置保持在 ' + beforeTurn.position,
+    );
     return results;
   })()`
   const raw = (await target.webContents.executeJavaScript(script)) as GuiCheck[]

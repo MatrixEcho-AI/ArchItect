@@ -2,7 +2,7 @@ import { forEachBox, forEachExtrude, forEachLine, forEachPlane, WorldStore } fro
 import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
-import { cameraBasis, fitCamera, presetAngles, projectPoint, VIEW_PRESETS } from '../src/camera.js'
+import { cameraBasis, basisFromAngles, clampFreeElevation, fitCamera, presetAngles, projectPoint, VIEW_PRESETS } from '../src/camera.js'
 import { Canvas, encodePng } from '../src/canvas.js'
 import { createFallbackColorResolver, fallbackAppearance } from '../src/colors.js'
 import { renderIsometric } from '../src/isometric.js'
@@ -153,6 +153,45 @@ describe('相机', () => {
     const p = projectPoint(cam.target, cam, cameraBasis(cam))
     expect(p.x).toBeCloseTo(100)
     expect(p.y).toBeCloseTo(50)
+  })
+
+  it('**沿视线挪动画面中心不改成像**（自由相机的整套换算都建立在这一条上）', () => {
+    const spec = (target: { x: number; y: number; z: number }) => ({
+      target,
+      azimuth: 35,
+      elevation: 20,
+      scale: 4,
+      width: 200,
+      height: 120,
+    })
+    const camera = spec({ x: 8, y: 6, z: 8 })
+    const forward = cameraBasis(camera).forward
+    // 沿视线挪 1000 格：屏幕坐标逐点相同，只有深度不同
+    const shifted = spec({
+      x: 8 + forward.x * 1000,
+      y: 6 + forward.y * 1000,
+      z: 8 + forward.z * 1000,
+    })
+    for (const point of [
+      { x: 0, y: 0, z: 0 },
+      { x: 15, y: 9, z: 3 },
+      { x: -4, y: 30, z: 12 },
+    ]) {
+      const a = projectPoint(point, camera, cameraBasis(camera))
+      const b = projectPoint(point, shifted, cameraBasis(shifted))
+      expect(b.x).toBeCloseTo(a.x, 6)
+      expect(b.y).toBeCloseTo(a.y, 6)
+    }
+  })
+
+  it('交互相机允许抬头（负仰角），但夹在 ±89', () => {
+    expect(clampFreeElevation(-40)).toBe(-40)
+    expect(clampFreeElevation(120)).toBe(89)
+    expect(clampFreeElevation(-120)).toBe(-89)
+    // 抬头时 up 仍然是"往上的"（画面不会翻个个儿）
+    const { forward, up } = basisFromAngles(0, -45)
+    expect(forward.y).toBeGreaterThan(0)
+    expect(up.y).toBeGreaterThan(0)
   })
 
   it('fitCamera 留出边距且内容不贴边（回归：Math.max 吃掉了 margin）', () => {

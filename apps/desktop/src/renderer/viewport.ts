@@ -34,6 +34,7 @@ import {
   buildOpaqueTileTable,
   cameraBasis,
   Canvas as OverlayCanvas,
+  clampFreeElevation,
   drawOverlays,
   fitCamera,
   tileIndex,
@@ -64,11 +65,14 @@ export interface ViewportCamera {
   /** 每格像素。0 或负数表示自动取景。 */
   scale: number
   /**
-   * 注视点（世界坐标）。省略 = 内容包围盒中心。
+   * **画面中心**（世界坐标）。省略 = 内容包围盒中心。
    *
-   * 拖动只改角度，注视点始终是内容中心——那对"绕着建筑看"够用，
-   * 但表达不了"盯着这个檐口看"。有了它，机位面板才能把 `eye`→`lookAt`
-   * 这类请求原样装进交互相机（正交投影下距离不影响成像，所以 eye 只提供方向）。
+   * 它和角度一起决定成像：正交投影下，观察方向 + 落在画面正中的那个点就是全部，
+   * 相机沿视线挪多远都不改画面（`applyCamera` 里那个 2000 正是这么用的）。
+   *
+   * 交互相机因此把"相机在哪"（`main.ts` 里的 `camera.eye`）自己算成这一个点传进来：
+   * 转头时位置不变、画面中心跟着转到新视线上，这就是"像游戏里一样原地转头"
+   * 与"绕着目标转"的全部差别（前者画面会平移，后者不会）。
    */
   target?: [number, number, number]
 }
@@ -295,7 +299,7 @@ export class Viewport implements SceneViewport {
       min: { x: bounds.min[0], y: bounds.min[1], z: bounds.min[2] },
       max: { x: bounds.max[0], y: bounds.max[1], z: bounds.max[2] },
     }
-    const angles = { azimuth: view.azimuth, elevation: clamp(view.elevation, 1, 89) }
+    const angles = { azimuth: view.azimuth, elevation: clampFreeElevation(view.elevation) }
     // 自动取景由渲染层的 `fitCamera` 算——和软件光栅器、和模型截图用的是同一份，
     // 所以三方看到的取景完全一致
     const fitted = fitCamera(box, angles, this.width, this.height)
@@ -655,5 +659,3 @@ function shadeFor(nx: number, ny: number, nz: number): number {
   if (az >= ax) return FACE_SHADE.z
   return FACE_SHADE.x
 }
-
-const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)

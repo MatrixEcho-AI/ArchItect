@@ -21,6 +21,7 @@ import {
   bakedColorTexturePack,
   Canvas,
   cameraBasis,
+  clampFreeElevation,
   drawOverlayGrid,
   drawOverlays,
   fitCamera,
@@ -148,7 +149,7 @@ export interface ShootRequest {
 export interface ViewportRequest {
   /** 水平角（度）。 */
   azimuth: number
-  /** 仰角（度），会被夹在 1..89 之间（90 度俯视时 up 向量退化）。 */
+  /** 仰角（度），会被夹在 ±89 之间（90 度时 up 向量退化；负值 = 抬头）。 */
   elevation: number
   /** 绕视线轴的滚转（度）。机位面板能设，所以这条兜底路径也得支持。 */
   roll?: number
@@ -903,7 +904,9 @@ export class StudioService {
   private viewportCamera(request: ViewportRequest): CameraSpec {
     const bounds = this.session.store.contentBounds() ?? this.session.store.volume
     const azimuth = request.azimuth
-    const elevation = Math.min(89, Math.max(1, request.elevation))
+    // 交互相机允许抬头（±89）：用户自己看的这台相机不是"把建筑拍进画面"，
+    // 它是"站在世界里看"，所以和模型那条路（1..89）用不同的夹法（见 FREE_ELEVATION_LIMIT）
+    const elevation = clampFreeElevation(request.elevation)
     const roll = request.roll ?? 0
     // `scale` 省略 = 自动取景：每帧都按当前角度重新取景，转起来不会跑出画面
     const fitted = fitCamera(bounds, { azimuth, elevation }, request.width, request.height)

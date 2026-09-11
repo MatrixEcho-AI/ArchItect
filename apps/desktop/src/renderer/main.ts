@@ -1,9 +1,11 @@
 import { initI18n, onLocaleChange, setLocale, t } from '@architect/i18n'
-import { eyeFromOrientation, orientationFromEye } from '@architect/render/browser'
+import { clampFreeElevation, eyeFromOrientation, fitCamera, orientationFromEye } from '@architect/render/browser'
 
 import { cacheShare } from './format.js'
+import { anchorOf, createFreeCamera, materialize, moveStep, turn } from './freecamera.js'
 import { SoftwareViewport, Viewport } from './viewport.js'
-import type { FrameSink, SceneViewport, SoftwareFrame } from './viewport.js'
+import type { FreeCamera } from './freecamera.js'
+import type { FrameSink, SceneViewport, SoftwareFrame, ViewportCamera } from './viewport.js'
 import type { MessageKey } from '@architect/i18n'
 import type { CameraSpec, OverlayOptions } from '@architect/render/browser'
 
@@ -485,31 +487,35 @@ class CanvasFrameSink implements FrameSink {
 /** 当前视口是不是软件实现（状态栏要说实话，模型截图那条路也跟着它走）。 */
 let softwareViewport = false
 
+/**
+ * 还没落地时，"画面中心"离相机多远——也用来给机位面板造一个能显示、能编辑的位置。
+ *
+ * 正交投影下**相机到画面中心的距离完全不影响成像**，所以这个数没有物理含义；
+ * 它只是让"位置"这一栏有东西可填。面板下方的提示把这一点写明了，
+ * 免得用户以为"放远了会变小"。
+ */
+const CAMERA_PROBE_DISTANCE = 64
+
 let viewport: SceneViewport | undefined
 /**
- * 相机状态。`scale <= 0` 表示自动取景，`target` 省略表示注视内容中心。
+ * 交互相机：**一台站在世界里的相机**（位置 + 自己的朝向，见 `freecamera.ts`）。
+ *
+ * `eye` 为空 = 还没落地（刚打开、选了预设机位）：画面中心交给自动取景，
+ * 第一次转头 / 按 WASD 时才落到一个具体位置上。
  *
  * **这是"用户在看的那个机位"**，和主进程会话里的相机（`set_camera` / 机位面板写的那份）
  * 是两个东西：拖动只改这一份，只有勾了「模型用这个机位」才会推过去。
  * 分开是有意的——用户随手转两下不该悄悄改掉模型下一张截图的机位。
  */
-const camera: { azimuth: number; elevation: number; roll: number; scale: number; target?: [number, number, number] } = {
-  azimuth: 45,
-  elevation: 35,
-  roll: 0,
-  scale: 0,
-}
+const camera: FreeCamera = createFreeCamera({ azimuth: 45, elevation: 35, focus: CAMERA_PROBE_DISTANCE })
 /** 机位面板有没有把机位同步给模型（会话相机）。 */
 let camShared = false
 /** 推机位给主进程的节流句柄：拖动时每个 pointermove 都推一次会白写几百次 IPC。 */
 let camPushTimer: number | undefined
-/**
- * 由角度反推"相机位置"时用的虚构距离。
- *
- * 正交投影下**相机到注视点的距离完全不影响成像**，所以这个数只是为了让面板上有个
- * 能显示、能编辑的位置。面板下方的提示把这一点写明了，避免用户以为"放远了会变小"。
- */
-const CAMERA_PROBE_DISTANCE = 64
+/** 视口的 CSS 尺寸。自动取景的倍率要按它算（见 `fittedScale`）。 */
+let viewSize = { width: 1, height: 1 }
+/** 相机换过工程没有：换了就回到"框住内容"的默认取景（见 `renderPanel`）。 */
+let cameraProjectKey: string | undefined
 
 /** 预设机位的角度由主进程给（`VIEW_PRESETS` 是唯一真相）。 */
 const presetAngles = new Map<string, { azimuth: number; elevation: number }>()
@@ -535,11 +541,13 @@ function applyPreset(name: string): void {
   const angles = presetAngles.get(name)
   if (angles === undefined) return
   camera.azimuth = angles.azimuth
-  camera.elevation = angles.elevation
+  camera.elevation = clampFreeElevation(angles.elevation)
   camera.roll = 0
   camera.scale = 0
-  // 预设机位一律回到"看内容中心"，否则上一轮定的注视点会把建筑挤到画面外
-  camera.target = undefined
+  // 预设机位一律回到**"框住内容"**：位置与注视点都丢掉，否则上一轮定的注视点会把建筑挤到画面外
+  delete camera.eye
+  delete camera.target
+  camera.focus = CAMERA_PROBE_DISTANCE
   // 换机位就丢掉"用户手填的 eye"——方向变了，那三个数不再代表当前朝向
   camTypedEye = undefined
 }
@@ -552,9 +560,10 @@ function applyPreset(name: string): void {
 //    打字时不刷新——否则每敲一个字符都被改写回去。
 // 2. `eye` 只提供**方向**。正交投影下距离不影响成像（D-46），所以由角度反推出的
 //    `eye` 与用户填的 `eye` 不在同一条射线上也没关系，只有方向一致就够了。
-// 3. 勾了「模型用这个机位」才推给主进程。推的是**角度 + 注视点**，不是 eye——因为
-//    会话相机是角度语义的（`set_camera` 也一样），eye 反解成角度是信息无损的，
-//    反过来则要凭空造一个距离。
+//    交互相机落地（`camera.eye`）之后这一栏显示的是**真实位置**——那正是 WASD 走到的那个点。
+// 3. 勾了「模型用这个机位」才推给主进程。推的是**角度 + 画面中心**；相机落了地就
+//    连 `eye` 一起推，因为会话相机能表达"站在这里看向那里"（`SessionCamera.eye/lookAt`），
+//    而只推角度的话，抬头（负仰角）会被模型那条路的 1..89 夹掉。
 
 /** 内容中心。和 `fitCamera` 用的是同一个式子（+1 是"方块占一格"的补偿）。 */
 function contentCenter(): [number, number, number] {
@@ -567,7 +576,74 @@ function contentCenter(): [number, number, number] {
   ]
 }
 
-const cameraTarget = (): [number, number, number] => camera.target ?? contentCenter()
+/** 画面中心。`undefined` = 相机还没落地，交给渲染层按内容自动取景。 */
+const cameraTarget = (): [number, number, number] | undefined => anchorOf(camera)
+
+/** 交给渲染层 / 拾取的那一份相机。 */
+function viewportCamera(): ViewportCamera {
+  const target = cameraTarget()
+  return {
+    azimuth: camera.azimuth,
+    elevation: clampFreeElevation(camera.elevation),
+    roll: camera.roll,
+    scale: camera.scale,
+    ...(target !== undefined ? { target } : {}),
+  }
+}
+
+/**
+ * 站多远：内容包围球半径。
+ *
+ * 它只影响**转头的摆动幅度**——正交投影下相机沿视线挪多远都不改成像，所以它不代表
+ * "离得多近"。取"内容外面一倍身位"：转头 45° 画面大约移过半个建筑，
+ * 和站在房子外面回头的手感一致（固定的格数在 8 格的小屋和 200 格的城堡上会差一个量级）。
+ */
+function standingDistance(): number {
+  const bounds = current?.bounds
+  if (bounds === undefined) return CAMERA_PROBE_DISTANCE
+  const [dx, dy, dz] = [
+    bounds.max[0] - bounds.min[0] + 1,
+    bounds.max[1] - bounds.min[1] + 1,
+    bounds.max[2] - bounds.min[2] + 1,
+  ]
+  return Math.max(4, Math.hypot(dx, dy, dz) / 2)
+}
+
+/**
+ * 把相机**落到一个具体位置上**（第一次转头 / 按 WASD 时）。
+ *
+ * 落点之后，画面中心由"位置 + 视线"推导：转头是**原地**转（世界绕你摆），
+ * 而不是画面中心被内容中心钉住（那样就永远在绕建筑转）。落点这一下不改成像——
+ * 画面中心还是原来那个点，只是"我站在哪儿"从此有了答案。
+ */
+function settleCamera(): void {
+  if (camera.eye !== undefined) return
+  camera.focus = standingDistance()
+  materialize(camera, cameraTarget() ?? contentCenter())
+  // 取景倍率也就此**定住**。自动取景是"按当前视角把内容塞进画面"，那是绕着看要的；
+  // 站着转头/走动时它会每帧重算，建筑于是忽大忽小。用户仍可用滚轮改，
+  // 双击、换预设、"按角度"应用都会回到自动取景（`scale = 0`）。
+  if (camera.scale <= 0) camera.scale = fittedScale()
+}
+
+/**
+ * 自动取景这一帧会算出多少「每格像素」。
+ *
+ * 滚轮第一次缩放必须从**当前看到的比例**开始。以前这里从 `1` 起步：小屋的自动取景
+ * 大约是 14 px/格，滚一格变成 1.16 px/格——建筑"啪"地缩成一个点。走两步再缩放时
+ * 这个跳变尤其难受（WASD 就是为了凑近看）。
+ */
+function fittedScale(): number {
+  const bounds = current?.bounds ?? current?.volume
+  if (bounds === undefined) return 1
+  const box = {
+    min: { x: bounds.min[0], y: bounds.min[1], z: bounds.min[2] },
+    max: { x: bounds.max[0], y: bounds.max[1], z: bounds.max[2] },
+  }
+  const angles = { azimuth: camera.azimuth, elevation: clampFreeElevation(camera.elevation) }
+  return fitCamera(box, angles, viewSize.width, viewSize.height).scale
+}
+
 const round1 = (value: number): string => String(Math.round(value * 10) / 10)
 const readNum = (input: HTMLInputElement, fallback: number): number => {
   const value = Number(input.value)
@@ -599,8 +675,10 @@ function cameraPanelBusy(): boolean {
 /** 相机 → 字段。 */
 function syncCameraFields(): void {
   if (cameraPanelBusy()) return
-  const target = cameraTarget()
-  const eye = eyeFromOrientation(
+  // 没落地时按角度反推一个"探针位置"（正交投影下它和真实位置成像一样，只是给面板一个数）；
+  // 落了地就是**真实位置**——WASD 走到哪儿，这一栏就是哪儿
+  const target = cameraTarget() ?? contentCenter()
+  const probe = eyeFromOrientation(
     {
       target: { x: target[0], y: target[1], z: target[2] },
       azimuth: camera.azimuth,
@@ -612,6 +690,7 @@ function syncCameraFields(): void {
     },
     CAMERA_PROBE_DISTANCE,
   )
+  const eye: [number, number, number] = camera.eye ?? [probe.x, probe.y, probe.z]
   camAz.value = round1(camera.azimuth)
   camElev.value = round1(camera.elevation)
   camRoll.value = round1(camera.roll)
@@ -625,7 +704,7 @@ function syncCameraFields(): void {
     Math.abs(typed.elevation - camera.elevation) < 1e-6 &&
     typed.lookAt.every((value, index) => Math.abs(value - target[index]!) < 1e-6)
   if (!keepTyped) camTypedEye = undefined
-  const eyeValues: [number, number, number] = keepTyped ? typed.eye : [eye.x, eye.y, eye.z]
+  const eyeValues: [number, number, number] = keepTyped ? typed.eye : eye
   const lookValues: [number, number, number] = keepTyped ? typed.lookAt : target
   camEyeFields.forEach((input, index) => {
     input.value = round1(eyeValues[index]!)
@@ -654,13 +733,17 @@ function applyCameraFields(): boolean {
         { x: look[0]!, y: look[1]!, z: look[2]! },
       )
       camera.azimuth = oriented.azimuth
-      camera.elevation = clamp(oriented.elevation, 1, 89)
+      camera.elevation = clampFreeElevation(oriented.elevation)
     } catch {
       // 两点重合，朝向无法确定
       setStatus(t('viewport.cam.invalid'))
       return false
     }
+    // "相机放这儿、盯着那儿看"：位置落地，画面中心就是用户填的那个注视点。
+    // `focus` 记下这两点的距离，抬头/平移之后画面中心仍然落在同样远的地方
+    camera.eye = [eye[0]!, eye[1]!, eye[2]!]
     camera.target = [look[0]!, look[1]!, look[2]!]
+    camera.focus = Math.max(1, Math.hypot(look[0]! - eye[0]!, look[1]! - eye[1]!, look[2]! - eye[2]!))
     camTypedEye = {
       eye: [eye[0]!, eye[1]!, eye[2]!],
       lookAt: [look[0]!, look[1]!, look[2]!],
@@ -669,8 +752,11 @@ function applyCameraFields(): boolean {
     }
   } else {
     camera.azimuth = readNum(camAz, camera.azimuth)
-    camera.elevation = clamp(readNum(camElev, camera.elevation), 1, 89)
-    camera.target = undefined
+    camera.elevation = clampFreeElevation(readNum(camElev, camera.elevation))
+    // "按角度" = 从这些角度**框住内容**：位置与注视点都丢掉（和预设机位同一个语义）
+    delete camera.eye
+    delete camera.target
+    camera.focus = CAMERA_PROBE_DISTANCE
     camTypedEye = undefined
   }
 
@@ -683,19 +769,23 @@ function applyCameraFields(): boolean {
 /**
  * 把当前机位推给主进程的会话——**模型接下来的截图就从这里看**。
  *
- * 只在勾了「模型用这个机位」时推，并且节流。推的是角度 + 注视点（见本节开头第 3 条）。
+ * 只在勾了「模型用这个机位」时推，并且节流。推的是角度 + 画面中心；相机落了地
+ * 就连 `eye` 一起推（见本节开头第 3 条）——只推角度的话，抬头的负仰角会被
+ * 模型那条路的 1..89 夹掉，"我看到的"和"模型看到的"就对不上了。
  */
 function pushCamera(): void {
   if (!camShared) return
   if (camPushTimer !== undefined) window.clearTimeout(camPushTimer)
   camPushTimer = window.setTimeout(() => {
     camPushTimer = undefined
+    const target = cameraTarget()
     void window.architect
       .setCamera({
         azimuth: camera.azimuth,
         elevation: camera.elevation,
         roll: camera.roll,
-        ...(camera.target !== undefined ? { lookAt: camera.target } : {}),
+        ...(camera.eye !== undefined ? { eye: camera.eye } : {}),
+        ...(target !== undefined ? { lookAt: target } : {}),
         ...(camera.scale > 0 ? { scale: camera.scale } : {}),
       })
       // 把主进程回来的状态画出来，「模型机位」那一行才会立刻变——
@@ -860,11 +950,7 @@ async function editAt(event: PointerEvent): Promise<void> {
   if (rect.width < 1 || rect.height < 1) return
   // 相机参数与画面用的是同一套口径：CSS 像素尺寸 + 渲染进程里的相机状态
   const hit = await window.architect.pick({
-    azimuth: camera.azimuth,
-    elevation: camera.elevation,
-    roll: camera.roll,
-    ...(camera.scale > 0 ? { scale: camera.scale } : {}),
-    ...(camera.target !== undefined ? { target: camera.target } : {}),
+    ...viewportCamera(),
     width: Math.floor(rect.width),
     height: Math.floor(rect.height),
     x: event.clientX - rect.left,
@@ -993,7 +1079,9 @@ function requestFrame(draft = false): void {
     // 叠在一起。清画布是渲染器自己的事（它按 clearColor 擦），不该指望提示条去盖
     // （`.empty` 就是 positioned 的一行字，没有背景）。
     empty.classList.toggle('show', current.blocks === 0)
-    viewport.render(camera, { draft: isDraft })
+    viewport.render(viewportCamera(), { draft: isDraft })
+    // 自动取景的真实倍率：滚轮第一次缩放要从"现在看到的比例"开始，不能从 1 开始
+    lastScale = fittedScale()
     if (isDraft) {
       if (refineTimer !== undefined) window.clearTimeout(refineTimer)
       refineTimer = window.setTimeout(() => {
@@ -1003,12 +1091,21 @@ function requestFrame(draft = false): void {
     }
     // 机位面板是相机的**单向镜**：拖动时数字跟着变，但用户正在面板里打字时不覆盖
     syncCameraFields()
+    // 状态行是隐藏的（见 index.html），但它同时是**渲染进程里唯一能读到的相机快照**：
+    // 相机落了地就把位置一起写进去（自动化的"WASD 真的移动了相机"就断言这一行）
     setStatus(
-      t('viewport.status', {
-        az: camera.azimuth.toFixed(0),
-        el: camera.elevation.toFixed(0),
-        ms: softwareViewport ? 'CPU' : 'GPU',
-      }) + (camShared ? ` · ${t('viewport.cam.sharedShort')}` : ''),
+      (camera.eye !== undefined
+        ? t('viewport.statusAt', {
+            az: camera.azimuth.toFixed(0),
+            el: camera.elevation.toFixed(0),
+            pos: camera.eye.map((value) => Math.round(value)).join(','),
+            ms: softwareViewport ? 'CPU' : 'GPU',
+          })
+        : t('viewport.status', {
+            az: camera.azimuth.toFixed(0),
+            el: camera.elevation.toFixed(0),
+            ms: softwareViewport ? 'CPU' : 'GPU',
+          })) + (camShared ? ` · ${t('viewport.cam.sharedShort')}` : ''),
     )
   })
 }
@@ -1061,8 +1158,11 @@ function wireViewport(): void {
     // 往右拖 = 场景往右转；向下拖 = 从上往下看。
     // 灵敏度按视口高度归一：固定 °/px 在窄窗口里会转得太快。
     const unit = 360 / Math.max(320, surface.clientHeight)
-    camera.azimuth -= dx * unit
-    camera.elevation = clamp(camera.elevation + dy * unit * 0.8, 1, 89)
+    // **先把相机落到一个位置上**：视角从此相对**相机自己**转（世界绕你摆）。
+    // 不落点的话画面中心一直钉在内容中心，转起来就还是"绕建筑转"——就是这一步之前的行为
+    settleCamera()
+    turn(camera, dx, dy, unit)
+    pushCamera()
     requestFrame(true)
   })
 
@@ -1097,10 +1197,15 @@ function wireViewport(): void {
   surface.addEventListener('dblclick', () => {
     camera.scale = 0
     camera.roll = 0
-    // 注视点也一起回内容中心：双击是"我转晕了，回到默认取景"
-    camera.target = undefined
+    // 位置与注视点一起丢掉：双击是"我转晕了，回到默认取景"（画面重新框住内容）
+    delete camera.eye
+    delete camera.target
+    camera.focus = CAMERA_PROBE_DISTANCE
+    camTypedEye = undefined
     requestFrame()
   })
+
+  wireWalk();
 
   // 容器尺寸变化 → 重设绘制尺寸。用 ResizeObserver 而不是 window.resize：
   // 侧栏折叠、对话框打开也会改变视口大小，而 window 尺寸没变。
@@ -1108,10 +1213,79 @@ function wireViewport(): void {
     if (viewport === undefined) return
     const rect = overlayCanvas.getBoundingClientRect()
     if (rect.width < 1 || rect.height < 1) return
+    viewSize = { width: rect.width, height: rect.height }
     viewport.resize(rect.width, rect.height, window.devicePixelRatio || 1)
     requestFrame()
   })
   observer.observe(overlayCanvas)
+}
+
+/**
+ * **WASD 移动视角**（像游戏里那样走）。
+ *
+ * 三件事决定了它为什么要单独一段：
+ *
+ * 1. **按住就连续走**，所以是个按帧推进的循环。键盘自动重复（~30 Hz，还有一段延迟）
+ *    和帧率对不上，靠它驱动会一顿一顿的。
+ * 2. **打字时不抢**。焦点在输入框/文本域/下拉框里（下拉框也吃字母键）就完全不接。
+ * 3. **方向取自相机自己**：W/S 沿视线前后（抬头按 W 就是上升），A/D 水平横移。
+ *    速度随内容大小走（见 `standingDistance`），Shift 加速——不然 200 格的城堡要走到天荒地老。
+ */
+function wireWalk(): void {
+  const held = new Set<string>()
+  let frame: number | undefined
+  let last = 0
+
+  const typing = (target: EventTarget | null): boolean =>
+    target instanceof HTMLElement &&
+    (target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target.isContentEditable)
+
+  const step = (now: number): void => {
+    if (held.size === 0) {
+      frame = undefined
+      // 补一张全分辨率的（循环里出的都是草稿帧，软件视口那半分辨率得换掉）
+      requestFrame()
+      pushCamera()
+      return
+    }
+    // 掉帧时不要把一步跳出去（切回来时 dt 会很大）
+    const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
+    last = now
+    settleCamera()
+    const speed = (held.has('shift') ? 3 : 1) * Math.max(6, standingDistance() * 0.5)
+    moveStep(camera, held, dt, speed)
+    viewSelect.value = 'free'
+    requestFrame(true)
+    frame = requestAnimationFrame(step)
+  }
+
+  window.addEventListener('keydown', (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (typing(event.target)) return
+    const key = event.key.toLowerCase()
+    if (key !== 'w' && key !== 'a' && key !== 's' && key !== 'd' && key !== 'shift') return
+    // 系统自动重复会把同一个键反复送进来：已经在走就什么都不用做
+    if (key === 'shift') {
+      held.add('shift')
+      return
+    }
+    if (held.has(key)) return
+    held.add(key)
+    if (frame === undefined) {
+      last = performance.now()
+      frame = requestAnimationFrame(step)
+    }
+  })
+
+  const release = (event: KeyboardEvent): void => {
+    held.delete(event.key.toLowerCase())
+  }
+  window.addEventListener('keyup', release)
+  // 窗口失去焦点时按键的 keyup 收不到（切出去松的手），不清掉就会一直往前走
+  window.addEventListener('blur', () => held.clear())
 }
 
 /**
@@ -1252,6 +1426,18 @@ function renderPanel(next: StudioState): void {
   // 提示是一次性的（主进程读过就清），所以在这里留住，别让它被下一次状态刷新冲掉
   if (next.notice !== undefined) showNotice(next.notice)
   renderRecovery(next.recovery)
+
+  // **换工程 = 相机回到"框住内容"的默认取景**。位置是真实的点了，不重置的话
+  // 上一座建筑里走到的那个位置会把新打开的东西留在画面外，看上去像"打开失败了"。
+  const projectKey = `${next.name}\u0000${next.projectPath ?? ''}`
+  if (projectKey !== cameraProjectKey) {
+    cameraProjectKey = projectKey
+    delete camera.eye
+    delete camera.target
+    camera.focus = CAMERA_PROBE_DISTANCE
+    camTypedEye = undefined
+    syncCameraFields()
+  }
 
   // **只留"这是什么工程、走到第几步、有多少方块"。** 调色板条目数、Minecraft 版本、
   // 包围盒、模型机位、纹理来源五行按要求**移除**了：它们是诊断信息，不是设计时要看的东西，

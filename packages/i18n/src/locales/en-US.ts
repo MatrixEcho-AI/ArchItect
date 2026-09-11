@@ -30,7 +30,8 @@ export const enUS = {
   },
   viewport: {
     status: 'azimuth {{az}}°  elevation {{el}}° · {{ms}}',
-    hint: 'Drag to rotate · wheel to zoom · double-click to reset framing',
+    statusAt: 'azimuth {{az}}°  elevation {{el}}° · at {{pos}} · {{ms}}',
+    hint: 'WASD to move (Shift to sprint) · drag to turn in place · wheel to zoom · double-click to reset framing',
     camera: 'Camera',
     empty: 'Empty world — load the sample hut, or describe a building on the right',
     angles: {

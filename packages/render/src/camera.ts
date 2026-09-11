@@ -11,7 +11,12 @@ export interface CameraSpec {
   target: Vec3
   /** 水平角（度）。0 = 从 +Z 朝 -Z 看（正北方向看过去）。 */
   azimuth: number
-  /** 仰角（度）。90 = 正俯视，0 = 水平。 */
+  /**
+   * 仰角（度）。90 = 正俯视，0 = 水平，**负值 = 抬头**。
+   *
+   * 模型那条路（`cameraForShot`）会把它夹到 1..89（它是"把建筑拍进画面"）；
+   * 交互相机允许抬头，夹的范围是 `±FREE_ELEVATION_LIMIT`。
+   */
   elevation: number
   /**
    * 绕视线轴的滚转（度）。默认 0。
@@ -37,14 +42,36 @@ export interface CameraBasis {
 export const DEG = Math.PI / 180
 
 /**
+ * 交互相机（"自由视角"）能接受的仰角。
+ *
+ * 模型那条路（`cameraForShot`）夹在 **1..89**：它是"把建筑拍进画面"，抬头没有意义。
+ * 但**用户自己看的这台相机**要能抬头（负仰角）——像游戏里那样，"往上看屋檐"做不到的话，
+ * 相机就只是个转盘。上界仍是 89：正好 90° 时 up 会退化成一条线。
+ */
+export const FREE_ELEVATION_LIMIT = 89
+
+/** 把交互相机的仰角夹进 `±FREE_ELEVATION_LIMIT`。渲染、拾取、机位面板共用它。 */
+export function clampFreeElevation(value: number): number {
+  return Math.min(FREE_ELEVATION_LIMIT, Math.max(-FREE_ELEVATION_LIMIT, value))
+}
+
+/**
  * 由角度导出正交基。
  *
  * 相机位于 `target + dist * dir`，其中 `dir = (sin(az)cos(el), sin(el), cos(az)cos(el))`。
  * 于是 `az = 0, el = 0` 时相机在 +Z 看向 -Z，`el = 90` 时在正上方俯视。
+ *
+ * 交互相机（WASD 平移、原地转头）只有角度、没有一份完整的 `CameraSpec`，
+ * 所以真正的计算放在 `basisFromAngles` 里，这里是它 + 一个 spec 的包装。
  */
 export function cameraBasis(spec: CameraSpec): CameraBasis {
-  const az = spec.azimuth * DEG
-  const el = spec.elevation * DEG
+  return basisFromAngles(spec.azimuth, spec.elevation, spec.roll ?? 0)
+}
+
+/** 只由角度（与可选滚转）导出正交基。 */
+export function basisFromAngles(azimuth: number, elevation: number, roll = 0): CameraBasis {
+  const az = azimuth * DEG
+  const el = elevation * DEG
   const cosA = Math.cos(az)
   const sinA = Math.sin(az)
   const cosE = Math.cos(el)
@@ -53,7 +80,6 @@ export function cameraBasis(spec: CameraSpec): CameraBasis {
   const forward: Vec3 = { x: -sinA * cosE, y: -sinE, z: -cosA * cosE }
   const right = { x: cosA, y: 0, z: -sinA }
   const up = { x: -sinA * sinE, y: cosE, z: -cosA * sinE }
-  const roll = spec.roll ?? 0
   if (roll === 0) return { right, up, forward }
   // 绕视线轴转 right/up（forward 不变）。这是"相机侧倾"，不是"场景旋转"——
   // 两者在正交投影下等价，但写成转基向量才能和 projectPoint 对上。

@@ -41,6 +41,8 @@ export interface RecordedRequest {
   /** 发过来的工具名列表（本轮的）。 */
   toolsOffered: number
   stream?: unknown
+  /** 有没有要 `stream_options.include_usage`（流式的用量只在最后一个 chunk 里给）。 */
+  streamOptions?: boolean
 }
 
 export interface MockModelOptions {
@@ -152,6 +154,20 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
         res.writeHead(status, { 'content-type': 'application/json' })
         res.end(JSON.stringify(payload))
       }
+      /** 流式回包：`text/event-stream` + 切碎的 SSE 帧。 */
+      const sendStream = (payload: unknown): void => {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+        })
+        for (const text of sseFrames(payload, body?.stream_options !== undefined)) res.write(text)
+        res.end()
+      }
+      /** 按请求体决定怎么回：流式请求必须用 SSE 回，否则这个假端点就测不出真实协议。 */
+      const sendCompletion = (payload: unknown): void => {
+        if (body?.stream === true) sendStream(payload)
+        else send(200, payload)
+      }
 
       const authorized = typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ')
       if (options.apiKey !== undefined && req.headers.authorization !== `Bearer ${options.apiKey}`) {
@@ -197,6 +213,7 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
         assistantTurns,
         toolsOffered: (body.tools ?? []).length,
         stream: body.stream,
+        streamOptions: body.stream_options !== undefined,
       })
 
       // ── 刻意为难①：只认 max_completion_tokens ──────────────────────────────
@@ -227,8 +244,13 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
         return
       }
 
-      if (typeof body.stream !== 'boolean' || body.stream) {
-        violations.push(`stream 应当是 false，收到 ${String(body.stream)}`)
+      if (body.stream !== true) {
+        // 非流式 = "整个响应准备好才发第一个字节"：服务端思考多久，这条连接就得干等多久，
+        // 网关那堵墙就是这么撞上的（D-73）。所以这条现在是**必须**的。
+        violations.push(`stream 应当是 true，收到 ${String(body.stream)}`)
+      }
+      if (body.stream_options === undefined) {
+        violations.push('没要 stream_options.include_usage：流式的用量只在最后一个 chunk 里给')
       }
       if (body.tools !== undefined && (body.tools as unknown[]).length === 0) {
         violations.push('tools 是空数组；要么别发，要么发工具')
@@ -241,11 +263,10 @@ export async function startMockModel(options: MockModelOptions = {}): Promise<Mo
         finished = true
         // 收尾：没有工具调用 + 一段文本。**文本要放进 content**，
         // 放进 reasoning_content 的话循环拿到的 finalText 就是空的。
-        send(200, completion(options.finalText ?? '小屋建好了：云杉墙、橡木地板、南面一扇门。', [], promptTokens))
+        sendCompletion(completion(options.finalText ?? '小屋建好了：云杉墙、橡木地板、南面一扇门。', [], promptTokens))
         return
       }
-      send(
-        200,
+      sendCompletion(
         completion(
           turnIndex === 0 ? '先量一下尺度，再铺地板、起墙。' : '',
           step.tools.map((tool, index) => ({
@@ -281,6 +302,7 @@ interface ChatBody {
   max_tokens?: number
   max_completion_tokens?: number
   stream?: unknown
+  stream_options?: unknown
   tools?: unknown[]
   messages?: Array<{ role?: string; content?: unknown; reasoning_content?: string }>
 }
@@ -314,4 +336,64 @@ function completion(
       prompt_cache_hit_tokens: Math.floor(promptTokens / 2),
     },
   }
+}
+
+/** SSE 的一帧。**除最后一个 chunk 外，`usage` 一律是 `null`**——真实服务端就是这样。 */
+function frame(payload: unknown, usage: unknown = null): string {
+  return `data: ${JSON.stringify({ ...(payload as object), usage })}\n\n`
+}
+
+/**
+ * 把一个完整响应摊成 SSE 流——**故意切得很碎**。
+ *
+ * 正文切成两片、工具参数也切成两片：流式里最容易写错的就是"碎片要跨 chunk 拼起来"，
+ * 而只发整块的假端点根本测不出这个 bug（客户端不拼也能过）。
+ * 官方/DeepSeek 的形状是：`data: <json>\n\n` … 最后 `data: [DONE]\n\n`。
+ */
+function sseFrames(payload: unknown, withUsage: boolean): string[] {
+  const body = payload as {
+    choices: Array<{
+      message: {
+        content?: string | null
+        reasoning_content?: string
+        tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>
+      }
+      finish_reason: string
+    }>
+    usage: unknown
+  }
+  const choice = body.choices[0]!
+  const message = choice.message
+  const frames: string[] = []
+  if (typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0) {
+    frames.push(frame({ choices: [{ index: 0, delta: { reasoning_content: message.reasoning_content } }] }))
+  }
+  const content = typeof message.content === 'string' ? message.content : ''
+  if (content.length > 0) {
+    const half = Math.ceil(content.length / 2)
+    frames.push(frame({ choices: [{ index: 0, delta: { content: content.slice(0, half) } }] }))
+    frames.push(frame({ choices: [{ index: 0, delta: { content: content.slice(half) } }] }))
+  }
+  for (const [index, call] of (message.tool_calls ?? []).entries()) {
+    frames.push(
+      frame({
+        choices: [
+          { index: 0, delta: { tool_calls: [{ index, id: call.id, type: 'function', function: { name: call.function.name, arguments: '' } }] } },
+        ],
+      }),
+    )
+    const args = call.function.arguments
+    const cut = Math.max(1, Math.floor(args.length / 2))
+    frames.push(
+      frame({ choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: args.slice(0, cut) } }] } }] }),
+    )
+    frames.push(
+      frame({ choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: args.slice(cut) } }] } }] }),
+    )
+  }
+  frames.push(frame({ choices: [{ index: 0, delta: {}, finish_reason: choice.finish_reason }] }))
+  // 用量只在显式索取时才有，而且只有**这一帧**带对象（其余帧都是 `usage: null`）
+  if (withUsage) frames.push(`data: ${JSON.stringify({ choices: [], usage: body.usage })}\n\n`)
+  frames.push('data: [DONE]\n\n')
+  return frames
 }

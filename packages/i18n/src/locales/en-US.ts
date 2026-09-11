@@ -143,6 +143,10 @@ export const enUS = {
     stopped: 'Stopped',
     stoppedByUser: 'Stopped by the user',
     nudge: 'Completion gate: a passing verify() is still required',
+    failed: 'Request failed',
+    errorLine: '[ERROR] {{message}}',
+    truncated:
+      '[TRUNCATED] This turn hit the output token limit ({{out}} out) with an empty body and no tool call — the reasoning chain ate the budget. Be more specific and try again.',
     noProvider: 'No model configured yet. Set the endpoint and API key under Settings first.',
     behindTip:
       'You are viewing a historical revision. Letting the model edit now would discard the later steps — go back to the latest first (or redo up to it).',
@@ -553,6 +557,9 @@ export const enUS = {
     network: {
       requestFailed: 'Request to {{url}} failed: {{error}}',
       invalidJson: 'Response is not valid JSON: {{error}}',
+      truncated:
+        'The connection was cut before the response finished ({{error}}) — usually a turn that generated for too long.',
+      noStreamBody: 'The endpoint returned no streaming body (upstream may not support SSE, or a middlebox ate it)',
     },
     discover: {
       modelsInvalidJson: 'The response from {{url}} is not valid JSON',
@@ -563,7 +570,7 @@ export const enUS = {
       probeVision: 'vision probe',
     },
     openai: {
-      noChoices: 'Response has no choices[0].message',
+      chunkInvalid: 'A chunk in the stream is not valid JSON: {{chunk}}',
       toolArgsInvalid: 'Arguments for tool {{name}} are not valid JSON: {{args}}',
       authFailed: 'Authentication failed ({{status}}): {{detail}}',
       rateLimited: 'Rate limited (429): {{detail}}',

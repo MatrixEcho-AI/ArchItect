@@ -139,6 +139,10 @@ export const zhCN = {
     stopped: '已停止',
     stoppedByUser: '被用户停止',
     nudge: '完成闸门：还需要一次通过的 verify',
+    failed: '请求失败',
+    errorLine: '[ERROR] {{message}}',
+    truncated:
+      '[TRUNCATED] 这一轮输出撞上了 token 上限（输出 {{out}}），正文为空、工具调用为零——额度多半被思维链吃掉了。把要求说得更具体一点再试。',
     noProvider: '还没有配置模型。先到「设置」里填好接口地址与 API Key。',
     behindTip: '正在看历史版本。此时让模型继续改，它的第一笔就会把后面的步骤覆盖掉——先点「回到最新」（或重做到最新）。',
     turnDone: '本轮结束（{{reason}}）',
@@ -539,6 +543,8 @@ export const zhCN = {
     network: {
       requestFailed: '请求 {{url}} 失败：{{error}}',
       invalidJson: '响应不是合法 JSON：{{error}}',
+      truncated: '响应读到一半连接被掐断（{{error}}）——多半是这一轮生成太久被网关切断。',
+      noStreamBody: '端点没有返回流式响应体（上游可能不支持 SSE，或被中间层吃掉了）',
     },
     discover: {
       modelsInvalidJson: '{{url}} 的响应不是合法 JSON',
@@ -549,7 +555,7 @@ export const zhCN = {
       probeVision: '视觉探针',
     },
     openai: {
-      noChoices: '响应里没有 choices[0].message',
+      chunkInvalid: '流里的一个 chunk 不是合法 JSON：{{chunk}}',
       toolArgsInvalid: '工具 {{name}} 的参数不是合法 JSON：{{args}}',
       authFailed: '鉴权失败（{{status}}）：{{detail}}',
       rateLimited: '被限流（429）：{{detail}}',

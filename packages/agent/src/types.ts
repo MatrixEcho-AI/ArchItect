@@ -72,7 +72,7 @@ export class LlmError extends Error {
   override readonly name = 'LlmError'
   constructor(
     message: string,
-    readonly code: 'AUTH' | 'RATE_LIMIT' | 'BAD_REQUEST' | 'SERVER' | 'NETWORK' | 'PARSE',
+    readonly code: 'AUTH' | 'RATE_LIMIT' | 'BAD_REQUEST' | 'SERVER' | 'NETWORK' | 'PARSE' | 'TRUNCATED',
     readonly retryable: boolean,
   ) {
     super(message)

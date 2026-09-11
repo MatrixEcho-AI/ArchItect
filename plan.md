@@ -1599,7 +1599,7 @@ secrets.bin
 | 属性测试 | 任意 op 序列 → replay 结果 == 增量应用结果（**最重要的不变式**）；`undo` 后 worldHash 等于历史值；`symmetrize` 幂等；`fix_states` 幂等 |
 | **全量枚举测试** | 变换（旋转/镜像）在 **1.21.4 全部 27 866 个 state × 9 种变换**上：结果仍是同种方块的合法 state、在每个方块的区间上是**双射**、旋转四次/镜像两次回到原值。三条不变式用一次扫描同时验，约 1 秒 |
 | **文档一致性测试** | 工具参考与生成的版本**逐字节**对比（过期即失败）；格式规范里的路径常量、格式版本、manifest 字段名与代码核对 |
-| **协议级端到端** | 起一个按 DeepSeek/OpenAI 兼容协议回话的假端点，用真的 `architect build` 跑完整条链路，然后断言**服务器真正收到的字节**：鉴权头、`stream:false`、工具 schema、图像 part、思维链回传，以及 `max_tokens` 被 400 顶回后自动改用 `max_completion_tokens` |
+| **协议级端到端** | 起一个按 DeepSeek/OpenAI 兼容协议回话的假端点，用真的 `architect build` 跑完整条链路，然后断言**服务器真正收到的字节**：鉴权头、`stream:true` + `stream_options.include_usage`、工具 schema、图像 part、思维链回传，以及 `max_tokens` 被 400 顶回后自动改用 `max_completion_tokens`。假端点回的是**切碎的 SSE**（正文与工具参数都分片），不拼就过不去 |
 | **示例工程夹具** | `examples/forest-hut.mcai` 每次跑测试都真的打开一次，核对方块数、对话条数、截图字节。单元测试是拆开验的，它把链路串起来 |
 | 格式测试 | `.mcai` 往返读写 hash 相等；确定性打包；版本迁移（构造旧版 fixture 打开）；WAL 崩溃恢复（杀进程模拟） |
 | 渲染测试 | 软件等轴测后端 **golden PNG 逐字节比对**（`packages/render/test/golden/`，4 张：纯色等轴测+叠加层 / 正视 / 俯视 / 纹理路径逐像素采样）；WebGL 后端只做“非空白 + 尺寸正确”的弱断言。基线只吃**确定性输入**（哈希配色或烘好的平均色），所以不依赖 `minecraft-assets`、CI 上逐字节一致；重新签：`ARCHITECT_UPDATE_GOLDEN=1 pnpm test packages/render/test/golden.test.ts` |
@@ -1721,7 +1721,7 @@ secrets.bin
 
 | 风险 | 影响 | 对策 |
 |------|------|------|
-| **单轮输出不设上限时，连接可能被掐** | 中 | 实测：不设 `maxOutputTokens` 时，`deepseek-flash` 的一轮思考可能超过 **50 秒**，网关在 50 s 处把连接切断（客户端表现为 `agent.network.invalidJson` + `terminated`，重试两次都在同一秒数失败）；设 `--max-output-tokens 8000` 之后同一需求 20 轮跑完。**这不是 harness 的 bug**，但长思考 + 慢网络下它是真实的可用性风险：默认不设上限（D-37）的前提是"连接不会被掐"，而那个前提不总是成立 |
+| **单轮输出不设上限时，连接可能被掐** | 中 | 实测：**非流式**下不设 `maxOutputTokens` 时，`deepseek-flash` 的一轮思考可能超过 **50 秒**，网关在 50 s 处把连接切断（客户端表现为 `agent.network.invalidJson` + `terminated`，正文只读到一半）。根因是"整个响应准备好才发第一个字节"，所以**解法是流式**：请求恒定 `stream: true`（D-73），字节一直在流动，那堵墙不成立，输出也不再设任何上限。兜底两层：流没读出收尾（没有 `[DONE]`、没有 `finish_reason`）判成可重试的 `TRUNCATED`，原样重发一次；真失败时界面上有那条红色失败，而不是"发出去没反应" |
 | **LLM 空间推理弱**：看不出自己错在哪，反复改不对 | 高 | ① 坐标标尺/坐标轴/高亮叠加层 ② 优先 ASCII slice 做精确编辑 ③ 用确定性几何工具（extrude/symmetrize）替代逐格操作 ④ 小体量起步（v0 工区 ≤ 64³）⑤ 批评者模型二次评审 |
 | **成本失控**：截图多、轮次多 | 高 | 内容寻址缓存、contact sheet 合并视图、图像剪枝、prompt 缓存、模型分级、硬预算上限 |
 | **方块 state 错误**（楼梯朝向、栅栏不连） | 中 | 自动推断 + `fix_states` 后处理 + linter 检查 + 专门测试 |
@@ -1779,7 +1779,7 @@ secrets.bin
 | D-34 | **预算触顶是停止原因，不是错误** | `StopReason` 加 `budget`，并 emit 一个带用量与金额的 `budget` 事件；CLI 退出码 1、界面单独显示 | 用户填了 `$2` 就必须在 $2 停下——只记账不刹车比不记账更糟 |
 | D-35 | **给了美元上限就一定要把预算传下去** | 不在调用点判"有没有价格表"；没有价格表时由 `checkBudget` 判为越界并说明原因 | 在调用点悄悄丢掉，用户就会以为上限生效了（CLI 上刚踩过一次） |
 | D-36 | **假模型的断言建立在"服务器收到的字节"上** | 协议级端点记录每一次请求的字段名/鉴权/图像 part/思维链回显，测试断言的是这份日志 | 断言"我们以为发出去的东西"等于什么都没验 |
-| D-37 | **单轮输出上限默认不设** | 不发 `max_tokens`，让服务端用它自己的默认（思考模式 64K）；要压成本才用 `--max-output-tokens` 显式设 | 官方口径是"未设置时非思考模式默认 8K、思考模式默认 64K"，比 harness 猜的任何数字都准。真机事故：猜 8192 时思考模型把额度全烧在思维链上，`finish_reason` 回 `length`、正文空、工具调用零，而循环还报 `completed` |
+| D-37 | **单轮输出上限默认不设** | 不发 `max_tokens`，让服务端用它自己的默认（思考模式 64K）；要压成本才用 `--max-output-tokens` 显式设。用户写在设置文件里的值会被 `parseSettings` 原样保留 | 官方口径是"未设置时非思考模式默认 8K、思考模式默认 64K"，比 harness 猜的任何数字都准。真机事故：猜 8192 时思考模型把额度全烧在思维链上，`finish_reason` 回 `length`、正文空、工具调用零，而循环还报 `completed`（后半段已由 D-38 修掉）。**曾经**因为"不设上限 → 单轮生成太久 → 网关 50 s 处掐断"而把默认改成 8000，那条**已废弃**：真正的解法是 D-73 的流式，不是压缩输出 |
 | D-38 | **截断与空回复都不是"完成"** | `finish_reason === 'length'` 时先要模型收敛一次，续不动就以 `max_tokens` 停下并说明；空回复单独报 `empty` | "静默失败"是这里最坏的失败模式：用户会看到一个 0 方块的工程和一句"结束原因：completed"，不知道该查什么 |
 | D-39 | **默认渲染是纹理渲染，不是平均色** | 走 vendored 的 prismarine mesher（真实方块模型 + 逐面 UV + 原版方向明暗 + AO）；`--plain` 才退回纯色 | 平均色会**抹掉材料差异**：`stone_bricks` 与 `stone` 的平均色只差 4/255，`smooth_quartz` 与 `quartz_bricks` 差 2/255。模型在截图上分不出自己砌的是哪一种，"写后读"这道闸门在材料这件事上等于瞎的 |
 | D-40 | **几何用原版方块模型，不用碰撞盒** | §7.0.3 改判：几何来源从 `blockCollisionShapes` 换成 `blocksStates` + `blocksModels` | 碰撞盒不是视觉形状：栅栏没有横杆、玻璃板不连成片、楼梯只是两块盒子。渲染给 LLM 看的图，几何错了就是在给错误的反馈 |
@@ -1815,6 +1815,7 @@ secrets.bin
 | D-70 | **往后退逐条反向，不清空重建** | `ReplaySession.seek(rev)` 在 `target < 当前` 时循环 `store.applyPatch(log.at(cur-1).patch.inverted())` 并让游标减一；向前仍然是逐条 `applyPatch` | 早先往后退是 `store.clear()` + 从头重放，它默认了“rev 0 = 空世界”。但导入的工程 rev 0 就是导进来的内容（D-58），于是用户撤销到最开始会把整栋建筑删掉——那是数据丢失，不是撤销。这个 bug 是写“导入后继续编辑”的闭环测试时撞出来的 |
 | D-71 | **设计笔记写在 manifest 里，而且必须替换式** | `update_notes`（`ctx.notes` 句柄）→ `AgentSession.designNotes` → `buildSystem()` 的 `[DESIGN NOTES]` 段；保存时进 `manifest.designNotes`，打开时交回新会话。**写入只影响下一轮**（本轮的系统提示已经发出去了，改它就是把前缀缓存打掉） | 笔记要活过 Regime B 的裁剪，所以它必须进**稳定前缀**而不是某条会被丢掉的工具结果；而替换式（而不是追加）是因为它进的是**每个请求**的前缀——追加会越滚越长，等于每轮多付一遍钱。上限 1200 字符、超了直接拒绝并报出当前长度，让模型自己删 |
 | D-72 | **golden 基线只签确定性输入** | `packages/render/test/golden/` 四张基线全部用 `plain` 哈希配色或**烘好的平均色**资源包渲染；纹理路径也走 `bakedColorTexturePack`，绝不引 `minecraft-assets` | 签名图的价值全在“人看过一眼、知道它为什么长这样”。如果输入依赖某个 npm 包的资源版本，那它一变基线就要重签，而“为什么这次签变了”会变成一件说不清的事——还不如让纹理那部分交给“逐位素采样是否真的在采样”这类性质断言去管 |
+| D-73 | **永远流式（SSE）：不给模型输出设任何上限** | 请求恒定 `stream: true` + `stream_options: {include_usage: true}`；provider 里自己拼 SSE（正文 / `reasoning_content` / 按 `index` 分片累加的工具参数 / usage chunk），拼不出收尾（没有 `[DONE]` 也没有 `finish_reason`）就判成**可重试的掐断**。中途试过"设 8000 上限堵住掐断"，**已废弃**：上限就是在限制模型输出 | §16 那条风险（单轮生成超过 50 s、网关切连接、客户端只拿到半截正文）的根因是**非流式**——"整个响应准备好才发第一个字节"，服务端思考多久这条连接就干等多久。流式下字节一直在流动，那堵墙不成立，于是**不需要**再用 `max_tokens` 去压缩输出（D-37 因此保持有效）。代价是 provider 复杂了一档，两个真机坑：① 工具参数是跨 chunk 的 JSON 碎片，必须按 `index` 累加到最后才解析；② **每个 chunk 都带 `usage`，且除最后一帧外都是 `null`**——第一版把判据写成 `!== undefined`，于是在 `null` 上读 `.prompt_tokens` 抛 TypeError，而那个 TypeError 又被"读流失败→TRUNCATED"的 catch 包装成"连接被掐断"，报了一个**假原因**、还白白重试两次。所以现在的分工是死的：**只有 `reader.read()` 本身的失败才是网络故障**，`consume()` 抛的一律原样上抛。假端点因此**故意回切碎的 SSE，并且每帧都带 `usage: null`**，不拼就过不去（`stream_options` 不被支持时自动去掉重发并记住，少一份用量也不能少一次回答） |
 
 ### 17.2 待定
 

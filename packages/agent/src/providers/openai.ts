@@ -74,6 +74,13 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   private learnedMaxTokensField: 'max_tokens' | 'max_completion_tokens' | undefined
   /** 这个模型是否返回过 `reasoning_content`——决定要不要在回传时带上它。 */
   private sawReasoningContent = false
+  /**
+   * 要不要在流式请求里要用量（`stream_options.include_usage`）。
+   *
+   * 默认要——没有它，流式的响应里**根本没有 usage**，成本表盘与缓存命中率会全变 0。
+   * 端点不认这个字段（400）时学一次，之后不再发。
+   */
+  private wantUsage = true
 
   constructor(private readonly config: OpenAiCompatibleConfig) {
     this.id = config.id ?? 'openai-compatible'
@@ -87,9 +94,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     let lastError: unknown
     for (const [index, field] of fields.entries()) {
       try {
-        const response = await this.send(this.buildBody(request, field))
-        this.learnedMaxTokensField = field
-        return this.parse(response)
+        return await this.streamOnce(request, field)
       } catch (error) {
         lastError = error
         const canRetry = index < fields.length - 1 && isWrongMaxTokensField(error, field)
@@ -97,6 +102,30 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError))
+  }
+
+  /**
+   * 发一次流式请求，把 SSE 拼回一个完整响应。
+   *
+   * 里面多一层 `stream_options` 的自适应：`include_usage` 是拿到用量（成本表盘、
+   * 缓存命中率）的唯一途径，但个别兼容端点不认这个字段。被 400 顶回来就**去掉它重发一次**
+   * 并记住——少一份用量也不能少一次回答。
+   */
+  private async streamOnce(
+    request: LlmRequest,
+    maxTokensField: 'max_tokens' | 'max_completion_tokens',
+  ): Promise<LlmResponse> {
+    try {
+      const parsed = await this.readStream(await this.send(this.buildBody(request, maxTokensField, this.wantUsage)))
+      this.learnedMaxTokensField = maxTokensField
+      return parsed
+    } catch (error) {
+      if (!this.wantUsage || !isUsageOptionRejection(error)) throw error
+      this.wantUsage = false
+      const parsed = await this.readStream(await this.send(this.buildBody(request, maxTokensField, false)))
+      this.learnedMaxTokensField = maxTokensField
+      return parsed
+    }
   }
 
   /**
@@ -115,13 +144,21 @@ export class OpenAiCompatibleProvider implements LlmProvider {
   private buildBody(
     request: LlmRequest,
     maxTokensField: 'max_tokens' | 'max_completion_tokens',
+    withUsage: boolean,
   ): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: this.model,
       messages: request.messages.map((message) => this.serialize(message)),
-      stream: false,
+      // **永远流式**。非流式意味着"整个响应准备好才发第一个字节"：服务端思考多久，
+      // 这条连接就得干等多久，网关那堵 50 s 的墙就是这么撞上的（plan §16）。
+      // 流式下字节一直在流动，那堵墙不成立——模型想多久想多久，输出也不设上限。
+      stream: true,
       ...(this.config.compat?.extraBody ?? {}),
     }
+    // 流式的用量只在最后一个 chunk 里给，而且**要显式索取**
+    // （`stream_options: { include_usage: true }`）。不发的后果是成本表盘与
+    // 缓存命中率永远是 0——那是这个 harness 最看重的两个数字。
+    if (withUsage) body.stream_options = { include_usage: true }
     // **不设上限时就不要发这个字段**，让服务端用它自己的默认值。
     //
     // DeepSeek 官方口径（api/create-chat-completion）：`max_tokens` 未设置时
@@ -200,7 +237,7 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     return { role: 'user', content: parts }
   }
 
-  private async send(body: Record<string, unknown>): Promise<unknown> {
+  private async send(body: Record<string, unknown>): Promise<Response> {
     const url = `${this.config.baseURL.replace(/\/+$/, '')}/chat/completions`
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (this.config.apiKey !== undefined && this.config.apiKey.length > 0) {
@@ -225,80 +262,197 @@ export class OpenAiCompatibleProvider implements LlmProvider {
       const text = await response.text().catch(() => '')
       throw classifyHttpError(response.status, text)
     }
-    try {
-      return await response.json()
-    } catch (error) {
-      throw new LlmError(
-        t('agent.network.invalidJson', { error: error instanceof Error ? error.message : String(error) }),
-        'PARSE',
-        false,
-      )
-    }
+    return response
   }
 
-  private parse(raw: unknown): LlmResponse {
-    const payload = raw as {
-      choices?: Array<{
-        message?: {
-          content?: string | null
-          reasoning_content?: string
-          tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>
+  /**
+   * 把 SSE 流拼回一个完整响应。
+   *
+   * 事件格式（OpenAI / DeepSeek 一致）：一行一个 `data: <json>`，空行分隔事件，
+   * 末尾 `data: [DONE]`。增量在 `choices[0].delta` 里：
+   *
+   * - `content` 是正文碎片，**直接拼**；
+   * - `reasoning_content` 是思维链碎片，**同样要拼**（DeepSeek 的推理模型要求的回传字段）；
+   * - `tool_calls` 按 `index` 分片到达，`function.arguments` 是**跨 chunk 的 JSON 碎片**，
+   *   必须按 index 累加到最后才 `JSON.parse`——这也是流式最容易被写错的一处；
+   * - `finish_reason` 只在最后那个带内容的 chunk 里，之前一直是 `null`。
+   *
+   * 用量要走 `stream_options.include_usage`，服务端才会在 `[DONE]` 之前补一个
+   * 只有 `usage` 的 chunk。
+   */
+  private async readStream(response: Response): Promise<LlmResponse> {
+    const body = response.body
+    if (body === null) {
+      // 没有 body 说明这个端点根本没打算流式回话（或者被中间层吃掉了）
+      throw new LlmError(t('agent.network.noStreamBody'), 'NETWORK', true)
+    }
+
+    const reader = body.getReader()
+    const decoder = new TextDecoder()
+    const text: string[] = []
+    const reasoning: string[] = []
+    /** index → 累加中的工具调用。`arguments` 是碎片，拼完才解析。 */
+    const calls = new Map<number, { id: string; name: string; args: string }>()
+    let usage: LlmUsage = { in: 0, out: 0 }
+    let finishReason: string | undefined
+    let sawDone = false
+    let cutOff = false
+    let buffer = ''
+
+    const consume = (line: string): void => {
+      // SSE 的其它行（`event:` / `id:` / `:keep-alive` 注释）一律忽略
+      if (!line.startsWith('data:')) return
+      const payload = line.slice(5).trim()
+      if (payload.length === 0) return
+      if (payload === '[DONE]') {
+        sawDone = true
+        return
+      }
+      let chunk: StreamChunk
+      try {
+        chunk = JSON.parse(payload) as StreamChunk
+      } catch {
+        // 服务端真的回了个坏 JSON：重试只会重复同一个错误
+        throw new LlmError(t('agent.openai.chunkInvalid', { chunk: payload.slice(0, 200) }), 'PARSE', false)
+      }
+      const choice = chunk.choices?.[0]
+      // `delta` 可能是 `{}`、也可能是 `null`（收尾那一帧），两种都要当"没有内容"处理
+      const delta = choice?.delta ?? undefined
+      if (delta !== undefined && delta !== null) {
+        if (typeof delta.content === 'string') text.push(delta.content)
+        if (typeof delta.reasoning_content === 'string') reasoning.push(delta.reasoning_content)
+        for (const part of delta.tool_calls ?? []) {
+          const index = typeof part.index === 'number' ? part.index : 0
+          const entry = calls.get(index) ?? { id: '', name: '', args: '' }
+          if (typeof part.id === 'string' && part.id.length > 0) entry.id = part.id
+          // 名字与参数都按官方 SDK 的口径**拼接**（它们都可能分片到达）
+          if (typeof part.function?.name === 'string') entry.name += part.function.name
+          if (typeof part.function?.arguments === 'string') entry.args += part.function.arguments
+          calls.set(index, entry)
         }
-        finish_reason?: string
-      }>
-      usage?: {
-        prompt_tokens?: number
-        completion_tokens?: number
-        prompt_cache_hit_tokens?: number
+      }
+      if (typeof choice?.finish_reason === 'string') finishReason = choice.finish_reason
+      // **`usage` 在每个 chunk 里都是 `null`，只有最后一个 chunk 才有对象**——这是
+      // DeepSeek / OpenAI 流式的正常形状，不是"缺字段"。判据必须是"是不是对象"，
+      // 用 `!== undefined` 会让 `null` 漏进来，然后在 `null` 上读 `prompt_tokens` 抛
+      // TypeError ——那个错误还会顺着下面的 catch 被包装成"连接被掐断"，
+      // 让人去查网络，而真凶是这里（真机上就这么翻过一次车）。
+      if (chunk.usage !== null && typeof chunk.usage === 'object') {
+        usage = {
+          in: chunk.usage.prompt_tokens ?? 0,
+          out: chunk.usage.completion_tokens ?? 0,
+        }
+        if (chunk.usage.prompt_cache_hit_tokens !== undefined) {
+          usage.cachedIn = chunk.usage.prompt_cache_hit_tokens
+        }
       }
     }
 
-    const choice = payload.choices?.[0]
-    if (choice?.message === undefined) {
-      throw new LlmError(t('agent.openai.noChoices'), 'PARSE', false)
+    for (;;) {
+      let done: boolean
+      let value: Uint8Array | undefined
+      try {
+        ;({ done, value } = await reader.read())
+      } catch (error) {
+        // **只有读流本身失败**才是网络故障（`terminated` / `ECONNRESET`）：可重试
+        await reader.cancel().catch(() => undefined)
+        throw new LlmError(
+          t('agent.network.truncated', { error: error instanceof Error ? error.message : String(error) }),
+          'TRUNCATED',
+          true,
+        )
+      }
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      // **只处理完整的行**：一个 chunk 的边界可能正好切在一行中间。
+      // 这里抛出的异常（比如 chunk 不是合法 JSON）是**服务端或我们自己的问题**，
+      // 不能再被包装成"连接被掐断"——那会把一个确定的错误说成一个网络的错。
+      let newline: number
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, '')
+        buffer = buffer.slice(newline + 1)
+        consume(line)
+      }
     }
-    const message = choice.message
+    buffer += decoder.decode()
+    const tail = buffer.trim()
+    if (tail.length > 0) {
+      // 流的最后一行**没有以换行结束**，说明它被砍断了。正常收尾的流最后一定是
+      // `data: [DONE]\n\n`，这时 buffer 里什么都不该剩。
+      // 按"可重试的掐断"处理，**不能**当成"服务端回了坏 JSON"——
+      // 后者不可重试，一次误判就白丢掉一整轮（而且用户看到的是个假原因）。
+      try {
+        consume(tail.replace(/\r$/, ''))
+      } catch (error) {
+        // 只有"这半行不是合法 JSON"才说明它是被砍断的；别的异常照原样抛
+        if (error instanceof LlmError && error.code === 'PARSE') cutOff = true
+        else throw error
+      }
+    }
+    reader.releaseLock()
+
+    // **没有 `[DONE]` 也没有 `finish_reason`** = 流在半路断了。这时候拿到的正文是
+    // 半截的，当成正常响应会让循环把半句话当成模型的最终答复。
+    if (cutOff || (!sawDone && finishReason === undefined)) {
+      throw new LlmError(t('agent.network.truncated', { error: 'stream ended early' }), 'TRUNCATED', true)
+    }
 
     const toolCalls: LlmToolCall[] = []
-    for (const [index, call] of (message.tool_calls ?? []).entries()) {
-      const name = call.function?.name
-      if (name === undefined) continue
+    for (const [index, entry] of [...calls.entries()].sort((a, b) => a[0] - b[0])) {
+      if (entry.name.length === 0) continue
       let args: unknown = {}
-      const rawArgs = call.function?.arguments ?? '{}'
       try {
-        args = rawArgs.trim().length === 0 ? {} : JSON.parse(rawArgs)
+        args = entry.args.trim().length === 0 ? {} : JSON.parse(entry.args)
       } catch {
         // 参数不是合法 JSON 时不要吞掉——把原文交给上层，它会回灌给模型重试
         throw new LlmError(
-          t('agent.openai.toolArgsInvalid', { name, args: rawArgs.slice(0, 200) }),
+          t('agent.openai.toolArgsInvalid', { name: entry.name, args: entry.args.slice(0, 200) }),
           'PARSE',
           false,
         )
       }
-      toolCalls.push({ id: call.id ?? `call_${index}`, name, args })
+      toolCalls.push({ id: entry.id.length > 0 ? entry.id : `call_${index}`, name: entry.name, args })
     }
 
-    const usage: LlmUsage = {
-      in: payload.usage?.prompt_tokens ?? 0,
-      out: payload.usage?.completion_tokens ?? 0,
-    }
-    if (payload.usage?.prompt_cache_hit_tokens !== undefined) {
-      usage.cachedIn = payload.usage.prompt_cache_hit_tokens
-    }
-
-    const response: LlmResponse = {
-      text: message.content ?? '',
+    const reasoningText = reasoning.join('')
+    const result: LlmResponse = {
+      text: text.join(''),
       toolCalls,
       usage,
-      finishReason: choice.finish_reason ?? (toolCalls.length > 0 ? 'tool_calls' : 'stop'),
+      finishReason: finishReason ?? (toolCalls.length > 0 ? 'tool_calls' : 'stop'),
     }
-    if (message.reasoning_content !== undefined) {
+    if (reasoningText.length > 0) {
       // 记住"这个模型会说思维链"，下次回传时要带上（'auto' 模式的判断依据）
       this.sawReasoningContent = true
-      response.reasoningContent = message.reasoning_content
+      result.reasoningContent = reasoningText
     }
-    return response
+    return result
   }
+}
+
+/** SSE 里的一个 chunk。字段名跟随 OpenAI / DeepSeek。 */
+interface StreamChunk {
+  choices?: Array<{
+    delta?: {
+      content?: string | null
+      reasoning_content?: string
+      tool_calls?: Array<{
+        index?: number
+        id?: string
+        function?: { name?: string; arguments?: string }
+      }>
+    } | null
+    finish_reason?: string | null
+  }>
+  /**
+   * **流里的每个 chunk 都带这个字段，而且除最后一个之外都是 `null`**。
+   * 类型上必须允许 `null`，否则就会写出"在 null 上读 prompt_tokens"那种 bug。
+   */
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    prompt_cache_hit_tokens?: number
+  } | null
 }
 
 /**
@@ -314,6 +468,17 @@ function isWrongMaxTokensField(
   if (!(error instanceof LlmError) || error.code !== 'BAD_REQUEST') return false
   const other = attempted === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens'
   return error.message.includes(other)
+}
+
+/**
+ * 这个 400 是不是"端点不认 `stream_options`"引起的。
+ *
+ * 只认正文里明确提到这个字段名的 400：别的参数错误不该被当成它，
+ * 否则我们会白白去掉用量、而且真正的错误信息也被盖住。
+ */
+function isUsageOptionRejection(error: unknown): boolean {
+  if (!(error instanceof LlmError) || error.code !== 'BAD_REQUEST') return false
+  return /stream_options|include_usage/i.test(error.message)
 }
 
 export function classifyHttpError(status: number, body: string): LlmError {

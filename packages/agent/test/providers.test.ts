@@ -50,6 +50,64 @@ interface StubResponse {
   status?: number
   json?: unknown
   text?: string
+  /**
+   * 原样发回去的 SSE 正文。省略时按 `json` 自动拼一个**等价的流**
+   * （正文/思维链/工具调用各一个 delta + 收尾 + 用量 + `[DONE]`），
+   * 于是老的用例不用改也能走流式路径。
+   */
+  sse?: string
+  /** 流发到一半就断（不给 `[DONE]`、不给 `finish_reason`），用来验"半路被掐"。 */
+  cutMidStream?: boolean
+}
+
+/** 把一个 `chat.completion` 对象摊成 SSE 流。 */
+function sseFromCompletion(json: unknown): string {
+  const object = json as {
+    choices?: Array<{ message?: Record<string, unknown>; finish_reason?: string }>
+    usage?: unknown
+  }
+  const choice = object.choices?.[0]
+  const message = choice?.message ?? {}
+  const delta: Record<string, unknown> = {}
+  if (typeof message['reasoning_content'] === 'string') delta['reasoning_content'] = message['reasoning_content']
+  if (typeof message['content'] === 'string') delta['content'] = message['content']
+  const toolCalls = message['tool_calls']
+  if (Array.isArray(toolCalls)) {
+    delta['tool_calls'] = toolCalls.map((call, index) => {
+      const entry = call as { id?: string; function?: { name?: string; arguments?: string } }
+      return {
+        index,
+        id: entry.id,
+        type: 'function',
+        function: { name: entry.function?.name, arguments: entry.function?.arguments },
+      }
+    })
+  }
+  const frames = [
+    JSON.stringify({ choices: [{ index: 0, delta }] }),
+    JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: choice?.finish_reason ?? 'stop' }] }),
+  ]
+  if (object.usage !== undefined) frames.push(JSON.stringify({ choices: [], usage: object.usage }))
+  return frames.map((frame) => `data: ${frame}\n\n`).join('') + 'data: [DONE]\n\n'
+}
+
+/** 把一段文本包成 fetch 响应，`body` 是真的可读流（provider 现在只走流式）。 */
+function streamResponse(status: number, sse: string, text: string, json: unknown): Response {
+  const bytes = new TextEncoder().encode(sse)
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  })
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body,
+    text: async () => text,
+    // 模型列表（`/models`）那条路仍然是普通 JSON，不是流
+    json: async () => json,
+  } as unknown as Response
 }
 
 function stubFetch(handler: (call: RecordedCall) => StubResponse): {
@@ -66,12 +124,10 @@ function stubFetch(handler: (call: RecordedCall) => StubResponse): {
     calls.push(call)
     const out = handler(call)
     const status = out.status ?? 200
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => out.json,
-      text: async () => out.text ?? JSON.stringify(out.json ?? ''),
-    } as unknown as Response
+    const text = out.text ?? JSON.stringify(out.json ?? '')
+    const sse = out.sse ?? (out.json !== undefined ? sseFromCompletion(out.json) : '')
+    const full = out.cutMidStream === true ? sse.slice(0, Math.max(1, Math.floor(sse.length / 2))) : sse
+    return streamResponse(status, full, text, out.json)
   }) as unknown as typeof fetch
   return { impl, calls }
 }
@@ -170,8 +226,9 @@ describe('预置模板（D-14 四项）', () => {
     expect(reversed?.model).toBe('deepseek-flash')
   })
 
-  it('**不设单轮输出上限**——不设才是不限制，猜小了会把思考模型的额度吃光（D-37）', () => {
-    // 8192 曾在真机上翻车：思维链把额度吃光，正文空、工具调用零，还被报成 completed
+  it('**默认不设单轮输出上限**——那堵 50 s 的墙已由流式解决，不再靠压缩输出去堵（D-37 / D-73）', () => {
+    // 一度用 8000 的上限去堵"生成太久被网关掐断"。现在请求永远流式（D-73），
+    // 字节一直在流动，墙不成立——所以上限这个字段只留给用户自己压成本。
     for (const preset of Object.values(PROVIDER_PRESETS)) {
       expect(preset.maxOutputTokens, preset.key).toBeUndefined()
     }
@@ -499,7 +556,7 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
     expect('max_completion_tokens' in (calls[2]?.body ?? {})).toBe(true)
   })
 
-  it('**默认不发 max_tokens**：不设才是不限制，服务端思考模式默认 64K（D-37）', async () => {
+  it('**默认不发 max_tokens**：上限只留给你自己压成本（D-37；那堵 50 s 的墙已由流式解决）', async () => {
     const { impl, calls } = stubFetch(() => chatOk('ok', 10))
     const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
       apiKey: 'k',
@@ -509,13 +566,139 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
     expect('max_tokens' in (calls[0]?.body ?? {})).toBe(false)
     expect('max_completion_tokens' in (calls[0]?.body ?? {})).toBe(false)
 
-    // 只有显式配了才发——它是"要压成本"时才用的旋钮
+    // 显式配了才发
     const capped = createProvider(
       { ...configFromPreset('deepseek', { model: 'deepseek-flash' }), maxOutputTokens: 4096 },
       { apiKey: 'k', fetchImpl: impl },
     )
     await capped.chat(base)
     expect(calls[1]?.body?.['max_tokens']).toBe(4096)
+  })
+
+  it('**永远流式**：请求体里 stream=true，并显式索取用量', async () => {
+    const { impl, calls } = stubFetch(() => chatOk('ok', 10))
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    await provider.chat(base)
+    // 非流式 = "整个响应准备好才发第一个字节"，服务端思考多久这条连接就干等多久——
+    // 网关那堵墙就是这么撞上的。流式下字节一直在流动，模型想多久想多久。
+    expect(calls[0]?.body?.['stream']).toBe(true)
+    // 流式的用量只在最后一个 chunk 里给，不要就等于成本表盘永远是 0
+    expect(calls[0]?.body?.['stream_options']).toEqual({ include_usage: true })
+  })
+
+  it('端点不认 stream_options 时，去掉它重发一次并记住（少一份用量也不能少一次回答）', async () => {
+    const { impl, calls } = stubFetch((call) => {
+      if (call.body?.['stream_options'] !== undefined) {
+        return { status: 400, text: '{"error":{"message":"Unsupported parameter: stream_options"}}' }
+      }
+      return chatOk('ok', 10)
+    })
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    expect((await provider.chat(base)).text).toBe('ok')
+    expect(calls).toHaveLength(2)
+    expect('stream_options' in (calls[1]?.body ?? {})).toBe(false)
+
+    // 学到之后不再试错
+    await provider.chat(base)
+    expect(calls).toHaveLength(3)
+    expect('stream_options' in (calls[2]?.body ?? {})).toBe(false)
+  })
+
+  it('SSE 分片跨 chunk 到达也能拼对（正文 / 思维链 / 工具参数都是碎片）', async () => {
+    // 手写一段"被网络切得很碎"的流：一行的中间、工具参数的中间都被切开
+    const frames = [
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"先想"}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"一下"}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"content":"好"}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"fill_","arguments":"{\\"from\\":[0,"}}]}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"name":"box","arguments":"0,0],\\"to\\":[1,1,1],\\"block\\":\\"minecraft:stone\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":123,"completion_tokens":45,"prompt_cache_hit_tokens":100}}\n\n',
+      'data: [DONE]\n\n',
+    ].join('')
+    // 每 7 个字节切一次，强行让 chunk 边界落在行中间
+    const bytes = new TextEncoder().encode(frames)
+    const pieces: Uint8Array[] = []
+    for (let i = 0; i < bytes.length; i += 7) pieces.push(bytes.slice(i, i + 7))
+    const impl = (async () => {
+      let index = 0
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream<Uint8Array>({
+          pull(controller) {
+            const piece = pieces[index++]
+            if (piece === undefined) {
+              controller.close()
+              return
+            }
+            controller.enqueue(piece)
+          },
+        }),
+      }
+    }) as unknown as typeof fetch
+
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    const response = await provider.chat(base)
+    expect(response.text).toBe('好')
+    expect(response.reasoningContent).toBe('先想一下')
+    // 参数是跨 chunk 拼起来的，拼完才是合法 JSON
+    expect(response.toolCalls).toEqual([
+      { id: 'call_1', name: 'fill_box', args: { from: [0, 0, 0], to: [1, 1, 1], block: 'minecraft:stone' } },
+    ])
+    expect(response.finishReason).toBe('tool_calls')
+    expect(response.usage).toEqual({ in: 123, out: 45, cachedIn: 100 })
+  })
+
+  it('**每个 chunk 的 `usage` 都是 `null`**（DeepSeek 的真实形状），不能当成错误', async () => {
+    // 真机事故：判据写成 `usage !== undefined` → `null` 漏进来 → 在 null 上读
+    // `prompt_tokens` 抛 TypeError → 又被包装成"连接被掐断"，于是所有人都去查网络。
+    // 只有**最后一个** chunk 才带用量对象，之前全是 `null`。
+    const sse = [
+      'data: {"choices":[{"index":0,"delta":{"reasoning_content":"先想"}}],"usage":null}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"content":"你好"}}],"usage":null}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"content":"，世界"}}],"usage":null}\n\n',
+      'data: {"choices":[{"index":0,"delta":null,"finish_reason":"stop"}],"usage":null}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":22}}\n\n',
+      'data: [DONE]\n\n',
+    ].join('')
+    const { impl } = stubFetch(() => ({ sse }))
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    const response = await provider.chat(base)
+    expect(response.text).toBe('你好，世界')
+    expect(response.reasoningContent).toBe('先想')
+    expect(response.finishReason).toBe('stop')
+    expect(response.usage).toEqual({ in: 11, out: 22 })
+  })
+
+  it('**流在半路断了**（没有 [DONE]、没有 finish_reason）判成可重试，不把半句话当回答', async () => {
+    const { impl } = stubFetch(() => ({ json: chatOk('这是一句被截断的话', 10).json, cutMidStream: true }))
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    await expect(provider.chat(base)).rejects.toMatchObject({ code: 'TRUNCATED', retryable: true })
+  })
+
+  it('流里的 chunk 真的坏掉时仍然**不可重试**（重试只是把确定的错误重复三遍）', async () => {
+    const { impl } = stubFetch(() => ({ sse: 'data: {这不是 json}\n\ndata: [DONE]\n\n' }))
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    await expect(provider.chat(base)).rejects.toMatchObject({ code: 'PARSE', retryable: false })
   })
 
   it('思考模式的开关与强度只在**显式配置**时才发（auto = 不传，用服务端默认）', async () => {
@@ -611,6 +794,33 @@ describe('设置文件读写（D-13 两条红线）', () => {
     expect(round.issues.filter((i) => !i.message.includes('缺'))).toEqual([])
     expect(round.settings.providers[0]?.id).toBe(settings.providers[0]?.id)
     expect(round.settings.ui).toEqual(settings.ui)
+  })
+
+  it('用户显式写的单轮输出上限要保留下来（以前会被静默丢掉）', () => {
+    // 默认不设（D-37）；但用户自己配了压成本的上限，就必须真的发出去——
+    // `parseProvider` 是重建对象的，早先这个字段在这一步被悄悄吃掉，
+    // 于是"我明明设了"变成一件没人能解释的事。
+    const bare = parseSettings({
+      version: 1,
+      activeId: 'DeepSeek',
+      providers: [{ id: 'DeepSeek', preset: 'deepseek', baseURL: 'https://api.deepseek.com', model: 'deepseek-flash' }],
+    })
+    expect(bare.settings.providers[0]?.maxOutputTokens).toBeUndefined()
+
+    const overridden = parseSettings({
+      version: 1,
+      activeId: 'DeepSeek',
+      providers: [
+        {
+          id: 'DeepSeek',
+          preset: 'deepseek',
+          baseURL: 'https://api.deepseek.com',
+          model: 'deepseek-flash',
+          maxOutputTokens: 32000,
+        },
+      ],
+    })
+    expect(overridden.settings.providers[0]?.maxOutputTokens).toBe(32000)
   })
 
   it('**丢掉手改 json 塞进来的明文密钥**并报告', () => {

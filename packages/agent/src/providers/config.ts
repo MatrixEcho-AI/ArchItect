@@ -200,11 +200,13 @@ export const PROVIDER_PRESETS: Readonly<Record<PresetKey, ProviderPreset>> = {
     ],
     fallbackModel: 'deepseek-chat',
     promptCache: 'auto',
-    // **故意不设 `maxOutputTokens`**：字段不发就是"不限制"，服务端思考模式
-    // 的默认输出上限是 64K（`reasoning_effort: max` 时 128K），比我们自己猜的准。
-    // 真机教训：猜 8192 时思考模型把额度全烧在思维链上，`finish_reason: length`、
-    // 正文空、工具调用零——钱花了，产出是零，而循环还报"completed"。
-    // 现在"发一个更小的上限"这件事从源头上消失，只剩"要不要显式限制"。
+    // **不设单轮输出上限**（D-37）。以前不设会撞上"单轮生成太久 → 网关 50 s 处切连接"
+    // （plan §16），一度用 8000 的上限去堵；**现在堵法换成了流式**（D-73）：
+    // 请求永远 `stream: true`，字节一直在流动，那堵墙不成立。
+    // 于是没有任何理由再压缩模型的输出——上限这个字段只留给"用户自己要压成本"的场合，
+    // 由设置文件或 CLI 的 `--max-output-tokens` 显式给。
+    // 用户可以在设置文件里按 provider 覆盖；`parseSettings` 会原样保留它。
+    // 官方价格页（元/百万 token），换算成美元见 `USD_PER_CNY`。
     // 官方价格页（元/百万 token），换算成美元见 `USD_PER_CNY`。
     // 高峰时段是北京时间周一至周五 9:00–12:00、14:00–18:00，高峰价正好是低谷的 2 倍。
     cost: {

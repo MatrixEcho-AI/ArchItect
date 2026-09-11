@@ -27,7 +27,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
  *
  * - 进程退出码 0，`.mcai` 真的写出来了；
  * - 里面的方块数据、编辑记录、**对话记录**、截图存档都在；
- * - 假模型那边**真正收到的字节**符合协议（鉴权头、字段名、图像 part、思维链回传、stream:false）；
+ * - 假模型那边**真正收到的字节**符合协议（鉴权头、字段名、图像 part、思维链回传、stream:true）；
  * - 适配层的 `'auto'` 模式真的把 `max_tokens` 换成了 `max_completion_tokens`。
  */
 describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
@@ -128,7 +128,10 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
     expect(chat.length).toBeGreaterThanOrEqual(5)
     for (const request of chat) {
       expect(request.authorized, '请求没带 Authorization 头').toBe(true)
-      expect(request.stream, 'stream 必须是 false').toBe(false)
+      // **永远流式**：非流式 = "整个响应准备好才发第一个字节"，服务端思考多久这条连接
+      // 就干等多久——网关那堵 50 s 的墙就是这么撞上的（D-73）
+      expect(request.stream, 'stream 必须是 true').toBe(true)
+      expect(request.streamOptions, '没要 stream_options.include_usage，用量会全是 0').toBe(true)
     }
     // 探针的文本/视觉请求不带工具，所以只在"带工具的请求"里至少有一个
     expect(chat.some((request) => request.toolsOffered > 0), '一次都没把工具 schema 发出去').toBe(true)

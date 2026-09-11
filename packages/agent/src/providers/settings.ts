@@ -208,6 +208,15 @@ function parseProvider(raw: unknown, index: number, issues: SettingsIssue[]): Pr
   if (entry['compat'] !== null && typeof entry['compat'] === 'object') {
     config.compat = entry['compat'] as ProviderConfig['compat']
   }
+  // 单轮输出上限：文件里没写就用**预设的默认值**（DeepSeek 预设带 8000，理由见 config.ts）。
+  //
+  // 这一条以前在这里被悄悄丢掉（`config` 是重建的，只挑已知字段），于是
+  // "预设给了默认值"和"用户手改设置文件"两条路都走不通——桌面端根本没有这个旋钮，
+  // 只能眼睁睁看着单轮生成太久、连接被网关掐断。
+  const cap = entry['maxOutputTokens'] ?? fallback.maxOutputTokens
+  if (typeof cap === 'number' && Number.isFinite(cap) && cap > 0) {
+    config.maxOutputTokens = Math.floor(cap)
+  }
 
   for (const problem of validateProviderConfig(config)) {
     // 缺 baseURL / 缺引用是"还没配完"，不是文件损坏——报出来但不丢弃这一行

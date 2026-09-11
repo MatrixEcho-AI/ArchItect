@@ -1445,9 +1445,19 @@ function renderChat(next: ChatView): void {
 
   if (next.blocking.length > 0) {
     blockingEl.classList.remove('hidden')
-    blockingEl.innerHTML = `<b>${escapeHtml(t('chat.noProvider'))}</b><ul>${next.blocking
-      .map((item) => `<li>${escapeHtml(item)}</li>`)
-      .join('')}</ul>`
+    // 挡住发送的原因 + **一个能直接解决问题的按钮**。只说"到设置里去填"等于把用户丢在
+    // 一个需要自己找路的地方——而这是新用户第一次打开应用时看到的第一屏（M8 的
+    // "5 分钟产出第一座建筑"就卡在这儿）
+    blockingEl.innerHTML =
+      `<b>${escapeHtml(t('chat.noProvider'))}</b><ul>${next.blocking
+        .map((item) => `<li>${escapeHtml(item)}</li>`)
+        .join('')}</ul><button type="button" class="mini" id="blocking-settings">${escapeHtml(
+        t('chat.openSettings'),
+      )}</button>`
+    el('blocking-settings').addEventListener('click', () => {
+      if (settings !== undefined) renderSettings(settings)
+      settingsDialog.showModal()
+    })
   } else {
     blockingEl.classList.add('hidden')
     blockingEl.innerHTML = ''

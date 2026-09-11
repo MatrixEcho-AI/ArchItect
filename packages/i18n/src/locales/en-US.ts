@@ -121,6 +121,7 @@ export const enUS = {
     picked: 'Picked {{block}}',
   },
   chat: {
+    openSettings: 'Open settings',
     templates: {
       label: 'Templates',
       house: 'Build a 9x9 single-storey forest cabin, work area 24x24x24.\nMaterials: spruce planks for the walls, cobblestone for the foundation and fireplace, dark oak for the frame, glass panes for windows.\nMust have: a south-facing front door (2-block clear opening), one window on the east and one on the west, a pitched roof, and a chimney.\nThe roof should overhang the walls by 1 block.\nFinish by using verify to confirm the door clearance, and take screenshots from two angles.',

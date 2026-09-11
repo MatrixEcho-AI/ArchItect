@@ -615,6 +615,16 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
 
     const cost = document.querySelector('#cost');
     check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
+
+    // 挡住发送的时候，必须有一条**能直接解决问题的路**（不然新用户第一屏就卡住）
+    const blocking = document.querySelector('#blocking');
+    const blocked = blocking !== null && !blocking.classList.contains('hidden');
+    const action = document.querySelector('#blocking-settings');
+    check(
+      'blocking-actionable',
+      blocked ? action !== null : true,
+      blocked ? '被挡且有打开设置的按钮' : '没有被挡（模型已配置）',
+    );
     return results;
   })()`
   const raw = (await target.webContents.executeJavaScript(script)) as GuiCheck[]

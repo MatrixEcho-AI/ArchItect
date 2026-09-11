@@ -9,6 +9,14 @@ export interface Snapshot {
 }
 
 const MAGIC = [0x4d, 0x43, 0x41, 0x56, 0x4f, 0x58, 0x00, 0x00] // "MCAVOX\0\0"
+/**
+ * 快照正文解压后的上限。
+ *
+ * 真实工程远小于此——单次写入的硬上限是 400 万格，密排的快照正文也就十几 MB。
+ * 这个值挡的是「用表头声明换内存」：全零数据的压缩比约 1000×。
+ */
+const MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+
 const SNAPSHOT_VERSION = 1
 const HEADER_BYTES = 32
 
@@ -89,7 +97,20 @@ export function decodeSnapshot(bytes: Uint8Array): Snapshot {
   if (paletteSize === 0) throw new SnapshotError('快照的 paletteSize 为 0（调色板至少要含 air）')
 
   const perColumn = 8 + worldHeight * 256 * 2
-  const body = unzlibSync(bytes.subarray(HEADER_BYTES))
+  // **按表头算出来的期望长度预分配输出缓冲**，而不是让它自己解到输入耗尽。
+  //
+  // 全零数据的压缩比约 1000×：几十 KB 的快照就能解出几百 MB，而那是 V8 致命
+  // OOM、不是可捕获的异常。期望长度这里本来就要算、下一行本来也要比对，所以
+  // 这个上限对合法文件永远成立。
+  //
+  // 用 `out` 而不是什么长度参数：fflate 没有那个参数（`packages/mcai` 走 fflate 是
+  // 为了能在渲染进程里跑，不能换成 node:zlib）。给了 `out` 之后最多只写这么多字节，
+  // 真出现更长的数据会被截掉，紧接着的长度比对就会报错。
+  const expected = columnCount * perColumn
+  if (expected > MAX_SNAPSHOT_BYTES) {
+    throw new SnapshotError(`快照声明了 ${expected} 字节正文，超过上限 ${MAX_SNAPSHOT_BYTES}`)
+  }
+  const body = unzlibSync(bytes.subarray(HEADER_BYTES), { out: new Uint8Array(expected) })
   if (body.length !== columnCount * perColumn) {
     throw new SnapshotError(
       `快照正文有 ${body.length} 字节，按 ${columnCount} 列 × ${perColumn} 字节应为 ${columnCount * perColumn}`,

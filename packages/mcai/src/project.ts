@@ -161,9 +161,30 @@ export function packProject(input: PackInput): Uint8Array {
   return zipSync(ordered, { mtime: FIXED_MTIME })
 }
 
+/**
+ * 单个 zip 条目解压后允许的字节数。
+ *
+ * `unzipSync` 会把每个条目**整段解开**，而条目在 `.mcai` 里是压缩过的：全零数据的
+ * 压缩比约 1000×。实测 1 MB 的 `.mcai` 能让这个函数吃掉 1 GB 内存，5 MB 就是 5 GB
+ * ——V8 致命 OOM，不是可捕获的异常。
+ *
+ * 挡住的是「用声明尺寸换内存」这一类输入；这个上限远大于任何真实工程
+ * （仓库里的示例工程是 1.9 KB，而快照本身又是 zlib 过的一层）。
+ */
+const MAX_ENTRY_BYTES = 256 * 1024 * 1024
+
 /** 解包 `.mcai` 字节。不建世界，只把各部分读出来。 */
 export function unpackProject(bytes: Uint8Array): McaiProject {
-  const entries = unzipSync(bytes)
+  const entries = unzipSync(bytes, {
+    filter: (file) => {
+      if (file.originalSize > MAX_ENTRY_BYTES) {
+        throw new McaiFormatError(
+          `工程里的 ${file.name} 声明解压后 ${file.originalSize} 字节，超过上限 ${MAX_ENTRY_BYTES}`,
+        )
+      }
+      return true
+    },
+  })
 
   const manifestBytes = entries[PATHS.manifest]
   if (manifestBytes === undefined) {

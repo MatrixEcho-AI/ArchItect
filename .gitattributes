@@ -1,0 +1,23 @@
+# 换行符统一按 LF 存进版本库。
+#
+# 没有这一条时，检出用什么换行符完全由**每台机器自己的 git 配置**决定。
+# Git for Windows 的默认安装选项就是 core.autocrlf=true，于是新克隆出来的文本
+# 文件是 CRLF；而仓库里有四处「生成结果 vs 磁盘文件整串相等」的比较：
+#
+#   packages/tools/test/docs.test.ts      生成 → 磁盘 docs/tool-reference.md
+#   packages/render/test/baked.test.ts    生成 → 磁盘 data/1.21.4/*.json
+#   scripts/gen-docs.ts --check           同上的命令形式
+#   scripts/bake-render-data.ts --check   同上的命令形式
+#
+# 生成侧恒用 \n，所以 CRLF 检出必然被判成「过期」——两个测试加两个 --check
+# 一起假红，Windows 贡献者上手第一件事就撞上它。规则写在这里才对所有人成立，
+# 靠每个人自己去 git config --local 是治标：那不进版本库，也不跟人走。
+* text=auto eol=lf
+
+# 二进制：别让 git 做任何转换（顺带让 diff 不当文本处理）
+*.png binary
+*.ico binary
+*.mcai binary
+*.schem binary
+*.schematic binary
+*.litematic binary

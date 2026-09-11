@@ -1,3 +1,5 @@
+import { gunzipSync, gzipSync } from 'node:zlib'
+
 import { WorldStore } from '@architect/core'
 import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
@@ -273,3 +275,105 @@ describe('.obj 导出', () => {
     expect(() => exportObj(makeStore())).toThrow(/空的/)
   })
 })
+
+/**
+ * 把 `.litematic` 里每个 `Size` 复合标签的三个值改掉。
+ *
+ * 造不出一份「合法但尺寸巨大」的文件——写侧会真的按尺寸打包，`new Array(count)`
+ * 那一头就先炸了。所以只能在字节上改，这也正是攻击者会做的事：解压后的 NBT 里每个
+ * `Size` 是 `TAG_Int(03) | 名长(00 01) | 名字 | 值(i32)` 三连，值分别在 +8 / +16 / +24。
+ */
+function forgedRegionSize(bytes: Uint8Array, sx: number, sy: number, sz: number): Uint8Array {
+  const raw = Uint8Array.from(gunzipSync(bytes))
+  const ascii = Array.from(raw)
+    .map((byte) => (byte >= 32 && byte < 127 ? String.fromCharCode(byte) : '.'))
+    .join('')
+  const putInt = (buf: Uint8Array, offset: number, value: number): void => {
+    buf[offset] = (value >>> 24) & 255
+    buf[offset + 1] = (value >>> 16) & 255
+    buf[offset + 2] = (value >>> 8) & 255
+    buf[offset + 3] = value & 255
+  }
+  let patched = 0
+  for (let i = ascii.indexOf('Size'); i >= 0; i = ascii.indexOf('Size', i + 1)) {
+    // 只改长得像 `TAG_Int x / TAG_Int y / TAG_Int z` 的那一处
+    if (raw[i + 4] !== 3 || raw[i + 7] !== 0x78 || raw[i + 12] !== 3 || raw[i + 15] !== 0x79) continue
+    putInt(raw, i + 8, sx)
+    putInt(raw, i + 16, sy)
+    putInt(raw, i + 24, sz)
+    patched++
+  }
+  if (patched === 0) throw new Error('没找到可改的 Size 标签——这个夹具需要跟着格式更新')
+  return Uint8Array.from(gzipSync(raw))
+}
+
+describe('不按文件声明的数字分配', () => {
+  it('**声明超大目标盒的 .schem 被拒绝**，而不是照着分配', () => {
+    // 目标盒完全由文件里的 Width/Height/Length 推出，而 clear 会为盒子里每一格建
+    // 一条记录。上限本来要到 `writeBlocks` 内部才生效——中间没有任何东西挡着，
+    // 于是一个 142 字节的文件声明 4096×4096×1 就能把进程打死（V8 致命 OOM，
+    // 不是可捕获的异常；桌面端这条跑在主进程里，等于整个应用消失）。
+    //
+    // 这里只取**刚好越过上限**的尺寸：契约是「超过上限就拒绝」，越过的幅度不改变
+    // 它在测什么，而用 4096×4096 的话守卫一旦回退就会直接把 worker 打死
+    // （实测 `exit code 134`），后面的用例根本跑不到，报告也只剩一句「1 failed」。
+    expect(() =>
+      importSchematicInto(
+        makeStore(),
+        { size: [2050, 2000, 1], dataVersion: 4189, blocks: [] } as never,
+        { at: { x: 0, y: 0, z: 0 } },
+      ),
+    ).toThrow(/超过单次写入上限/)
+  })
+
+  it('**声明超大区域的 .litematic 被拒绝**', async () => {
+    // 同一类：`Size` 直接喂给 `new Array(count)`。168 字节的文件写 20000×20000×1
+    // 就够 abort 一次（`invalid table size`）；这里同样只取刚好越界的尺寸，
+    // 让「守卫回退」表现为干净的断言失败而不是 worker 崩掉。
+    const bytes = writeLitematic({
+      regions: [{ name: 'x', blocks: [{ x: 0, y: 0, z: 0, state: 'minecraft:stone' }], size: [2, 2, 2] }],
+      name: 't',
+      author: 'a',
+    })
+    await expect(readLitematic(forgedRegionSize(bytes, 2050, 2000, 1))).rejects.toThrow(
+      /超过单次写入上限/,
+    )
+  })
+
+  it('**目标方块不接受的属性值换成声明表里的第一个取值**，而不是让整次导入失败', () => {
+    // 有些第三方工具把枚举写成数字下标（`half=1`）。以前这个值会一路走到
+    // `propertiesToStateId` 抛 `StateError`，把**整次导入**带走——实测报的是
+    // 「half: "1" is not a valid value, options: top | bottom」。
+    const store = makeStore()
+    const state = 'minecraft:oak_stairs[facing=north,half=1,shape=straight,waterlogged=false]'
+    const out = importSchematicInto(
+      store,
+      { size: [2, 2, 2], dataVersion: 4189, blocks: [{ x: 0, y: 0, z: 0, state }] } as never,
+      { at: { x: 0, y: 0, z: 0 } },
+    )
+    expect(out.placed, '方块被丢掉了').toBe(1)
+    expect(out.skipped).toBe(0)
+    expect(store.getBlockString({ x: 0, y: 0, z: 0 })).toContain('half=top')
+  })
+
+  it('对照：合法尺寸与合法属性值不受影响', async () => {
+    const store = makeStore()
+    const state = 'minecraft:oak_stairs[facing=north,half=top,shape=straight,waterlogged=false]'
+    const out = importSchematicInto(
+      store,
+      { size: [2, 2, 2], dataVersion: 4189, blocks: [{ x: 0, y: 0, z: 0, state }] } as never,
+      { at: { x: 0, y: 0, z: 0 } },
+    )
+    expect(out.placed).toBe(1)
+    // 合法文件读回来也必须原样
+    const bytes = writeLitematic({
+      regions: [{ name: 'x', blocks: [{ x: 0, y: 0, z: 0, state: 'minecraft:stone' }], size: [2, 2, 2] }],
+      name: 't',
+      author: 'a',
+    })
+    const back = await readLitematic(bytes)
+    expect(back.regions[0]?.size).toEqual([2, 2, 2])
+    expect(back.regions[0]?.blocks).toHaveLength(1)
+  })
+})
+

@@ -8,6 +8,7 @@ import type { ColorResolver } from './colors.js'
 import { drawOverlayGrid, drawOverlays } from './overlay.js'
 import type { OverlayOptions } from './overlay.js'
 import { loadRenderData, meshWorld } from './mesher.js'
+import type { TexturePack } from './texturepack.js'
 import { rasterize } from './raster.js'
 
 interface Face {
@@ -84,6 +85,14 @@ export interface RenderOptions {
    * 稳定性，给人看和给模型看的图靠纹理路径。
    */
   textured?: boolean
+  /**
+   * 纹理来源（`textured: true` 时必给）。
+   *
+   * 不给就是"没有纹理"：图集里只剩缺失纹理那一格，画面会变成一片洋红棋盘格——
+   * 所以调用方永远应该给一个（最差是 `bakedColorTexturePack()` 的平均色）。
+   * 这里不做隐式兜底：悄悄换一套纹理比报错难查得多。
+   */
+  textures?: TexturePack
   background?: { r: number; g: number; b: number }
   /** 光照方向（会归一化）。默认从左上前方。 */
   light?: Vec3
@@ -310,7 +319,19 @@ function renderTextured(store: WorldStore, options: RenderOptions): RenderResult
 
   // 图集与方块状态按版本缓存：首次约 1 秒，之后是查表。
   // 一次会话要截很多张图，绝不能每张都重新解码 1040 张纹理。
-  const data = loadRenderData(store.registry.minecraftVersion)
+  const pack = options.textures
+  // 不给来源时**必须响亮地失败**：隐式退成"空资源包"会得到一张只有缺失纹理的图集，
+  // 整个建筑变成一片洋红棋盘格——那比抛错难查得多（而且看起来像"渲染坏了"）
+  if (pack === undefined || pack.blockTiles().length === 0) {
+    // 空来源（没给、或给了一个一张方块纹理都没有的包）必须**响亮地失败**：
+    // 图集里只剩缺失纹理那一格，整个建筑会变成一片洋红棋盘格，而且往下还会在
+    // vendored 的模型解析里炸出一句 `"undefined" is not valid JSON`——那句话
+    // 指向的是症状不是原因。这里直接把原因说出来。
+    throw new Error(
+      `textured 渲染需要一个有方块纹理的来源（options.textures，当前 ${pack === undefined ? '没给' : `给了 ${pack.id}，但 blockTiles 是空的`}）——见 texturepack.ts`,
+    )
+  }
+  const data = loadRenderData(store.registry.minecraftVersion, pack)
 
   // 标尺网格属于地面，必须画在方块之前，否则线会横穿建筑表面
   const contentBounds = store.contentBounds()

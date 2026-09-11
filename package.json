@@ -22,6 +22,8 @@
     "desktop:gui-smoke": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --gui-smoke",
     "docs:gen": "tsx scripts/gen-docs.ts",
     "docs:check": "tsx scripts/gen-docs.ts --check",
+    "bake:gen": "tsx scripts/bake-render-data.ts",
+    "bake:check": "tsx scripts/bake-render-data.ts --check",
     "example": "tsx scripts/make-example.ts"
   },
   "devDependencies": {

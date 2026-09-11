@@ -6,13 +6,16 @@ import { writeFile } from 'node:fs/promises'
 import { formatMeasure, measure, ReplaySession, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis, SliceRange, WorldStore } from '@architect/core'
 import {
-  createAssetColorResolver,
+  createPackColorResolver,
+  texturePackAt,
   createFallbackColorResolver,
   encodePng,
   fitCamera,
   presetAngles,
   renderIsometric,
 } from '@architect/render'
+import { assetsTexturePack } from '@architect/render/assets'
+import type { TexturePack } from '@architect/render'
 import type { OverlayOptions } from '@architect/render'
 import { sanitizeForFont } from '@architect/render'
 import type { ViewPreset } from '@architect/render'
@@ -146,6 +149,7 @@ function usageText(): string {
     `  ${t('cli.usage.provider.apiKeyNote')}`,
     '',
     t('cli.usage.benchHeading'),
+    entry('--textures <path>', t('cli.usage.opt.textures')),
     entry('--tasks <a,b,c>', t('cli.usage.bench.tasks')),
     entry('--out-dir <dir>', t('cli.usage.bench.outDir')),
     entry('--record <file.jsonl>', t('cli.usage.bench.record')),
@@ -172,6 +176,7 @@ interface Invocation {
   plain: boolean
   overlays: boolean
   highlightLast: boolean
+  textures?: string
   provider?: string
   model?: string
   baseUrl?: string
@@ -189,6 +194,12 @@ interface Invocation {
   replay?: string
   format?: string
 }
+
+/**
+ * CLI 的渲染版本。与 `AgentSession` 的默认值保持一致——CLI 只跑 1.21.4 这一个版本
+ * （`.mcai` 的 `minecraftVersion` 字段是给将来多版本用的）。
+ */
+const RENDER_VERSION = '1.21.4'
 
 async function main(argv: string[]): Promise<number> {
   // D-01：CLI 复用同一套 i18n；语言从环境变量推断，`LANG=en-US` 即出英文
@@ -224,6 +235,7 @@ async function main(argv: string[]): Promise<number> {
         quiet: { type: 'boolean', default: false },
         tasks: { type: 'string' },
         'out-dir': { type: 'string' },
+        textures: { type: 'string' },
         record: { type: 'string' },
         replay: { type: 'string' },
         format: { type: 'string' },
@@ -255,6 +267,7 @@ async function main(argv: string[]): Promise<number> {
     width?: string
     height?: string
     plain?: boolean
+    textures?: string
     'no-overlays'?: boolean
     'highlight-last'?: boolean
     provider?: string
@@ -308,6 +321,7 @@ async function main(argv: string[]): Promise<number> {
   if (values['api-key-env'] !== undefined) inv.apiKeyEnv = values['api-key-env']
   if (values.tasks !== undefined) inv.tasks = values.tasks
   if (values['out-dir'] !== undefined) inv.outDir = values['out-dir']
+  if (values.textures !== undefined) inv.textures = values.textures
   if (values.record !== undefined) inv.record = values.record
   if (values.replay !== undefined) inv.replay = values.replay
   if (values.format !== undefined) inv.format = values.format
@@ -521,10 +535,12 @@ async function cmdShoot(
     return 1
   }
 
-  // --plain 用确定性兜底配色：不依赖资源包，供 CI 与 golden 测试使用
+  // CLI 是开发工具，默认直接用内置那份资源包（`minecraft-assets`，devDependency）；
+  // `--plain` 则完全不碰资源，给 CI 与 golden 测试用
+  const textures = cliTexturePack(inv, project.manifest.minecraftVersion)
   const resolve = inv.plain
     ? createFallbackColorResolver()
-    : createAssetColorResolver(project.manifest.minecraftVersion)
+    : createPackColorResolver(project.manifest.minecraftVersion, textures)
 
   // --highlight-last：高亮最后一个 op 的影响范围，让 LLM 看见"我刚改了什么"
   let highlight: Bounds | undefined
@@ -555,6 +571,7 @@ async function cmdShoot(
     const result = renderIsometric(store, {
       camera,
       resolve,
+      textures,
       ...(inv.plain ? {} : { textured: true }),
       overlays: overlayOptions,
     })
@@ -731,6 +748,8 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
   const session = new AgentSession({
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: sx - 1, y: sy - 1, z: sz - 1 } },
     plain: inv.plain,
+    // 截图要纹理：CLI 默认用内置那份资源包，`--textures` 可以换成用户自己的
+    textures: inv.plain ? undefined : cliTexturePack(inv, RENDER_VERSION),
   })
 
   if (!inv.quiet) {
@@ -932,7 +951,9 @@ async function cmdExport(inv: Invocation): Promise<number> {
   }
 
   if (format === 'obj') {
-    const resolve = inv.plain ? createFallbackColorResolver() : createAssetColorResolver(project.manifest.minecraftVersion)
+    const resolve = inv.plain
+      ? createFallbackColorResolver()
+      : createPackColorResolver(project.manifest.minecraftVersion, cliTexturePack(inv, project.manifest.minecraftVersion))
     // `mtllib` 里的名字必须与实际文件名一致，否则 OBJ 能打开但全是灰的
     const mtlPath = inv.out.replace(/\.obj$/i, '.mtl')
     const result = exportObj(store, {
@@ -1108,7 +1129,11 @@ async function cmdBench(inv: Invocation): Promise<number> {
   let replayCursor = 0
 
   for (const task of tasks) {
-    const session = new AgentSession({ volume: task.volume, plain: inv.plain })
+    const session = new AgentSession({
+      volume: task.volume,
+      plain: inv.plain,
+      textures: inv.plain ? undefined : cliTexturePack(inv, RENDER_VERSION),
+    })
     let provider: LlmProvider
 
     if (replayPool !== undefined) {
@@ -1412,6 +1437,22 @@ function truncate(text: string, limit: number): string {
 
 function formatBounds(b: Bounds): string {
   return `${b.min.x},${b.min.y},${b.min.z} .. ${b.max.x},${b.max.y},${b.max.z}`
+}
+
+/**
+ * CLI 用哪个纹理来源。
+ *
+ * - `--textures <path>`：用户指定的资源包目录 / zip / 客户端 jar；
+ * - 默认：内置的 `minecraft-assets`（devDependency——CLI 本来就是开发工具，
+ *   发布产物才需要"不内置素材"那条约束）。
+ */
+function cliTexturePack(inv: { textures?: string }, version: string): TexturePack {
+  if (inv.textures !== undefined) {
+    const pack = texturePackAt(inv.textures)
+    if (pack === undefined) throw new Error(`--textures 指向的路径里没有方块纹理：${inv.textures}`)
+    return pack
+  }
+  return assetsTexturePack(version)
 }
 
 function outputPath(base: string | undefined, view: ViewPreset, multiple: boolean): string {

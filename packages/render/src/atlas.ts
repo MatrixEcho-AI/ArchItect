@@ -12,18 +12,13 @@
  * 之所以要有图集：只看平均色时 `stone` 与 `stone_bricks` 都是 ~122 的灰，
  * 渲染出来一模一样；把真实纹理按 UV 采样进去，砖缝和石面才有区别。
  */
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
-import minecraftAssets from 'minecraft-assets'
-
 import { TILE_SIZE } from './atlas-format.js'
 import type { AtlasIndexEntry, TextureAtlas } from './atlas-format.js'
 import { decodePng } from './png.js'
+import type { TexturePack } from './texturepack.js'
 
 export type { AtlasIndexEntry, TextureAtlas }
 
-const MISSING_TEXTURE_FILE = 'missing_texture.png'
 const MISSING_TEXTURE_NAME = 'missing_texture'
 /** 缺失纹理的棋盘格边长（像素）。8 = 16×16 里 2×2 格，就是 Minecraft missingno 的样子。 */
 const MISSING_CELL = 8
@@ -34,6 +29,9 @@ const MISSING_CELL = 8
  * 必须缓存：1.21.4 有 1040 个 tile，每次调用都要读盘 + 解压 + 逐像素拷贝，
  * 一秒左右的纯浪费；而且渲染器与测试会把「同一个版本拿到同一个对象」当作
  * 廉价的失效判据（atlas 身份不变就不必重建 GPU 纹理）。
+ *
+ * 键里必须带**来源**：同一个版本换成用户自己的资源包，图集必须换一张，
+ * 否则"换资源包没反应"会变成一个只在第二次运行时才出现的 bug。
  */
 const ATLAS_CACHE = new Map<string, TextureAtlas>()
 
@@ -47,18 +45,6 @@ function nextPowerOfTwo(n: number): number {
   n |= n >> 8
   n |= n >> 16
   return n + 1
-}
-
-/**
- * 文件名 → 纹理名。
- *
- * 只砍掉结尾的 `.png`，不用 `path.parse().name`、更不用 `split('.')[0]`：
- * 后两者会把名字中间的点和后缀一起吃掉（`oak.log` → `oak`）。1.21.4 的 1039 个
- * 方块纹理恰好都不带点，所以与 prismarine 的 `split('.')[0]` 结果一致，
- * 但这里的选择对将来的资源包更安全。
- */
-function textureName(file: string): string {
-  return file.endsWith('.png') ? file.slice(0, -'.png'.length) : file
 }
 
 /**
@@ -92,8 +78,8 @@ function createMissingTextureTile(): Uint8Array {
  * 这样的**竖向帧条**，第一帧就在左上角，静态渲染取它即可。
  * 比 16×16 更小的纹理极少，但也不能因为越界读就把整张图集搞崩——不足的部分留透明。
  */
-function readTilePixels(file: string): Uint8Array {
-  const image = decodePng(readFileSync(file))
+function readTilePixels(bytes: Uint8Array): Uint8Array {
+  const image = decodePng(bytes)
   const tile = new Uint8Array(TILE_SIZE * TILE_SIZE * 4)
   const copyWidth = Math.min(TILE_SIZE, image.width)
   const copyHeight = Math.min(TILE_SIZE, image.height)
@@ -122,43 +108,37 @@ function blitTile(
 }
 
 /**
- * 为某个 Minecraft 版本构建纹理图集（结果缓存，同一版本返回同一个对象）。
+ * 为某个 Minecraft 版本构建纹理图集（结果缓存，同版本同来源返回同一个对象）。
  *
- * 与 prismarine 原版的一处**有意差异**：文件名来自 `readdirSync` 之后要 `sort`。
+ * 纹理字节来自 `pack`：用户的资源包/客户端 jar，或者烘好的平均色
+ * （见 `texturepack.ts`）。这里**不再知道**纹理到底是从哪儿读的。
+ *
+ * 与 prismarine 原版的一处**有意差异**：文件名要 `sort`。
  * 原版直接用 readdirSync 的原始顺序，而那个顺序依赖文件系统（同一份资源包在
  * ext4、APFS、打包成 asar 之后都可能不同），会让 UV 索引在不同机器上漂移，
  * 渲染产物和 golden 测试就没法复现了。排序换来确定性的 tile 分配。
  */
-export function buildTextureAtlas(minecraftVersion: string): TextureAtlas {
-  const cached = ATLAS_CACHE.get(minecraftVersion)
+export function buildTextureAtlas(minecraftVersion: string, pack: TexturePack): TextureAtlas {
+  const cacheKey = `${minecraftVersion}|${pack.id}`
+  const cached = ATLAS_CACHE.get(cacheKey)
   if (cached !== undefined) return cached
 
-  const load = minecraftAssets as unknown as (version: string) => { directory?: string }
-  const directory = load(minecraftVersion)?.directory
-  if (typeof directory !== 'string') {
-    throw new Error(`minecraft-assets 没有版本 "${minecraftVersion}" 的资源包目录`)
-  }
-
-  const blocksDirectory = join(directory, 'blocks')
-  // 只收 .png：资源包里同名的 .png.mcmeta（动画帧声明）会被这个 filter 自然排除。
-  const files = readdirSync(blocksDirectory)
-    .filter((file) => file.endsWith('.png'))
-    .sort()
+  const tiles = [...pack.blockTiles()].sort()
   // missing_texture 永远排在 tile 0：vendored mesher 把它当作「找不到纹理」的兜底索引。
-  const orderedFiles = [MISSING_TEXTURE_FILE, ...files]
+  const orderedTiles = [MISSING_TEXTURE_NAME, ...tiles]
 
-  const tilesPerRow = nextPowerOfTwo(Math.ceil(Math.sqrt(orderedFiles.length)))
+  const tilesPerRow = nextPowerOfTwo(Math.ceil(Math.sqrt(orderedTiles.length)))
   const size = tilesPerRow * TILE_SIZE
   const data = new Uint8Array(size * size * 4)
   const textures: Record<string, AtlasIndexEntry> = {}
   const decodeFailures: string[] = []
   const missingTile = createMissingTextureTile()
 
-  for (let i = 0; i < orderedFiles.length; i++) {
-    const file = orderedFiles[i]!
+  for (let i = 0; i < orderedTiles.length; i++) {
+    const name = orderedTiles[i]!
     const x = (i % tilesPerRow) * TILE_SIZE
     const y = Math.floor(i / tilesPerRow) * TILE_SIZE
-    textures[textureName(file)] = {
+    textures[name] = {
       u: x / size,
       v: y / size,
       su: TILE_SIZE / size,
@@ -168,20 +148,22 @@ export function buildTextureAtlas(minecraftVersion: string): TextureAtlas {
     let tile = missingTile
     if (i > 0) {
       try {
-        tile = readTilePixels(join(blocksDirectory, file))
+        const bytes = pack.read(`block/${name}`)
+        if (bytes !== undefined) tile = readTilePixels(bytes)
+        else decodeFailures.push(name)
       } catch {
         // 单张纹理坏掉不该让整个建筑渲染不出来：填成缺失纹理并记录名字，
         // 让调用方（或日志）能说出到底是哪几个文件有问题。
         tile = missingTile
-        decodeFailures.push(textureName(file))
+        decodeFailures.push(name)
       }
     }
     blitTile(data, size, x, y, tile)
   }
 
-  const atlas: TextureAtlas = { size, data, textures }
+  const atlas: TextureAtlas = { size, data, textures, source: pack.id }
   if (decodeFailures.length > 0) atlas.decodeFailures = decodeFailures
-  ATLAS_CACHE.set(minecraftVersion, atlas)
+  ATLAS_CACHE.set(cacheKey, atlas)
   return atlas
 }
 

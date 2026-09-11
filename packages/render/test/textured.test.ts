@@ -16,6 +16,7 @@ import { WorldStore } from '@architect/core'
 import { beforeAll, describe, expect, it } from 'vitest'
 
 import { buildTextureAtlas, TILE_SIZE } from '../src/atlas.js'
+import { assetsTexturePack } from '../src/assets.js'
 import { cameraBasis, cameraForShot, fitCamera, presetAngles, shotCameraLabel } from '../src/camera.js'
 import { createWorldView, loadRenderData, meshWorld } from '../src/mesher.js'
 import { renderIsometric } from '../src/isometric.js'
@@ -34,7 +35,8 @@ function world(...blocks: Array<[number, number, number, string]>): WorldStore {
   return store
 }
 
-const data = (): ReturnType<typeof loadRenderData> => loadRenderData(VERSION)
+const pack = (): ReturnType<typeof assetsTexturePack> => assetsTexturePack(VERSION)
+const data = (): ReturnType<typeof loadRenderData> => loadRenderData(VERSION, pack())
 
 /**
  * 只网格化一个方块，返回它的三角形数。
@@ -49,7 +51,7 @@ function trianglesOf(name: string): number {
 
 beforeAll(() => {
   // 首次会解码 1040 张纹理，把这一步挪出用例的计时
-  loadRenderData(VERSION)
+  loadRenderData(VERSION, pack())
 })
 
 describe('网格化：几何来自原版方块模型', () => {
@@ -176,6 +178,7 @@ describe('光栅化：逐像素采样真实纹理', () => {
       background: BG,
       overlays: false,
       textured: true,
+      textures: pack(),
     }).canvas
     return canvas.data
   }
@@ -221,6 +224,7 @@ describe('光栅化：逐像素采样真实纹理', () => {
       background: BG,
       overlays: false,
       textured: true,
+      textures: pack(),
     }).canvas
     let blue = 0
     for (let i = 0; i < canvas.data.length; i += 4) {
@@ -247,6 +251,7 @@ describe('光栅化：z-buffer', () => {
       background: BG,
       overlays: false,
       textured: true,
+      textures: pack(),
     }).canvas
     let r = 0
     let g = 0
@@ -306,6 +311,7 @@ describe('相机：坐标与朝向', () => {
         background: BG,
         overlays: false,
         textured: true,
+        textures: pack(),
       }).canvas.data
     expect(shot(0)).not.toEqual(shot(90))
   })
@@ -337,14 +343,14 @@ describe('相机：坐标与朝向', () => {
 
 describe('图集本身', () => {
   it('tile 尺寸是 16，图集边长是 2 的幂', () => {
-    const atlas = buildTextureAtlas(VERSION)
+    const atlas = buildTextureAtlas(VERSION, pack())
     expect(TILE_SIZE).toBe(16)
     expect(atlas.size % TILE_SIZE).toBe(0)
     expect(Math.log2(atlas.size) % 1).toBe(0)
   })
 
   it('每个已知方块纹理都能在资源包里找到（`--plain` 之外的路径不该大面积命中 missing）', () => {
-    const atlas = buildTextureAtlas(VERSION)
+    const atlas = buildTextureAtlas(VERSION, pack())
     // 注意：`textures` 的键是**纹理名**，不是方块名——`smooth_quartz` 这个方块用的是
     // `quartz_block_bottom/side/top` 三张纹理，图集里没有叫 `smooth_quartz` 的纹理。
     for (const name of ['stone', 'stone_bricks', 'quartz_block_top', 'oak_planks', 'red_concrete', 'glass']) {
@@ -370,6 +376,7 @@ describe('两条渲染路径并存', () => {
       background: BG,
       overlays: false,
       textured: true,
+      textures: pack(),
     })
     // 两条路径必须给出不同的像素——相同就说明 `textured` 根本没接上
     expect(plain.canvas.data).not.toEqual(textured.canvas.data)

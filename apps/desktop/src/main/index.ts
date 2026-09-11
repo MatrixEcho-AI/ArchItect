@@ -6,6 +6,10 @@ import type { Budget, PresetKey, ProviderConfig, ProviderSettings, ShotInput } f
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
 import { VIEW_PRESETS } from '@architect/render'
+// 内置资源包（真实纹理）。**不走 `@architect/render` 的默认导出**：`minecraft-assets`
+// 是 352 MB 的运行时依赖，esbuild 必须把它标成 external，所以只有主进程这个入口
+// 该知道怎么引它（见 packages/render/src/assets.ts）。
+import { assetsTexturePack } from '@architect/render/assets'
 
 import { AutosaveService } from './services/autosave.js'
 import type { StudioEvent, TestConnectionInput } from './services/chat.js'
@@ -127,7 +131,12 @@ function initStudio(): void {
   initI18n({ locale: loaded.settings.locale ?? detectLocale() })
 
   const secrets = createSecretStore(secretsFile(app.getPath('userData')), keychain)
-  studio = new StudioService({ chat: { settings: loaded.settings, secrets } })
+  studio = new StudioService({
+    chat: { settings: loaded.settings, secrets },
+    // 默认纹理 = 内置资源包（用户装完就有真实纹理）。想用自己的材质包/客户端 jar 时，
+    // 由 texturepack.ts 里那几种来源接管（CLI 的 --textures，或 ARCHITECT_MINECRAFT_DIR）
+    texturePackFor: (version) => assetsTexturePack(version),
+  })
   studio.chat.setIssues([...loaded.issues])
   studio.onEvent((event) => pushEvent(event))
   studioReady = true
@@ -302,6 +311,7 @@ function registerIpc(): void {
   handle('studio:measureText', () => studio.measureText())
   // 工具调用检查器点开某一步时用（按需取，不跟着每次 state 推）
   handle('studio:opDetail', (rev: number) => studio.opDetail(rev))
+  handle('studio:textureInfo', () => studio.textureInfo())
 
   handle('studio:new', (volume?: Parameters<StudioService['newProject']>[0]) => {
     const state = studio.newProject(volume)

@@ -1,6 +1,15 @@
 import { EditLog, measure, ReplaySession, WorldStore } from '@architect/core'
 import type { Bounds, OpSource, Palette, WriteResult } from '@architect/core'
-import { cameraForShot, createAssetColorResolver, createFallbackColorResolver, encodePng, renderIsometric, shotCameraLabel } from '@architect/render'
+import {
+  cameraForShot,
+  bakedColorTexturePack,
+  createFallbackColorResolver,
+  createPackColorResolver,
+  encodePng,
+  renderIsometric,
+  shotCameraLabel,
+} from '@architect/render'
+import type { TexturePack } from '@architect/render'
 import type { CameraSpec, ColorResolver, OverlayOptions } from '@architect/render'
 import { createDefaultRegistry } from '@architect/tools'
 import type { ScreenshotRequest, ToolContext, ToolImage, ToolRegistry } from '@architect/tools'
@@ -65,6 +74,14 @@ export interface SessionOptions {
   /** 不读资源包，用确定性兜底配色（CI 用）。 */
   plain?: boolean
   /**
+   * 纹理来源（用户的 `.minecraft` / 资源包 / 平均色兜底）。
+   *
+   * 省略时**只有颜色没有纹理**：颜色走烘好的平均色（确定性、不依赖任何资源包），
+   * 需要纹理的 `textured` 截图会明确报错而不是画成一片洋红。CLI 与桌面端
+   * 各自把解析好的包传进来（桌面端是设置里的那一项）。
+   */
+  textures?: TexturePack
+  /**
    * 注入时钟。
    *
    * 生产代码不需要它——op 的时间戳本该是真实时间。但**生成可复现的夹具**需要：
@@ -108,6 +125,8 @@ export class AgentSession {
   readonly registry: ToolRegistry
   readonly ctx: ToolContext
   private readonly resolve: ColorResolver
+  /** 这一场会话用哪套纹理（截图与颜色解析共用同一份）。 */
+  private readonly textures: TexturePack
   private shotCount = 0
   private fallbacks: string[] = []
 
@@ -123,7 +142,14 @@ export class AgentSession {
     // 两个游标各改各的（那个 bug 真出现过）。桌面端的时间线直接用它，不再另建一个。
     this.history = new ReplaySession(this.store, this.log)
     this.registry = options.registry ?? createDefaultRegistry()
-    this.resolve = options.plain === true ? createFallbackColorResolver() : createAssetColorResolver(version)
+    // 纹理来源决定颜色怎么来：有资源包就用资源包的真实纹理算平均色，
+    // 没有就用烘好的平均色（三级台阶见 colors.ts）
+    // 默认给**烘好的平均色**：确定性（不依赖这台机器装没装 Minecraft），
+    // 而且 `textured` 截图照样能用——每个方块一块纯色，形状/UV/明暗全对。
+    // 调用方（CLI / 桌面端）会传自己解析好的来源覆盖它（D-61 的那条"同一个入口"）。
+    this.textures = options.textures ?? bakedColorTexturePack(version)
+    this.resolve =
+      options.plain === true ? createFallbackColorResolver() : createPackColorResolver(version, this.textures)
 
     this.ctx = {
       store: this.store,
@@ -300,6 +326,7 @@ export class AgentSession {
     const result = renderIsometric(this.store, {
       camera,
       resolve: this.resolve,
+      textures: this.textures,
       ...(textured ? { textured: true } : {}),
       overlays,
     })

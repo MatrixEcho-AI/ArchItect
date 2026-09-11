@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 
 import { cameraForShot, projectPoint, cameraBasis } from '../src/camera.js'
 import type { CameraSpec } from '../src/camera.js'
+import { assetsTexturePack } from '../src/assets.js'
 import { loadRenderData, meshWorld } from '../src/mesher.js'
 import { pickBlock, screenRay } from '../src/pick.js'
 
@@ -25,7 +26,7 @@ function world(blocks: Array<[number, number, number, string]>): WorldStore {
 }
 
 const geometryOf = (store: WorldStore): ReturnType<typeof meshWorld> =>
-  meshWorld(store, loadRenderData(VERSION))
+  meshWorld(store, loadRenderData(VERSION, assetsTexturePack(VERSION)))
 
 const camera = (azimuth: number, elevation: number, scale = 24): CameraSpec =>
   cameraForShot(VOLUME, { view: 'iso_ne', width: 600, height: 400, azimuth, elevation, scale })

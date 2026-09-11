@@ -77,9 +77,6 @@ importers:
       prismarine-chunk:
         specifier: ^1.41.0
         version: 1.41.0(supports-color@7.2.0)
-      three:
-        specifier: ^0.180.0
-        version: 0.180.0
     devDependencies:
       '@types/three':
         specifier: ^0.180.0
@@ -90,6 +87,9 @@ importers:
       electron-builder:
         specifier: ^25.1.8
         version: 25.1.8(bluebird@3.7.2)(electron-builder-squirrel-windows@25.1.8)(supports-color@7.2.0)
+      three:
+        specifier: ^0.180.0
+        version: 0.180.0
 
   packages/agent:
     dependencies:

@@ -17,13 +17,14 @@
  */
 
 import type { WorldStore } from '@architect/core'
-import assetsModule from 'minecraft-assets'
 import mcDataModule from 'minecraft-data'
 import BlockModule from 'prismarine-block'
 import { Vec3 } from 'vec3'
 
 import { buildTextureAtlas } from './atlas.js'
 import type { TextureAtlas } from './atlas.js'
+import { loadBakedRenderData } from './baked.js'
+import type { TexturePack } from './texturepack.js'
 import { configureTints, getSectionGeometry } from './vendor/prismarine/models.js'
 import { prepareBlocksStates } from './vendor/prismarine/modelsBuilder.js'
 import type { MesherBlock, MesherWorld } from './vendor/prismarine/models.js'
@@ -54,35 +55,44 @@ const versionCache = new Map<string, VersionData>()
 /**
  * 加载（并缓存）一个版本渲染所需的全部静态数据。
  *
- * 首次调用约 1 秒（解码 1040 张纹理 + 预解析 1061 个方块状态），之后是查表。
+ * 两半分别来自不同的地方：
+ *
+ * - **结构**（方块状态表、模型表）：仓库里烘好的 `data/<版本>/render.json`（`bake.ts` 的产出）。
+ *   它们是纯结构数据，占 2.3 MB，没有素材授权问题。
+ * - **纹理**：`pack` 给的（用户的 `.minecraft` / 资源包，或者烘好的平均色）。
+ *   我们**不分发** Mojang 的纹理——见 `texturepack.ts` 的说明。
+ *
+ * 缓存键里必须带来源：换了资源包还命中旧图集的话，"换资源包没反应"会变成一个
+ * 只在第二次运行时出现的 bug。
  */
-export function loadRenderData(minecraftVersion: string): VersionData {
-  const cached = versionCache.get(minecraftVersion)
+export function loadRenderData(minecraftVersion: string, pack: TexturePack): VersionData {
+  const cacheKey = `${minecraftVersion}|${pack.id}`
+  const cached = versionCache.get(cacheKey)
   if (cached !== undefined) return cached
 
   // 着色表按**渲染版本**注入，而不是上游写死的 1.16.2
   configureTints(minecraftVersion)
 
-  const assets = minecraftAssets(minecraftVersion)
-  const atlas = buildTextureAtlas(minecraftVersion)
-  // `prepareBlocksStates` 要的是 `{json: {size, textures}}` 形状（prismarine atlas.json 的格式）
-  const blocksStates = prepareBlocksStates(assets as never, {
-    json: { size: 1 / (atlas.size / 16), textures: atlas.textures },
-  } as never)
+  const baked = loadBakedRenderData(minecraftVersion)
+  const atlas = buildTextureAtlas(minecraftVersion, pack)
+  // `prepareBlocksStates` 要的是 `{json: {size, textures}}` 形状（prismarine atlas.json 的格式），
+  // 而且会做两件有副作用的事：**原地改写**状态表，并把纹理名解析成**这张图集里的矩形**。
+  //
+  // 所以两件事都必须做对：
+  // 1. 先**深拷贝**一份再交给它——否则第二次用不同的资源包加载时，`v.model` 已经是个
+  //    解析好的对象了，再解析一遍会直接抛 `name.startsWith is not a function`；
+  // 2. 每个 (版本, 资源包) 组合都要重新 prepare——图集换了，UV 矩形就换了。
+  const blocksStates = prepareBlocksStates(
+    {
+      blocksStates: structuredClone(baked.blocksStates),
+      blocksModels: structuredClone(baked.blocksModels),
+    } as never,
+    { json: { size: 1 / (atlas.size / 16), textures: atlas.textures } } as never,
+  )
 
   const data: VersionData = { atlas, blocksStates }
-  versionCache.set(minecraftVersion, data)
+  versionCache.set(cacheKey, data)
   return data
-}
-
-/** `minecraft-assets` 没有类型声明覆盖到 `directory`，这里窄化一次。 */
-function minecraftAssets(version: string): { directory: string; blocksStates: unknown; blocksModels: unknown } {
-  const load = assetsModule as unknown as (v: string) => {
-    directory: string
-    blocksStates: unknown
-    blocksModels: unknown
-  }
-  return load(version)
 }
 
 /**

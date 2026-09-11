@@ -3,7 +3,8 @@ import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
 import { cameraBasis, fitCamera, presetAngles, projectPoint } from '../src/camera.js'
-import { createAssetColorResolver, createFallbackColorResolver } from '../src/colors.js'
+import { createFallbackColorResolver, createPackColorResolver } from '../src/colors.js'
+import { assetsTexturePack } from '../src/assets.js'
 import { renderIsometric } from '../src/isometric.js'
 
 const BG = { r: 26, g: 28, b: 34 }
@@ -187,7 +188,7 @@ describe('纹理解析的健壮性', () => {
   })
 
   it('资源包解析器能在整张方块表上跑完且不抛异常', () => {
-    const resolve = createAssetColorResolver('1.21.4')
+    const resolve = createPackColorResolver('1.21.4', assetsTexturePack('1.21.4'))
     // 挑一批"已知缺纹理"的方块——它们必须安全回退
     for (const name of [
       'oak_fence',
@@ -209,19 +210,19 @@ describe('纹理解析的健壮性', () => {
   })
 
   it('栅栏回退到木板色，而不是中性灰（后缀剥离要试多个候选基名）', () => {
-    const resolve = createAssetColorResolver('1.21.4')
+    const resolve = createPackColorResolver('1.21.4', assetsTexturePack('1.21.4'))
     const fence = resolve('minecraft:oak_fence')
     const planks = resolve('minecraft:oak_planks')
     expect(fence).toEqual(planks)
   })
 
   it('墙回退到基础材质色', () => {
-    const resolve = createAssetColorResolver('1.21.4')
+    const resolve = createPackColorResolver('1.21.4', assetsTexturePack('1.21.4'))
     expect(resolve('minecraft:cobblestone_wall')).toEqual(resolve('minecraft:cobblestone'))
   })
 
   it('玻璃板回退到玻璃（含透明度）', () => {
-    const resolve = createAssetColorResolver('1.21.4')
+    const resolve = createPackColorResolver('1.21.4', assetsTexturePack('1.21.4'))
     const pane = resolve('minecraft:glass_pane')
     const glass = resolve('minecraft:glass')
     expect(pane).toEqual(glass)
@@ -229,14 +230,14 @@ describe('纹理解析的健壮性', () => {
   })
 
   it('实在找不到时用中性灰——不能用随机色（紫色的墙会误导 LLM）', () => {
-    const resolve = createAssetColorResolver('1.21.4')
+    const resolve = createPackColorResolver('1.21.4', assetsTexturePack('1.21.4'))
     const unknown = resolve('minecraft:definitely_not_a_block_xyz')
     expect(unknown.r).toBe(unknown.g)
     expect(unknown.g).toBe(unknown.b)
   })
 
   it('解析器带缓存', () => {
-    const resolve = createAssetColorResolver('1.21.4')
+    const resolve = createPackColorResolver('1.21.4', assetsTexturePack('1.21.4'))
     expect(resolve('minecraft:stone')).toBe(resolve('minecraft:stone'))
   })
 

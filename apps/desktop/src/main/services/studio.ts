@@ -18,6 +18,7 @@ import {
 import type { SchematicData } from '@architect/interop'
 import { openProject, packProject } from '@architect/mcai'
 import {
+  bakedColorTexturePack,
   Canvas,
   cameraBasis,
   drawOverlayGrid,
@@ -28,7 +29,7 @@ import {
   pickBlock,
   rasterize,
 } from '@architect/render'
-import type { CameraSpec, WorldGeometry } from '@architect/render'
+import type { CameraSpec, TexturePack, WorldGeometry } from '@architect/render'
 import type { SessionCamera } from '@architect/tools'
 
 import type { AutosaveService, PendingRecovery } from './autosave.js'
@@ -78,6 +79,14 @@ export interface StudioState {
    * `discardRecovery()`。界面据此显示两个按钮，而不是只给一句话干看着。
    */
   recovery?: RecoverySummary
+  /**
+   * 当前用的**纹理来源**（"我看到的纹理是谁的"）。
+   *
+   * `kind` 是协议字段（minecraft / pack / baked / none），界面自己翻译；
+   * `detail` 是路径或版本号。没有资源包时是 `baked`——形状与明暗照旧，
+   * 只是每格一块纯色。用户在英文界面下看到的也必须能解释这件事。
+   */
+  texture: { kind: string; detail: string; fellBackFrom?: string }
 }
 
 /** 一条编辑记录的细节（`opDetail` 的返回值，直接序列化给界面）。 */
@@ -107,6 +116,13 @@ export type ExportFormat = 'schem' | 'litematic' | 'obj'
 
 /** 交互视口的背景色，与 `renderIsometric` 的默认值一致（拖动时不能闪烁变色）。 */
 const VIEWPORT_BACKGROUND = { r: 26, g: 28, b: 34 }
+
+/**
+ * 默认渲染版本。与 `AgentSession` 的默认值一致——harness 目前只渲染 1.21.4
+ * （工程文件里的 `minecraftVersion` 是给将来多版本用的；`DATA_VERSION_1_21_4` 是
+ * 存档格式里的数字版本号，两者不是一回事）。
+ */
+const RENDER_VERSION = '1.21.4'
 
 /** 提示里显示工程名而不是一整条路径：路径太长，面板上会被截掉一半。 */
 function baseNameOf(path: string | undefined): string {
@@ -247,6 +263,20 @@ export interface StudioOptions {
   chat?: ChatOptions
   /** GPU 截图通道。省略时（测试、无窗口）全部走软件光栅器。 */
   shots?: ShotBridge
+  /**
+   * 纹理从哪儿来：**宿主解析好之后传进来**（桌面端给的是内置资源包，
+   * 见 `apps/desktop/src/main/index.ts`；测试与无头场景给的是烘焙平均色）。
+   *
+   * 之所以由宿主解析、而不是这里自己去 import `minecraft-assets`：
+   * 那个包必须被 esbuild 标成 external，只有宿主知道该怎么引它。
+   * `plain` 时忽略它——那一路完全不用纹理（golden 测试要的是确定性）。
+   */
+  textures?: TexturePack
+  /**
+   * 按工程版本解析资源包的函数（打开别的版本工程时用）。
+   * 省略时 `textures` 就一直用同一个包。
+   */
+  texturePackFor?: (version: string) => TexturePack
 }
 
 export class StudioService {
@@ -258,6 +288,14 @@ export class StudioService {
   readonly chat: ChatController
   private emit: (event: StudioEvent) => void = () => {}
   private readonly plain: boolean
+  /** 项目默认的渲染版本（打开工程时会用工程自己的版本覆盖）。 */
+  private readonly minecraftVersion: string
+  /** 宿主给的资源包（`plain` 时不看它）。 */
+  private readonly textures: TexturePack | undefined
+  /** 按版本解析资源包的函数（宿主注入）。 */
+  private readonly texturePackFor: ((version: string) => TexturePack) | undefined
+  /** 每个版本解析一次（解压客户端 jar 要几百毫秒，不能每帧一次）。 */
+  private readonly texturesByVersion = new Map<string, TexturePack>()
   private autosave?: AutosaveService
   /** 渲染进程侧的 GPU 截图通道。由 `attachShotBridge` 在窗口就绪后接上。 */
   private shots?: ShotBridge
@@ -269,6 +307,9 @@ export class StudioService {
   constructor(options: StudioOptions = {}) {
     this.plain = options.plain ?? false
     this.shots = options.shots
+    this.minecraftVersion = options.minecraftVersion ?? RENDER_VERSION
+    this.textures = options.textures
+    this.texturePackFor = options.texturePackFor
     const volume = options.volume ?? { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } }
     this.session = this.openSession({
       volume,
@@ -325,8 +366,38 @@ export class StudioService {
    * 建一个会话。**所有会话都必须走这里**——否则换了工程之后，新会话就悄悄
    * 丢掉 GPU 截图通道，退回软件光栅器，而这种退化在界面上只表现为"图忽然变糊了"。
    */
-  private openSession(options: Omit<SessionOptions, 'render'>): AgentSession {
-    return new AgentSession({ ...options, render: this.gpuShot() })
+  private openSession(options: Omit<SessionOptions, 'render' | 'textures'>): AgentSession {
+    const version = options.minecraftVersion ?? this.minecraftVersion
+    return new AgentSession({ ...options, textures: this.texturePack(version), render: this.gpuShot() })
+  }
+
+  /**
+   * 解析（并缓存）某个版本的纹理来源。
+   *
+   * `plain` 会话固定用**烘好的平均色**：确定性、不依赖这台机器上有没有装 Minecraft，
+   * 这正是 CI 与 golden 测试要的。其余情况按设置来（默认自动找 `.minecraft`）。
+   */
+  private texturePack(version: string): TexturePack {
+    const cached = this.texturesByVersion.get(version)
+    if (cached !== undefined) return cached
+    // `plain`（测试/CI）固定用烘好的平均色：确定性，不依赖这台机器上有什么资源
+    const pack = this.plain
+      ? bakedColorTexturePack(version)
+      : (this.texturePackFor?.(version) ?? this.textures ?? bakedColorTexturePack(version))
+    this.texturesByVersion.set(version, pack)
+    return pack
+  }
+
+  /**
+   * 当前用的纹理来源（界面显示"我看到的纹理是谁的"）。
+   *
+   * `fellBackFrom` 有值时说明用户要的来源没找到——界面要如实说出来，
+   * 否则"我明明装了资源包"会变成一个没人能解释的现象。
+   */
+  textureInfo(): { kind: string; detail: string } {
+    const version = this.session.store.registry.minecraftVersion
+    const pack = this.texturePack(version)
+    return { kind: pack.kind, detail: pack.detail }
   }
 
   /**
@@ -579,6 +650,8 @@ export class StudioService {
     const snapshot: StudioState = {
       name: this.projectName,
       minecraftVersion: store.registry.minecraftVersion,
+      // 纹理来源：界面要能回答"我看到的纹理是谁的"
+      texture: this.textureInfo(),
       revision: store.revision,
       totalOps: this.session.log.length,
       blocks: stats.blocks,
@@ -836,7 +909,7 @@ export class StudioService {
     if (this.meshCache !== undefined && this.meshCache.revision === store.revision) {
       return { geometry: this.meshCache.geometry, meshed: false }
     }
-    const data = loadRenderData(store.registry.minecraftVersion)
+    const data = loadRenderData(store.registry.minecraftVersion, this.texturePack(store.registry.minecraftVersion))
     const geometry = meshWorld(store, data)
     this.meshCache = { revision: store.revision, geometry }
     return { geometry, meshed: true }
@@ -850,7 +923,7 @@ export class StudioService {
     const { azimuth, elevation } = camera
     const roll = camera.roll ?? 0
 
-    const data = loadRenderData(store.registry.minecraftVersion)
+    const data = loadRenderData(store.registry.minecraftVersion, this.texturePack(store.registry.minecraftVersion))
     const { geometry, meshed } = this.geometryFor(store)
 
     const canvas = new Canvas(request.width, request.height, VIEWPORT_BACKGROUND)
@@ -891,7 +964,7 @@ export class StudioService {
    */
   scene(): ScenePayload {
     const store = this.session.store
-    const data = loadRenderData(store.registry.minecraftVersion)
+    const data = loadRenderData(store.registry.minecraftVersion, this.texturePack(store.registry.minecraftVersion))
     const { geometry } = this.geometryFor(store)
     const bounds = store.contentBounds()
     return {

@@ -27,6 +27,13 @@ export interface TextureAtlas {
   textures: Record<string, AtlasIndexEntry>
   /** 解码失败的纹理名（如实报出来，不静默填黑）。 */
   decodeFailures?: string[]
+  /**
+   * 这张图集是哪个来源烘的（`TexturePack.id`）。
+   *
+   * 有它才能回答"我现在看到的纹理到底是谁的"——用户换了自己的资源包却没生效时，
+   * 这一行就是答案。渲染进程也拿它显示在界面上。
+   */
+  source?: string
 }
 
 /** 图集里一行放几个 tile。 */

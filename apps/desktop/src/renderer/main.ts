@@ -44,6 +44,8 @@ interface StudioState {
   canRedo: boolean
   /** 游标停在最新版本之前 —— 此时**不能让模型改**（它的第一笔会截断后面的步骤）。 */
   behindTip: boolean
+  /** 当前用的纹理来源（形状与状态里那个字段一一对应）。 */
+  texture: { kind: string; detail: string; fellBackFrom?: string }
   /** 会话相机（`set_camera` 或机位面板设的）。界面只读显示，不自动改用户的视角。 */
   camera?: {
     azimuth?: number
@@ -1270,6 +1272,7 @@ function renderPanel(next: StudioState): void {
   // 模型当前会从哪个机位截图。**只读**：自动把用户的视角改到模型那边会很难解释
   // （"我只是想让模型看看，结果我自己的画面被拽走了"）。
   rows.push([t('panel.info.camera'), describeModelCamera(next.camera)])
+  rows.push([t('panel.info.textures'), describeTextureSource(next.texture)])
   el('project-info').innerHTML = rows
     .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
     .join('')
@@ -1366,6 +1369,31 @@ function renderTemplates(): void {
     })
     row.append(button)
   }
+}
+
+/**
+ * 纹理来源说人话。
+ *
+ * 为什么要在界面上写这一行：没有资源包时渲染**是对的但很平**（每格一块纯色），
+ * 用户会以为"渲染坏了"。把来源说出来，"为什么我的石头没有纹理"就不用猜了。
+ *
+ * `kind` 是协议字段，所以这里用一张固定映射表而不是拼字符串——拼出来的键
+ * 绕过了类型检查，写错了只会在运行时看到一个裸键。
+ */
+const TEXTURE_KINDS: Record<string, Parameters<typeof t>[0]> = {
+  minecraft: 'panel.textureKind.minecraft',
+  pack: 'panel.textureKind.pack',
+  baked: 'panel.textureKind.baked',
+  none: 'panel.textureKind.none',
+}
+
+function describeTextureSource(info: StudioState['texture']): string {
+  const key = TEXTURE_KINDS[info.kind] ?? 'panel.textureKind.baked'
+  const base = t(key)
+  const detail = info.detail.length > 0 ? ` · ${info.detail.split(/[/\\]/).pop() ?? info.detail}` : ''
+  if (info.fellBackFrom === undefined) return base + detail
+  const from = TEXTURE_KINDS[info.fellBackFrom] ?? 'panel.textureKind.baked'
+  return `${base}${detail}（${t('panel.textureFellBack', { from: t(from) })}）`
 }
 
 function renderRecovery(recovery: StudioState['recovery']): void {

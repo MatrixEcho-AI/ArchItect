@@ -1,6 +1,7 @@
-import minecraftAssets from 'minecraft-assets'
-
-import { averageColor, decodeDataUri } from './png.js'
+import { loadBakedBlockMap } from './baked.js'
+import type { BakedBlockMap } from './baked.js'
+import { averageColor, decodePng } from './png.js'
+import type { TexturePack } from './texturepack.js'
 
 export interface Appearance {
   r: number
@@ -12,81 +13,59 @@ export interface Appearance {
 
 export type ColorResolver = (blockName: string) => Appearance
 
-interface AssetsEntry {
-  name?: string
-  texture?: string
-}
-
-interface Assets {
-  textureContent: Record<string, AssetsEntry>
-}
-
 /**
- * 基于 Minecraft 资源包纹理的方块颜色表。
+ * 基于**资源包纹理**的方块颜色表，读不到就退回**烘好的平均色**。
  *
- * 每种方块取 16×16 纹理的**平均色**（全透明像素排除，其余按 alpha 加权）。
- * 只在真正用到时才解码，之后缓存——1480 张纹理全解一遍太慢，而一个工程通常只用几十种方块。
+ * 三级台阶，任何一级都不至于渲染成一片黑或一片洋红：
  *
- * 已知局限：`water` / `grass_block` / `leaves` 这类方块在游戏里会被**生物群系着色**，
- * 纹理本身是灰度的，所以这里的颜色会偏灰。带生物群系着色是后续的事。
+ * 1. 资源包里有这张纹理 → 现场解码算平均色（用户换了自己的材质包，颜色也跟着变）；
+ * 2. 没有 → 用 `bake.ts` 烘出来的平均色（形状、UV、明暗全对，只是没有花纹）；
+ * 3. 连平均色都没有（技术方块、新方块）→ 中性灰，见 `UNKNOWN_APPEARANCE`。
+ *
+ * 平均色按需解码并缓存：一个工程通常只用几十种方块，而 1.21.4 有 1000 多张纹理，
+ * 全解一遍要好几秒。
+ *
+ * **方块名 → 纹理路径**的反查表是烘好的（`data/<版本>/blockmap.json`）。
+ * 它来自 `minecraft-assets` 的 `getTexture()`——那里面是原版那套回退
+ * （`oak_fence` → `oak_planks`、`glass_pane` → `glass`），比手写一堆后缀规则准得多。
  */
-export function createAssetColorResolver(minecraftVersion: string): ColorResolver {
-  const load = minecraftAssets as unknown as (version: string) => Assets
-  const assets = load(minecraftVersion)
-  if (assets === undefined || typeof assets.textureContent !== 'object') {
-    throw new Error(`minecraft-assets 没有版本 "${minecraftVersion}" 的纹理`)
-  }
+export function createPackColorResolver(minecraftVersion: string, pack: TexturePack): ColorResolver {
+  const baked = loadBakedBlockMap(minecraftVersion)
   const cache = new Map<string, Appearance>()
 
   return (blockName: string): Appearance => {
     const key = blockName.replace(/^minecraft:/, '')
     const cached = cache.get(key)
     if (cached !== undefined) return cached
-    const appearance = resolveAppearance(assets, key)
+    const appearance = appearanceOf(key, pack, baked)
     cache.set(key, appearance)
     return appearance
   }
 }
 
-/**
- * 后缀 → 候选基名列表。
- *
- * 墙、栅栏、台阶、门这些方块在资源包里没有独立纹理（它们是引用基础材质的模型），
- * 所以要回退到基础方块上取色。**候选要有多个**：`oak_fence` 剥掉 `_fence` 得到 `oak`，
- * 而资源包里没有 `oak`——得再试 `oak_planks`。只试一个候选的话栅栏会变成灰色。
- */
-const SUFFIX_FALLBACKS: ReadonlyArray<readonly [string, (base: string) => string[]]> = [
-  ['_fence_gate', (b) => [`${b}_planks`, b]],
-  ['_fence', (b) => [`${b}_planks`, b]],
-  ['_stairs', (b) => [b, `${b}s`]],
-  ['_slab', (b) => [b, `${b}s`]],
-  ['_wall', (b) => [b, `${b}s`]],
-  ['_door', (b) => [`${b}_planks`, b]],
-  ['_trapdoor', (b) => [`${b}_planks`, b]],
-  ['_pane', (b) => [b]],
-  ['_button', (b) => [`${b}_planks`, b]],
-  ['_pressure_plate', (b) => [`${b}_planks`, b]],
-  ['_hanging_sign', (b) => [`${b}_planks`, b]],
-  ['_sign', (b) => [`${b}_planks`, b]],
-  ['_carpet', (b) => [`${b}_wool`, b]],
-  ['_banner', (b) => [`${b}_wool`, b]],
-]
+/** 先按烘好的反查表找那张纹理，再退回"方块名就是纹理名"。 */
+function appearanceOf(key: string, pack: TexturePack, baked: BakedBlockMap): Appearance {
+  const path = baked.textures[key]
+  const candidates = path !== undefined ? [path] : [`block/${key}`]
+  for (const candidate of candidates) {
+    const bytes = pack.read(candidate)
+    if (bytes === undefined) continue
+    try {
+      const average = averageColor(decodePng(bytes))
+      return { r: average.r, g: average.g, b: average.b, a: average.alpha / 255 }
+    } catch {
+      // 单张纹理解不开不该让整栋建筑渲染不出来：往下走，用烘好的平均色
+      break
+    }
+  }
+  return bakedAppearance(baked, key)
+}
 
-/** 后缀剥离救不回来的少数方块，手工指一个"看起来就是它"的材质。 */
-const TEXTURE_ALIASES: Record<string, string> = {
-  glass_pane: 'glass',
-  iron_bars: 'iron_block',
-  vine: 'oak_leaves',
-  pink_petals: 'pink_tulip',
-  chiseled_bookshelf: 'bookshelf',
-  mushroom_stem: 'brown_mushroom_block',
-  brown_mushroom_block: 'brown_mushroom',
-  red_mushroom_block: 'red_mushroom',
-  bamboo: 'bamboo_block',
-  chorus_plant: 'chorus_flower',
-  tuff_brick_wall: 'tuff_bricks',
-  tuff_wall: 'tuff',
-  polished_tuff_wall: 'polished_tuff',
+/** 烘好的平均色（`[r, g, b, a]`，alpha 是 0..255）。 */
+function bakedAppearance(baked: BakedBlockMap, key: string): Appearance {
+  const color = baked.colors[key]
+  if (color === undefined) return UNKNOWN_APPEARANCE
+  return { r: color[0] ?? 0, g: color[1] ?? 0, b: color[2] ?? 0, a: (color[3] ?? 255) / 255 }
 }
 
 /**
@@ -98,40 +77,11 @@ const TEXTURE_ALIASES: Record<string, string> = {
  */
 const UNKNOWN_APPEARANCE: Appearance = { r: 150, g: 150, b: 150, a: 1 }
 
-function resolveAppearance(assets: Assets, key: string): Appearance {
-  const direct = lookup(assets, key)
-  if (direct !== undefined) return direct
-
-  for (const [suffix, candidates] of SUFFIX_FALLBACKS) {
-    if (!key.endsWith(suffix)) continue
-    for (const candidate of candidates(key.slice(0, -suffix.length))) {
-      const found = lookup(assets, candidate)
-      if (found !== undefined) return found
-    }
-  }
-
-  const alias = TEXTURE_ALIASES[key]
-  if (alias !== undefined) {
-    const aliased = lookup(assets, alias)
-    if (aliased !== undefined) return aliased
-  }
-
-  return UNKNOWN_APPEARANCE
-}
-
-function lookup(assets: Assets, key: string): Appearance | undefined {
-  const entry = assets.textureContent[key]
-  // 必须判 `string` 而不是 `!== undefined`：minecraft-assets 里有些方块（技术方块、
-  // 纯逻辑方块）的 texture 是 **null**，放行 null 会让 decodeDataUri 直接崩掉整个渲染。
-  if (typeof entry?.texture !== 'string') return undefined
-  const average = averageColor(decodeDataUri(entry.texture))
-  return { r: average.r, g: average.g, b: average.b, a: average.alpha / 255 }
-}
-
 /**
  * 确定性的兜底颜色：由方块名哈希到 HSL 再转 RGB。
  *
- * 用途有两个——资源包缺失时不至于渲染成一片黑，以及让 golden 测试不依赖资源包。
+ * 用途有两个——资源包与平均色都没有时不至于渲染成一片黑，以及让 golden 测试
+ * 不依赖任何资源包（`--plain`）。
  */
 export function fallbackAppearance(blockName: string): Appearance {
   let hash = 0x811c9dc5
@@ -146,7 +96,7 @@ export function fallbackAppearance(blockName: string): Appearance {
   return { r, g, b, a: 1 }
 }
 
-/** 完全不依赖资源包的颜色解析器（确定性，供 CI 与 golden 测试使用）。 */
+/** 完全不依赖任何资源的颜色解析器（确定性，供 CI 与 golden 测试使用）。 */
 export function createFallbackColorResolver(): ColorResolver {
   const cache = new Map<string, Appearance>()
   return (blockName: string): Appearance => {

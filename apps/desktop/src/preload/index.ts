@@ -26,6 +26,8 @@ export interface StudioBridge {
   measureText(): Promise<string>
   /** 一条编辑记录的细节（工具参数、改动量、来源）。 */
   opDetail(rev: number): Promise<unknown>
+  /** 当前用的纹理来源（用户自己的 Minecraft / 指定资源包 / 平均色兜底）。 */
+  textureInfo(): Promise<{ kind: string; detail: string; fellBackFrom?: string }>
   newProject(volume?: unknown): Promise<unknown>
   open(): Promise<unknown | undefined>
   save(path?: string): Promise<string | undefined>
@@ -175,6 +177,7 @@ const bridge: StudioBridge = {
   state: () => call('studio:state'),
   measureText: () => call('studio:measureText'),
   opDetail: (rev) => call('studio:opDetail', rev),
+  textureInfo: () => call('studio:textureInfo'),
   newProject: (volume) => call('studio:new', volume),
   open: () => call('studio:open'),
   save: (path) => call('studio:save', path),

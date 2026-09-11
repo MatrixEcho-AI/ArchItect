@@ -5,6 +5,7 @@ import minecraftAssets from 'minecraft-assets'
 import { describe, expect, it } from 'vitest'
 
 import { buildTextureAtlas, MISSING_TEXTURE_NAME, TILE_SIZE } from '../src/atlas.js'
+import { assetsTexturePack } from '../src/assets.js'
 import type { AtlasIndexEntry } from '../src/atlas.js'
 import { decodePng } from '../src/png.js'
 
@@ -14,7 +15,7 @@ const VERSION = '1.21.4'
  * 整个文件共用一张图集：构建一次要解 1040 张 PNG（约 1 秒），
  * 而 `buildTextureAtlas` 有模块级缓存，后续用例都是零成本。
  */
-const atlas = buildTextureAtlas(VERSION)
+const atlas = buildTextureAtlas(VERSION, assetsTexturePack(VERSION))
 
 const loadAssets = minecraftAssets as unknown as (version: string) => { directory: string }
 const assetsDirectory = loadAssets(VERSION).directory
@@ -199,7 +200,7 @@ describe('纹理图集', () => {
   })
 
   it('缓存：同一版本第二次调用返回同一个对象', () => {
-    const again = buildTextureAtlas(VERSION)
+    const again = buildTextureAtlas(VERSION, assetsTexturePack(VERSION))
     expect(again).toBe(atlas)
     expect(Object.keys(again.textures)).toEqual(Object.keys(atlas.textures))
     expect(again.data).toBe(atlas.data)

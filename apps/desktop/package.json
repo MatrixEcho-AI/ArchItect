@@ -23,13 +23,13 @@
     "minecraft-assets": "^1.19.0",
     "minecraft-data": "^3.116.0",
     "prismarine-block": "^1.22.0",
-    "prismarine-chunk": "^1.41.0",
-    "three": "^0.180.0"
+    "prismarine-chunk": "^1.41.0"
   },
   "devDependencies": {
     "@types/three": "^0.180.0",
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "three": "^0.180.0"
   },
   "description": "ArchItect —— 用多模态 LLM 设计 Minecraft 建筑",
   "author": "ArchItect",
@@ -42,7 +42,10 @@
     },
     "files": [
       "dist/**/*",
-      "package.json"
+      "package.json",
+      "!node_modules/minecraft-assets/minecraft-assets/data/*/*/**",
+      "node_modules/minecraft-assets/minecraft-assets/data/*/*.json",
+      "node_modules/minecraft-assets/minecraft-assets/data/1.21.4/blocks/**"
     ],
     "fileAssociations": [
       {
@@ -73,6 +76,12 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "extraResources": [
+      {
+        "from": "../../packages/render/data",
+        "to": "data"
+      }
+    ]
   }
 }

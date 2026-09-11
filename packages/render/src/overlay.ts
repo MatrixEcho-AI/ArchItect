@@ -114,6 +114,16 @@ export function autoRulerStep(extent: number): number {
 }
 
 /**
+ * 投影出来的点能不能画。
+ *
+ * 透视投影下"在相机后面"的点会交出 `NaN`（除以负数会翻到画面另一侧），
+ * 画上去就是一条横穿全屏的线。正交投影不会出现这种情况，所以这个判据对它是恒真的。
+ */
+function onScreen(point: { x: number; y: number }): boolean {
+  return Number.isFinite(point.x) && Number.isFinite(point.y)
+}
+
+/**
  * 画叠加层。
  *
  * 这是把 2D 图变成**可用空间信息**的最廉价手段（plan §2/D4）：
@@ -198,11 +208,13 @@ export function drawOverlayGrid(
   for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) {
     const a = projectPoint({ x, y, z: z0 }, camera, active)
     const b = projectPoint({ x, y, z: z1 }, camera, active)
+    if (!onScreen(a) || !onScreen(b)) continue
     canvas.drawLine(a.x, a.y, b.x, b.y, OVERLAY_COLORS.rulerLine, 0.6)
   }
   for (let z = Math.ceil(z0 / step) * step; z <= z1; z += step) {
     const a = projectPoint({ x: x0, y, z }, camera, active)
     const b = projectPoint({ x: x1, y, z }, camera, active)
+    if (!onScreen(a) || !onScreen(b)) continue
     canvas.drawLine(a.x, a.y, b.x, b.y, OVERLAY_COLORS.rulerLine, 0.6)
   }
 }
@@ -227,12 +239,14 @@ function drawRulerLabels(
 
   for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) {
     const p = projectPoint({ x, y, z: nearZ }, camera, basis)
+    if (!onScreen(p)) continue
     const text = String(x)
     const outward = nearZ === z0 ? 4 : -CHAR_HEIGHT - 4
     drawText(canvas, text, p.x - (text.length * CHAR_WIDTH) / 2, p.y + outward, OVERLAY_COLORS.rulerLabel)
   }
   for (let z = Math.ceil(z0 / step) * step; z <= z1; z += step) {
     const p = projectPoint({ x: nearX, y, z }, camera, basis)
+    if (!onScreen(p)) continue
     const text = String(z)
     const outward = nearX === x0 ? -text.length * CHAR_WIDTH - 4 : 4
     drawText(canvas, text, p.x + outward, p.y - CHAR_HEIGHT / 2, OVERLAY_COLORS.rulerLabel)
@@ -264,6 +278,7 @@ export function drawBoxEdges(
     for (let j = i + 1; j < 8; j++) {
       const diff = i ^ j
       if (diff !== 1 && diff !== 2 && diff !== 4) continue
+      if (!onScreen(screen[i]!) || !onScreen(screen[j]!)) continue
       canvas.drawLine(screen[i]!.x, screen[i]!.y, screen[j]!.x, screen[j]!.y, color, alpha)
     }
   }
@@ -284,7 +299,7 @@ function drawMarker(
       camera,
       basis,
     )
-    drawText(canvas, marker.label, p.x + 2, p.y, color)
+    if (onScreen(p)) drawText(canvas, marker.label, p.x + 2, p.y, color)
   }
 }
 

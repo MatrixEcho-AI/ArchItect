@@ -62,8 +62,14 @@ export interface ViewportCamera {
   azimuth: number
   elevation: number
   roll: number
-  /** 每格像素。0 或负数表示自动取景。 */
+  /** 每格像素。正交投影用；透视投影下由 `perspective.eye/fov` 决定（这个值被忽略）。 */
   scale: number
+  /**
+   * 给了它 = **透视投影**（第一人称）：相机站在 `eye`，`fov` 是垂直视场角。
+   *
+   * 交互动视口走这条；模型截图不给它（正交等轴测，见 `CameraSpec.perspective`）。
+   */
+  perspective?: { eye: [number, number, number]; fov: number }
   /**
    * **画面中心**（世界坐标）。省略 = 内容包围盒中心。
    *
@@ -157,7 +163,10 @@ const DRAFT_DOWNSCALE = 2
 export class Viewport implements SceneViewport {
   private readonly renderer: THREE.WebGLRenderer
   private readonly scene = new THREE.Scene()
-  private readonly camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10_000)
+  private readonly ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10_000)
+  private readonly perspective = new THREE.PerspectiveCamera(70, 1, 0.1, 4000)
+  /** 这一帧用的是哪台相机（由 `applyCamera` 按投影方式选）。 */
+  private active: THREE.Camera = this.ortho
   private overlay: OverlayCanvas
   private grid?: THREE.LineSegments
   private readonly overlayCtx: CanvasRenderingContext2D
@@ -300,22 +309,29 @@ export class Viewport implements SceneViewport {
       max: { x: bounds.max[0], y: bounds.max[1], z: bounds.max[2] },
     }
     const angles = { azimuth: view.azimuth, elevation: clampFreeElevation(view.elevation) }
-    // 自动取景由渲染层的 `fitCamera` 算——和软件光栅器、和模型截图用的是同一份，
-    // 所以三方看到的取景完全一致
+    // 自动取景由渲染层算——和软件光栅器、和模型截图用的是同一份口径
+    // （正交是一个缩放系数，透视是"相机该站在哪儿"，见 `fitCamera` / `fitPerspective`）
     const fitted = fitCamera(box, angles, this.width, this.height)
     const spec: CameraSpec = {
       ...fitted,
       roll: view.roll,
-      // 自定义注视点只挪画面中心，**不改缩放**：自动取景的 scale 还是按内容算的，
-      // 所以"盯着檐口看"和"看整栋楼"是同一个放大倍率，切换时不会突然拉近
-      ...(view.target !== undefined
-        ? { target: { x: view.target[0], y: view.target[1], z: view.target[2] } }
-        : {}),
+      // 自定义注视点只挪画面中心（正交）**不改缩放**；透视下画面中心由位置与朝向决定
+      ...(view.target !== undefined ? { target: { x: view.target[0], y: view.target[1], z: view.target[2] } } : {}),
       ...(view.scale > 0 ? { scale: view.scale } : {}),
+      // **透视：相机位置由调用方给**（用户走到哪儿就是哪儿），这里**不重新取景**——
+      // 自动取景会把相机放回"框住内容"的地方，用户一走就被拽回去
+      ...(view.perspective !== undefined
+        ? {
+            perspective: {
+              eye: { x: view.perspective.eye[0], y: view.perspective.eye[1], z: view.perspective.eye[2] },
+              fov: view.perspective.fov,
+            },
+          }
+        : {}),
     }
 
     const basis = this.applyCamera(spec)
-    this.renderer.render(this.scene, this.camera)
+    this.renderer.render(this.scene, this.active)
     this.drawOverlay(spec, basis)
   }
 
@@ -350,7 +366,7 @@ export class Viewport implements SceneViewport {
     // 相机规格是主进程解算好的：连 width/height 都带着，所以投影矩阵直接用它的
     this.applyCamera(request.camera)
     this.renderer.setRenderTarget(target)
-    this.renderer.render(this.scene, this.camera)
+    this.renderer.render(this.scene, this.active)
 
     const raw = new Uint8Array(hiW * hiH * 4)
     this.renderer.readRenderTargetPixels(target, 0, 0, hiW, hiH, raw)
@@ -411,24 +427,45 @@ export class Viewport implements SceneViewport {
    */
   private applyCamera(spec: CameraSpec): ReturnType<typeof cameraBasis> {
     const basis = cameraBasis(spec)
+    if (spec.perspective !== undefined) {
+      // **第一人称**：相机就站在 `eye`，朝 `forward` 看。近裁剪面取 0.1，
+      // 和软件光栅器那条路（`PERSPECTIVE_NEAR`）保持一致——两条路的裁剪位置不一样的话，
+      // "贴着墙站"时 GPU 与兜底视口会画出不同的东西。
+      const eye = spec.perspective.eye
+      const camera = this.perspective
+      camera.position.set(eye.x, eye.y, eye.z)
+      camera.up.set(basis.up.x, basis.up.y, basis.up.z)
+      camera.lookAt(eye.x + basis.forward.x, eye.y + basis.forward.y, eye.z + basis.forward.z)
+      camera.fov = spec.perspective.fov
+      camera.aspect = spec.width / Math.max(1, spec.height)
+      camera.near = 0.1
+      camera.far = 4000
+      camera.updateProjectionMatrix()
+      this.active = camera
+      return basis
+    }
+
+    const camera = this.ortho
+    // 正交：沿视线后退一个足够远的固定距离（正交投影下距离不影响成像，只决定裁剪面）
     const distance = 2000
-    this.camera.position.set(
+    camera.position.set(
       spec.target.x - basis.forward.x * distance,
       spec.target.y - basis.forward.y * distance,
       spec.target.z - basis.forward.z * distance,
     )
-    this.camera.up.set(basis.up.x, basis.up.y, basis.up.z)
-    this.camera.lookAt(spec.target.x, spec.target.y, spec.target.z)
+    camera.up.set(basis.up.x, basis.up.y, basis.up.z)
+    camera.lookAt(spec.target.x, spec.target.y, spec.target.z)
 
     const halfW = spec.width / 2 / spec.scale
     const halfH = spec.height / 2 / spec.scale
-    this.camera.left = -halfW
-    this.camera.right = halfW
-    this.camera.top = halfH
-    this.camera.bottom = -halfH
-    this.camera.near = 1
-    this.camera.far = distance * 2
-    this.camera.updateProjectionMatrix()
+    camera.left = -halfW
+    camera.right = halfW
+    camera.top = halfH
+    camera.bottom = -halfH
+    camera.near = 1
+    camera.far = distance * 2
+    camera.updateProjectionMatrix()
+    this.active = camera
     return basis
   }
 

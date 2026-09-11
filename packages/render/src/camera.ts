@@ -7,7 +7,7 @@ export interface Vec3 {
 }
 
 export interface CameraSpec {
-  /** 注视点（世界坐标）。 */
+  /** 注视点（世界坐标）。正交投影的画面中心；透视投影下只用来定朝向（投影用 `perspective.eye`）。 */
   target: Vec3
   /** 水平角（度）。0 = 从 +Z 朝 -Z 看（正北方向看过去）。 */
   azimuth: number
@@ -26,11 +26,38 @@ export interface CameraSpec {
    * 但"相机朝向完全由我指定"这件事少了它就不完整。
    */
   roll?: number
-  /** 每格多少像素。 */
+  /** 每格多少像素。正交投影里是成像的唯一尺度；透视投影里退化成"注视点处的等效值"。 */
   scale: number
   width: number
   height: number
+  /**
+   * 给了它 = **透视投影**（第一人称：相机站在 `eye`，`fov` 是垂直视场角）；不给 = 正交投影。
+   *
+   * 两种投影**共用**角度语义、叠加层与拾取，所以同一份机位换个投影就是另一种画法。
+   * 默认是正交：模型截图与 CLI 要的是"能比较的等轴测视图"（近大远小会让两张图
+   * 因为站位不同而没法比），而**人看的视口**要的是"站在世界里看"。
+   */
+  perspective?: PerspectiveView
 }
+
+/** 透视投影的相机位置与视场角。 */
+export interface PerspectiveView {
+  /** 相机位置（世界坐标）。**透视投影下它是真的位置**，不像正交那样只是为了定方向。 */
+  eye: Vec3
+  /** 垂直视场角（度）。 */
+  fov: number
+}
+
+/**
+ * 近裁剪面。
+ *
+ * 透视投影里"在相机后面"的点会投影到画面另一侧（除以负数），不裁掉就会画出
+ * 满屏乱飞的三角形。正交投影不需要它（没有除法）。
+ */
+export const PERSPECTIVE_NEAR = 0.1
+
+/** 默认视场角（度）。70 是 Minecraft 的默认值，也是"看建筑"比较自然的视角。 */
+export const DEFAULT_FOV = 70
 
 /** 相机的正交基。`forward` 是**从相机指向场景**的方向。 */
 export interface CameraBasis {
@@ -144,10 +171,10 @@ export function eyeFromOrientation(camera: CameraSpec, distance: number): Vec3 {
   }
 }
 export interface ProjectedPoint {
-  /** 屏幕坐标（像素，原点在左上角）。 */
+  /** 屏幕坐标（像素，原点在左上角）。在相机后面时是 `NaN`（透视投影）。 */
   x: number
   y: number
-  /** 越大离相机越远。 */
+  /** 越大离相机越远。透视投影下**小于等于 0 = 在相机后面**，调用方要丢掉。 */
   depth: number
 }
 
@@ -156,6 +183,7 @@ export function projectPoint(
   spec: CameraSpec,
   basis: CameraBasis,
 ): ProjectedPoint {
+  if (spec.perspective !== undefined) return projectPerspective(point, spec, basis, spec.perspective)
   const dx = point.x - spec.target.x
   const dy = point.y - spec.target.y
   const dz = point.z - spec.target.z
@@ -167,6 +195,42 @@ export function projectPoint(
     y: spec.height / 2 - sy * spec.scale,
     depth,
   }
+}
+
+/**
+ * 透视投影：先量出点相对相机的三个分量（右 / 上 / 前），再除以**深度**。
+ *
+ * 焦距取自垂直视场角：`focal = (height/2) / tan(fov/2)` —— 于是 `fov` 就是
+ * "画面高度对应多少度"，宽高比由 `width/height` 自然带出来（横向 fov 随之变化）。
+ *
+ * **在相机后面（`forward <= 0`）交回 `NaN`**：那种点除以负数会翻到画面另一侧，
+ * 画出来是满屏乱飞的三角形。调用方（叠加层、光栅器）按 `depth <= 0` 丢掉它们；
+ * 光栅器还要把**跨过近裁剪面**的三角形裁开，否则近处的墙会整块消失。
+ */
+function projectPerspective(
+  point: Vec3,
+  spec: CameraSpec,
+  basis: CameraBasis,
+  view: PerspectiveView,
+): ProjectedPoint {
+  const dx = point.x - view.eye.x
+  const dy = point.y - view.eye.y
+  const dz = point.z - view.eye.z
+  const sx = dx * basis.right.x + dy * basis.right.y + dz * basis.right.z
+  const sy = dx * basis.up.x + dy * basis.up.y + dz * basis.up.z
+  const depth = dx * basis.forward.x + dy * basis.forward.y + dz * basis.forward.z
+  if (!(depth > 0)) return { x: Number.NaN, y: Number.NaN, depth }
+  const focal = focalLength(spec, view.fov)
+  return {
+    x: spec.width / 2 + (sx / depth) * focal,
+    y: spec.height / 2 - (sy / depth) * focal,
+    depth,
+  }
+}
+
+/** 垂直视场角 → 焦距（像素）。 */
+export function focalLength(spec: { height: number }, fov: number): number {
+  return spec.height / 2 / Math.tan((fov * DEG) / 2)
 }
 
 /**
@@ -349,4 +413,67 @@ export function fitCamera(
   const scale = Math.min((width * usable) / spanX, (height * usable) / spanY)
 
   return { target, ...angles, scale, width, height }
+}
+
+/**
+ * 透视投影的**自动取景**：把包围盒塞进视锥，返回相机该站在哪儿。
+ *
+ * 正交取景只需要一个缩放系数（`fitCamera`），透视取景要考虑**距离**——
+ * 同一个东西放远了就小。所以这里解的是距离：
+ *
+ * 每个角点在相机空间里的横向偏移是 `u + w·d`（`u` 是它相对内容中心在 `right` 上的分量，
+ * `w` 在 `forward` 上的分量，`d` 是相机沿视线后退的距离），成像要求
+ * `|u| / (d + w) ≤ tan(半视场角)`，于是 `d ≥ |u|/tan - w`。**取所有角点、两个轴上的最大值**
+ * 就是恰好框住的那个距离——不需要迭代，也不是"按包围球估一个"。
+ *
+ * 宽高比参与进来：横向可用角度随 `width/height` 变化，所以竖屏时受限的是横向。
+ */
+export function fitPerspective(
+  bounds: Bounds,
+  angles: { azimuth: number; elevation: number },
+  options: { fov: number; width: number; height: number; margin?: number; roll?: number },
+): CameraSpec {
+  const target: Vec3 = {
+    x: (bounds.min.x + bounds.max.x + 1) / 2,
+    y: (bounds.min.y + bounds.max.y + 1) / 2,
+    z: (bounds.min.z + bounds.max.z + 1) / 2,
+  }
+  const fov = options.fov
+  const width = Math.max(1, options.width)
+  const height = Math.max(1, options.height)
+  const basis = cameraBasis({ target, ...angles, scale: 1, width, height })
+  // 垂直半角与横向半角：竖屏时横向更窄，取两者中**更紧**的那个约束
+  const tanV = Math.tan((fov * DEG) / 2)
+  const tanH = tanV * (width / height)
+
+  let distance = 0
+  for (let i = 0; i < 8; i++) {
+    const dx = ((i & 1) === 0 ? bounds.min.x : bounds.max.x + 1) - target.x
+    const dy = ((i & 2) === 0 ? bounds.min.y : bounds.max.y + 1) - target.y
+    const dz = ((i & 4) === 0 ? bounds.min.z : bounds.max.z + 1) - target.z
+    const u = dx * basis.right.x + dy * basis.right.y + dz * basis.right.z
+    const v = dx * basis.up.x + dy * basis.up.y + dz * basis.up.z
+    const w = dx * basis.forward.x + dy * basis.forward.y + dz * basis.forward.z
+    distance = Math.max(distance, Math.abs(u) / tanH - w, Math.abs(v) / tanV - w)
+  }
+  // 留边距（乘出来，加常数会在小建筑上把相机推到很后面）；再兜一个下限，
+  // 免得空世界里 distance 变成 0 或负数
+  const margin = Math.min(0.4, Math.max(0, options.margin ?? 0.08))
+  const eyeDistance = Math.max(1, distance * (1 + margin))
+  const eye: Vec3 = {
+    x: target.x - basis.forward.x * eyeDistance,
+    y: target.y - basis.forward.y * eyeDistance,
+    z: target.z - basis.forward.z * eyeDistance,
+  }
+  return {
+    target,
+    azimuth: angles.azimuth,
+    elevation: angles.elevation,
+    ...(options.roll !== undefined ? { roll: options.roll } : {}),
+    // 注视点处的等效"每格像素"：面板与旧代码读它，成像本身只用 eye/fov
+    scale: focalLength({ height }, fov) / eyeDistance,
+    width,
+    height,
+    perspective: { eye, fov },
+  }
 }

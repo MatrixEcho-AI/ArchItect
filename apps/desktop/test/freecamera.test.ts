@@ -1,48 +1,55 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  anchorOf,
   createFreeCamera,
   forwardOf,
-  materialize,
+  FOV_RANGE,
+  lookAtFrom,
   moveStep,
   pan,
+  place,
   rightOf,
   turn,
+  zoom,
 } from '../src/renderer/freecamera.js'
 
 /**
  * 自由相机的**数学**。
  *
- * 这里断言的不是"函数被调用了"，而是三件用户能感觉到的性质：
+ * 断言的是三件用户能感觉到的性质：
  * 1. WASD 相对**相机自己**走（抬头按 W 会上升，横移不会改高度）；
- * 2. 转头是**原地**的（位置不动，画面中心转到新视线上）——这正是"像游戏里一样"
- *    和"绕着目标转"的全部差别；
- * 3. 仰角能抬头（负值）但不会翻过极点。
+ * 2. 转头是**原地**的（位置一动不动）——这正是"像 Minecraft 那样转头"与
+ *    "建筑像个托盘一样自转"的全部差别；
+ * 3. 仰角能抬头（负值）但不会翻过极点，视场角有上下限。
  */
 
-const cameraAt = (azimuth: number, elevation: number, focus = 10) => {
-  const camera = createFreeCamera({ azimuth, elevation, focus })
-  materialize(camera, [0, 0, 0])
+const cameraAt = (azimuth: number, elevation: number) => {
+  const camera = createFreeCamera({ azimuth, elevation, fov: 70 })
+  place(camera, [0, 0, 10])
   return camera
 }
 
 describe('自由相机', () => {
-  it('初始状态还没落地：画面中心交给自动取景', () => {
-    const camera = createFreeCamera({ azimuth: 45, elevation: 35, focus: 32 })
+  it('落地之前没有位置；place 之后就是那个点', () => {
+    const camera = createFreeCamera({ azimuth: 45, elevation: 35, fov: 70 })
     expect(camera.eye).toBeUndefined()
-    expect(anchorOf(camera)).toBeUndefined()
+    // 还没落地（自动取景）时移动键是空操作，不会把相机推到奇怪的地方
+    pan(camera, 5, 5)
+    expect(camera.eye).toBeUndefined()
+    place(camera, [1, 2, 3])
+    expect(camera.eye).toEqual([1, 2, 3])
   })
 
-  it('落地之后位置在画面中心**沿视线后退** focus 的地方（不改成像）', () => {
-    const camera = createFreeCamera({ azimuth: 0, elevation: 0, focus: 10 })
-    materialize(camera, [0, 0, 0])
-    // az=0/el=0 = 站在 +Z 看向 -Z
+  it('az=0/el=0 时看向 -Z，右方是 +X（和渲染层的约定一致）', () => {
+    const camera = cameraAt(0, 0)
     const forward = forwardOf(camera)
     expect(forward[0]).toBeCloseTo(0, 9)
     expect(forward[1]).toBeCloseTo(0, 9)
     expect(forward[2]).toBeCloseTo(-1, 9)
-    expect(camera.eye).toEqual([0, 0, 10])
+    const right = rightOf(camera)
+    expect(right[0]).toBeCloseTo(1, 9)
+    expect(right[1]).toBeCloseTo(0, 9)
+    expect(right[2]).toBeCloseTo(0, 9)
   })
 
   it('**W 沿视线走（含俯仰）**：抬头按 W 是上升，不是贴地往前', () => {
@@ -76,34 +83,24 @@ describe('自由相机', () => {
     expect(camera.eye).toEqual(before)
   })
 
-  it('**原地转头**：位置一动不动，画面中心转到新视线上', () => {
+  it('**原地转头**：位置一动不动，视线转到新的方向上', () => {
     const camera = cameraAt(0, 0)
     const before = [...camera.eye!]
     turn(camera, 90, 0, 1) // 往右拖 90 px，灵敏度 1°/px
     expect(camera.azimuth).toBeCloseTo(-90, 9)
     expect(camera.eye).toEqual(before) // **位置不变**
-    const anchor = anchorOf(camera)!
-    for (const index of [0, 1, 2]) {
-      expect(anchor[index]!).toBeCloseTo([10, 0, 10][index]!, 9) // 从 (0,0,0) 挪到了新视线上
-    }
-    // 画面中心永远在视线上、离相机 focus 远
+    // 转了 90°：原本看向 -Z，现在看向 +X
     const forward = forwardOf(camera)
-    for (const index of [0, 1, 2]) {
-      expect(anchor[index]! - before[index]!).toBeCloseTo(forward[index]! * 10, 6)
-    }
+    expect(forward[0]).toBeCloseTo(1, 6)
+    expect(forward[2]).toBeCloseTo(0, 6)
   })
 
-  it('转头**不会**把画面中心钉在原地（那正是"绕点旋转"的旧行为）', () => {
-    const camera = cameraAt(45, 35)
-    const anchorBefore = anchorOf(camera)!
-    turn(camera, 120, 60, 1)
-    const anchorAfter = anchorOf(camera)!
-    const moved = Math.hypot(
-      anchorAfter[0] - anchorBefore[0],
-      anchorAfter[1] - anchorBefore[1],
-      anchorAfter[2] - anchorBefore[2],
-    )
-    expect(moved).toBeGreaterThan(1)
+  it('方位角只保留一轮：一直往一个方向拖不会攒到 500°', () => {
+    const camera = cameraAt(0, 0)
+    turn(camera, 400, 0, 1) // 往右拖 400 px
+    expect(camera.azimuth).toBeGreaterThanOrEqual(-180)
+    expect(camera.azimuth).toBeLessThanOrEqual(180)
+    expect(camera.azimuth).toBeCloseTo(-40, 9) // -400° 折回 -40°
   })
 
   it('仰角能抬头到 -89，但翻不过去', () => {
@@ -114,11 +111,26 @@ describe('自由相机', () => {
     expect(camera.elevation).toBe(-89)
   })
 
-  it('平移之后画面中心跟着走（由位置推导，不再是钉住的注视点）', () => {
+  it('滚轮改视场角：上滚放大（fov 变小），且夹在范围内', () => {
     const camera = cameraAt(0, 0)
-    camera.target = [5, 5, 5] // 机位面板明确指定的注视点
-    pan(camera, 0, 2)
-    expect(camera.target).toBeUndefined() // 位置说话：注视点让位
-    expect(anchorOf(camera)).toEqual([2, 0, 0])
+    const before = camera.fov
+    zoom(camera, -100)
+    expect(camera.fov).toBeLessThan(before)
+    zoom(camera, 100)
+    expect(camera.fov).toBeCloseTo(before, 6)
+    zoom(camera, -100_000)
+    expect(camera.fov).toBe(FOV_RANGE.min)
+    zoom(camera, 100_000)
+    expect(camera.fov).toBe(FOV_RANGE.max)
+  })
+
+  it('lookAtFrom 落在视线上、距离正确（推给模型的机位用它）', () => {
+    const camera = cameraAt(35, 20)
+    const [fx, fy, fz] = forwardOf(camera)
+    const at = lookAtFrom(camera, 12)
+    const eye = camera.eye!
+    expect(at[0] - eye[0]).toBeCloseTo(fx * 12, 6)
+    expect(at[1] - eye[1]).toBeCloseTo(fy * 12, 6)
+    expect(at[2] - eye[2]).toBeCloseTo(fz * 12, 6)
   })
 })

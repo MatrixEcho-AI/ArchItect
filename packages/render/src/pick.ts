@@ -15,7 +15,7 @@
  * 其中 `sx`/`sy` 正是 `projectPoint` 里那两个量。
  */
 
-import { cameraBasis } from './camera.js'
+import { cameraBasis, focalLength } from './camera.js'
 import type { CameraBasis, CameraSpec, Vec3 } from './camera.js'
 import type { WorldGeometry } from './mesher.js'
 
@@ -59,6 +59,23 @@ export function screenRay(
   y: number,
 ): { origin: Vec3; direction: Vec3 } {
   const basis = cameraBasis(camera)
+  if (camera.perspective !== undefined) {
+    // 透视：射线从**相机位置**出发，穿过那个像素对应的方向
+    const focal = focalLength(camera, camera.perspective.fov)
+    const sx = (x - camera.width / 2) / focal
+    const sy = (camera.height / 2 - y) / focal
+    const direction: Vec3 = {
+      x: basis.forward.x + basis.right.x * sx + basis.up.x * sy,
+      y: basis.forward.y + basis.right.y * sx + basis.up.y * sy,
+      z: basis.forward.z + basis.right.z * sx + basis.up.z * sy,
+    }
+    const length = Math.hypot(direction.x, direction.y, direction.z) || 1
+    return {
+      origin: camera.perspective.eye,
+      direction: { x: direction.x / length, y: direction.y / length, z: direction.z / length },
+    }
+  }
+  // 正交：所有射线平行（方向都是 forward），只有起点随像素走。
   // `projectPoint` 的逆：屏幕中心对应目标点，一格 = `scale` 像素
   const sx = (x - camera.width / 2) / camera.scale
   const sy = (camera.height / 2 - y) / camera.scale

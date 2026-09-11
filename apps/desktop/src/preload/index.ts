@@ -85,6 +85,8 @@ export interface StudioBridge {
     roll?: number
     scale?: number
     target?: [number, number, number]
+    /** 透视（第一人称）：相机站在 `eye`。不给就是正交等轴测。 */
+    perspective?: { eye: [number, number, number]; fov: number }
     width: number
     height: number
     /** 拖动中：半分辨率 + 不画叠加层。 */
@@ -106,6 +108,8 @@ export interface StudioBridge {
     roll?: number
     scale?: number
     target?: [number, number, number]
+    /** 透视（第一人称）：射线从相机位置出发。不给就是正交射线。 */
+    perspective?: { eye: [number, number, number]; fov: number }
     width: number
     height: number
     x: number

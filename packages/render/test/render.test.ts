@@ -2,7 +2,17 @@ import { forEachBox, forEachExtrude, forEachLine, forEachPlane, WorldStore } fro
 import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
-import { cameraBasis, basisFromAngles, clampFreeElevation, fitCamera, presetAngles, projectPoint, VIEW_PRESETS } from '../src/camera.js'
+import {
+  basisFromAngles,
+  cameraBasis,
+  clampFreeElevation,
+  fitCamera,
+  fitPerspective,
+  presetAngles,
+  projectPoint,
+  VIEW_PRESETS,
+} from '../src/camera.js'
+import { screenRay } from '../src/pick.js'
 import { Canvas, encodePng } from '../src/canvas.js'
 import { createFallbackColorResolver, fallbackAppearance } from '../src/colors.js'
 import { renderIsometric } from '../src/isometric.js'
@@ -192,6 +202,95 @@ describe('相机', () => {
     const { forward, up } = basisFromAngles(0, -45)
     expect(forward.y).toBeGreaterThan(0)
     expect(up.y).toBeGreaterThan(0)
+  })
+
+  it('**透视投影：近大远小、在相机后面交回 NaN**', () => {
+    const view = { eye: { x: 0, y: 0, z: 10 }, fov: 70 }
+    const spec = {
+      target: { x: 0, y: 0, z: 0 },
+      azimuth: 0,
+      elevation: 0,
+      scale: 1,
+      width: 400,
+      height: 200,
+      perspective: view,
+    }
+    const basis = cameraBasis(spec)
+    // 视线正前方（az=0/el=0 → 看向 -Z）的点落在画面正中
+    const centre = projectPoint({ x: 0, y: 0, z: 0 }, spec, basis)
+    expect(centre.x).toBeCloseTo(200, 9)
+    expect(centre.y).toBeCloseTo(100, 9)
+    expect(centre.depth).toBeCloseTo(10, 9)
+
+    // 同样的横向偏移，距离翻倍 → 屏幕偏移减半（这就是"近大远小"）
+    const near = projectPoint({ x: 1, y: 0, z: 5 }, spec, basis) // 深度 5
+    const far = projectPoint({ x: 1, y: 0, z: 0 }, spec, basis) // 深度 10
+    expect(near.x - 200).toBeCloseTo(2 * (far.x - 200), 6)
+
+    // 相机后面：除以负数会翻到另一侧，所以这里必须交回无效点
+    const behind = projectPoint({ x: 0, y: 0, z: 20 }, spec, basis)
+    expect(Number.isNaN(behind.x)).toBe(true)
+    expect(behind.depth).toBeLessThan(0)
+  })
+
+  it('**透视的屏幕射线是"从相机出发穿过那个像素"**（投影→拾取的往返）', () => {
+    const spec = {
+      target: { x: 0, y: 0, z: 0 },
+      azimuth: 35,
+      elevation: 20,
+      scale: 1,
+      width: 400,
+      height: 200,
+      perspective: { eye: { x: 12, y: 8, z: 12 }, fov: 70 },
+    }
+    const basis = cameraBasis(spec)
+    const point = { x: 3, y: 4, z: 5 }
+    const projected = projectPoint(point, spec, basis)
+    const ray = screenRay(spec, projected.x, projected.y)
+    // 起点就是相机位置
+    expect(ray.origin).toEqual(spec.perspective.eye)
+    // 方向与"相机 → 那个点"同向
+    const to = {
+      x: point.x - ray.origin.x,
+      y: point.y - ray.origin.y,
+      z: point.z - ray.origin.z,
+    }
+    const length = Math.hypot(to.x, to.y, to.z)
+    expect(ray.direction.x).toBeCloseTo(to.x / length, 6)
+    expect(ray.direction.y).toBeCloseTo(to.y / length, 6)
+    expect(ray.direction.z).toBeCloseTo(to.z / length, 6)
+  })
+
+  it('**fitPerspective 真的把包围盒框进画面**（八个角点都在画面内）', () => {
+    const box: Bounds = { min: { x: 2, y: 0, z: 2 }, max: { x: 13, y: 13, z: 13 } }
+    for (const [width, height] of [
+      [240, 180],
+      [180, 240],
+      [400, 120],
+    ] as const) {
+      for (const angles of [
+        { azimuth: 45, elevation: 30 },
+        { azimuth: 0, elevation: 5 },
+        { azimuth: 135, elevation: 70 },
+      ]) {
+        const spec = fitPerspective(box, angles, { fov: 70, width, height })
+        const basis = cameraBasis(spec)
+        for (let i = 0; i < 8; i++) {
+          const corner = {
+            x: (i & 1) === 0 ? box.min.x : box.max.x + 1,
+            y: (i & 2) === 0 ? box.min.y : box.max.y + 1,
+            z: (i & 4) === 0 ? box.min.z : box.max.z + 1,
+          }
+          const p = projectPoint(corner, spec, basis)
+          const where = `${width}x${height} az${angles.azimuth}/el${angles.elevation} 角点 ${i}`
+          expect(Number.isFinite(p.x), `${where} 在相机后面`).toBe(true)
+          expect(p.x, `${where} 横着出画`).toBeGreaterThanOrEqual(0)
+          expect(p.x, `${where} 横着出画`).toBeLessThanOrEqual(width)
+          expect(p.y, `${where} 竖着出画`).toBeGreaterThanOrEqual(0)
+          expect(p.y, `${where} 竖着出画`).toBeLessThanOrEqual(height)
+        }
+      }
+    }
   })
 
   it('fitCamera 留出边距且内容不贴边（回归：Math.max 吃掉了 margin）', () => {

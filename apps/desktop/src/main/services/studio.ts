@@ -153,10 +153,18 @@ export interface ViewportRequest {
   elevation: number
   /** 绕视线轴的滚转（度）。机位面板能设，所以这条兜底路径也得支持。 */
   roll?: number
-  /** 每格像素。省略表示"自动取景"。 */
+  /** 每格像素。省略表示"自动取景"。正交投影用；透视投影下由 `perspective` 决定。 */
   scale?: number
   /** 注视点。省略 = 内容包围盒中心（与 GPU 那条路同一套语义）。 */
   target?: [number, number, number]
+  /**
+   * 给了它 = **透视投影**（第一人称）：相机站在 `eye`，`fov` 是垂直视场角。
+   *
+   * 桌面视口走这条（D-76）；不给就是正交等轴测——模型截图、CLI、golden 走那条。
+   * 两条路用的是同一个 `projectPoint` / 同一个光栅器，所以"用户看到的"与
+   * "模型看到的"只差一个投影方式，不差一套渲染器。
+   */
+  perspective?: { eye: [number, number, number]; fov: number }
   width: number
   height: number
   /** 拖动中：用低分辨率快速出图，松手后再出一张全分辨率的。 */
@@ -913,6 +921,7 @@ export class StudioService {
     const scale = request.scale ?? fitted.scale
     // 自定义注视点只挪画面中心，不改缩放——和 GPU 那条路（`Viewport.render`）口径一致
     const target = request.target
+    const eye = request.perspective
     return {
       ...fitted,
       azimuth,
@@ -920,6 +929,15 @@ export class StudioService {
       roll,
       scale,
       ...(target !== undefined ? { target: { x: target[0], y: target[1], z: target[2] } } : {}),
+      // 透视：相机位置**由渲染进程给**（用户走到哪儿就是哪儿），主进程不重新取景
+      ...(eye !== undefined
+        ? {
+            perspective: {
+              eye: { x: eye.eye[0], y: eye.eye[1], z: eye.eye[2] },
+              fov: eye.fov,
+            },
+          }
+        : {}),
     }
   }
 

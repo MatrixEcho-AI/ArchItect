@@ -52,13 +52,14 @@ describe('格式规范与代码一致', () => {
   it('规范提到的快照魔数与代码一致', () => {
     const snapshot = readFileSync(join(root, 'packages/mcai/src/snapshot.ts'), 'utf8')
     const magic = /MAGIC = \[([^\]]+)\]/.exec(snapshot)?.[1]
-    const text = magic!
+    if (magic === undefined) throw new Error('没能从 packages/mcai/src/snapshot.ts 里解析出 MAGIC')
+    const text = magic
       .split(',')
       .map((part) => String.fromCharCode(Number(part.trim())))
       .join('')
       .replace(/\0/g, '\\0')
-    // 规范里写的是可读形式（\0 用反斜杠零表示）
-    expect(spec).toContain('MCAVOX')
-    void text
+    // 规范里写的是可读形式（\0 用反斜杠零表示）。比对的是**从代码里解出来的**那一串，
+    // 不是写死的字面量——写死的话，改快照魔数这条测试照样绿，等于没守。
+    expect(spec, 'docs/mcai-format.md 里的快照魔数与 snapshot.ts 不一致').toContain(text)
   })
 })

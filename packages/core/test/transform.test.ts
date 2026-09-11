@@ -62,10 +62,22 @@ describe('矩阵本身', () => {
   })
 
   it('旋转四次回到自身', () => {
-    let t: Transform = {}
-    for (let i = 0; i < 4; i++) t = { rotate: 90 }
-    expect(isIdentity({ rotate: 90 })).toBe(false)
-    void t
+    // 真的要**复合四次**：把同一个字面量赋四遍是恒真的，复合逻辑改错了它也不会红。
+    // 矩阵是行主序的 3×3，这里按定义连乘。
+    const multiply = (a: readonly number[], b: readonly number[]): number[] =>
+      [0, 1, 2].flatMap((r) =>
+        [0, 1, 2].map(
+          (c) => a[r * 3]! * b[c]! + a[r * 3 + 1]! * b[3 + c]! + a[r * 3 + 2]! * b[6 + c]!,
+        ),
+      )
+    let four: readonly number[] = matrixOf(IDENTITY_TRANSFORM)
+    for (let i = 0; i < 4; i++) four = multiply(four, matrixOf({ rotate: 90 }))
+    expect(four).toEqual(matrixOf(IDENTITY_TRANSFORM))
+
+    // 对照组：三次不该回到恒等。否则上面那条可能是空转的。
+    let three: readonly number[] = matrixOf(IDENTITY_TRANSFORM)
+    for (let i = 0; i < 3; i++) three = multiply(three, matrixOf({ rotate: 90 }))
+    expect(three).not.toEqual(matrixOf(IDENTITY_TRANSFORM))
   })
 
   it('parseTransform 拒绝不认识的角度与轴', () => {

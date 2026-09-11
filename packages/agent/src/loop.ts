@@ -34,6 +34,8 @@ export interface AgentState {
   error?: string
   /** 最后一轮的文本回复。 */
   finalText: string
+  /** 结束时还没读回的改动数。调用方下一轮要把它带回来（见 `AgentOptions.pendingMutations`）。 */
+  pendingMutations: number
 }
 
 export type AgentEvent =
@@ -70,6 +72,25 @@ export interface AgentOptions {
    * 后面所有内容仍然共享同一个稳定前缀。
    */
   stateLine?: string
+  /**
+   * **接续上一轮**：上一次 `runAgent` 留下的消息（`AgentState.messages`）。
+   *
+   * 桌面端一次 `send` 就是一次 `runAgent`。不把上一轮接上的话，模型对
+   * "刚才那几句"毫无记忆——它只看得到 system + 一行 `[STATE]` + 这一句新需求，
+   * 于是"接续提问"变成了对着一个陌生工地重新开工。
+   *
+   * 接法是**追加**：历史在下，新的状态行与本次需求在上。
+   * 这样前缀逐字节不变，DeepSeek 的前缀缓存才能跨轮命中——
+   * 在中间插一句/改一句，后面十几万 token 就要按全价重算（§9.2 Regime A）。
+   */
+  history?: readonly LlmMessage[]
+  /**
+   * 上一轮结束时**还没读回**的改动数（完成闸门的状态）。
+   *
+   * 跨轮必须带着走：不然"A 轮改完没 verify 就收工、B 轮说一句好话"就能把闸门绕过去，
+   * 而闸门的全部意义就是不让"没读回"被当成"做完了"。
+   */
+  pendingMutations?: number
   /** 最多几轮（一轮 = 一次 LLM 调用 + 它请求的全部工具）。默认 40。 */
   maxTurns?: number
   /** 最多执行几次工具调用。默认 120——防止 LLM 陷入死循环。 */
@@ -165,6 +186,11 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
   const policy = contextPolicyFor(options.capabilities, options.contextWindow ?? {})
 
   const messages: LlmMessage[] = []
+  // **先接上上一轮**（有的话）。顺序是刻意的：历史 → 状态行 → 本次需求。
+  // 状态行放在历史**之后**：它每轮都变（revision），放在前面会把后面的缓存全部作废。
+  if (options.history !== undefined) {
+    for (const message of options.history) messages.push(message)
+  }
   // 状态行在历史里**只出现一次**，且在最前面。之后每轮的 revision 变化由工具结果
   // 自己带（`writeResultToTool` 每次都回显 revision），不需要再插一条新消息——
   // 插一条就是在历史中间动刀，会让它后面的前缀缓存全部失效。
@@ -183,11 +209,13 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
     messages,
     stopReason: 'max_turns',
     finalText: '',
+    pendingMutations: options.pendingMutations ?? 0,
   }
   const emit = (event: AgentEvent): void => options.onEvent?.(event)
 
-  // 完成闸门的状态：改过东西之后必须重新 verify 通过
-  let pendingMutations = 0
+  // 完成闸门的状态：改过东西之后必须重新 verify 通过。
+  // 初值可能来自上一轮（跨轮延续），所以这里不是从 0 开始。
+  let pendingMutations = state.pendingMutations
   let nudges = 0
   let continuations = 0
 
@@ -214,16 +242,22 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
           reason: policy.reason,
         })
       }
-      response = await chatWithRetry(provider, {
-        system,
-        messages: view.messages,
-        tools,
-        ...(options.maxTokensPerCall !== undefined ? { maxTokens: options.maxTokensPerCall } : {}),
-        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
-      }, emit)
+      // 每次重试都**重新构建**请求（Regime B 的窗口是纯函数，重建结果一样）
+      response = await chatWithRetry(
+        provider,
+        () => ({
+          system,
+          messages: windowMessages(messages, policy).messages,
+          tools,
+          ...(options.maxTokensPerCall !== undefined ? { maxTokens: options.maxTokensPerCall } : {}),
+          ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
+        }),
+        emit,
+      )
     } catch (error) {
       state.stopReason = 'error'
       state.error = error instanceof Error ? error.message : String(error)
+      state.pendingMutations = pendingMutations
       emit({ type: 'stop', reason: 'error' })
       return state
     }
@@ -417,19 +451,20 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
     if (state.stopReason === 'max_tool_calls') break
   }
 
+  state.pendingMutations = pendingMutations
   emit({ type: 'stop', reason: state.stopReason })
   return state
 }
 
 async function chatWithRetry(
   provider: LlmProvider,
-  request: Parameters<LlmProvider['chat']>[0],
+  buildRequest: () => Parameters<LlmProvider['chat']>[0],
   emit: (event: AgentEvent) => void,
 ): Promise<Awaited<ReturnType<LlmProvider['chat']>>> {
   let lastError: unknown
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await provider.chat(request)
+      return await provider.chat(buildRequest())
     } catch (error) {
       lastError = error
       const retryable = error instanceof LlmError ? error.retryable : true

@@ -3,8 +3,15 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { ScriptedProvider, scriptFromCalls } from '@architect/agent'
-import type { AgentEvent, ProviderConfig, ProviderSettings, ScriptedStep } from '@architect/agent'
+import { LlmError, ScriptedProvider, scriptFromCalls } from '@architect/agent'
+import type {
+  AgentEvent,
+  LlmProvider,
+  LlmRequest,
+  ProviderConfig,
+  ProviderSettings,
+  ScriptedStep,
+} from '@architect/agent'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { ChatController } from '../src/main/services/chat.js'
@@ -630,5 +637,117 @@ describe('打开工程：把存下来的对话接回界面', () => {
     const recording = studio.chat.recording()
     expect(recording.transcript.messages).toHaveLength(view.messages.length)
     expect(recording.captures.refs.length).toBeGreaterThan(0)
+  })
+})
+
+describe('接续提问：把上一轮真的发给模型', () => {
+  /** 等 StudioService 里那一轮跑完（`running` 落回 false）。 */
+  const settleService = async (service: StudioService): Promise<void> => {
+    for (let i = 0; i < 400 && service.chatView().running; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+
+  function withSettings(secrets: SecretStore, providerFactory: () => LlmProvider): StudioService {
+    return new StudioService({
+      plain: true,
+      chat: { settings: deepseekWithKey(), secrets, providerFactory },
+    })
+  }
+
+  it('**第二轮请求里带着第一轮的对话**（而不是只有一句新需求）', async () => {
+    const secrets = createMemorySecretStore()
+    secrets.set('DeepSeek', 'sk-test-key')
+    const requests: LlmRequest[] = []
+    const inner = new ScriptedProvider([
+      { toolCalls: [{ name: 'fill_box', args: { from: [0, 0, 0], to: [3, 0, 3], block: 'minecraft:stone' } }] },
+      {
+        toolCalls: [
+          {
+            name: 'verify',
+            args: { claims: [{ check: 'block_at', pos: [0, 0, 0], expect: 'minecraft:stone' }] },
+          },
+        ],
+      },
+      { text: '铺好了。' },
+      { text: '开好了。' },
+    ])
+    const chat = inner.chat.bind(inner)
+    const spy: LlmProvider = {
+      id: inner.id,
+      model: inner.model,
+      supportsImages: inner.supportsImages,
+      chat: (request) => {
+        requests.push(request)
+        return chat(request)
+      },
+    }
+
+    const service = withSettings(secrets, () => spy)
+    service.send('铺一层 4x4 石地板')
+    await settleService(service)
+    service.send('再开一扇窗')
+    await settleService(service)
+
+    expect(requests.length).toBeGreaterThanOrEqual(2)
+    // 第二个 send 的那一次请求（第一个 send 自己就发了三次）
+    const second = requests.at(-1)!.messages
+    // 第一句需求、它调过的工具、以及工具读回的结果，全都在
+    expect(second.map((message) => message.content)).toContain('铺一层 4x4 石地板')
+    expect(second.some((message) => message.role === 'assistant' && (message.toolCalls?.length ?? 0) > 0)).toBe(true)
+    expect(second.some((message) => message.role === 'tool')).toBe(true)
+    // 这一句新需求在最后
+    expect(second.at(-1)!.content).toBe('再开一扇窗')
+  })
+
+  it('清空对话之后不再带旧历史（否则模型还记得你删掉的那些话）', async () => {
+    const secrets = createMemorySecretStore()
+    secrets.set('DeepSeek', 'sk-test-key')
+    const requests: LlmRequest[] = []
+    const inner = new ScriptedProvider([{ text: '好的。' }, { text: '又是新的。' }])
+    const chat = inner.chat.bind(inner)
+    const spy: LlmProvider = {
+      id: inner.id,
+      model: inner.model,
+      supportsImages: inner.supportsImages,
+      chat: (request) => {
+        requests.push(request)
+        return chat(request)
+      },
+    }
+    const service = withSettings(secrets, () => spy)
+    service.send('第一句')
+    await settleService(service)
+    service.clearChat()
+    service.send('第二句')
+    await settleService(service)
+
+    const second = requests[1]!.messages
+    expect(second.map((message) => message.content)).not.toContain('第一句')
+    expect(second.at(-1)!.content).toBe('第二句')
+  })
+
+  it('**provider 报错时对话里必须出现一条可见的失败消息**（不能静默）', async () => {
+    const secrets = createMemorySecretStore()
+    secrets.set('DeepSeek', 'sk-test-key')
+    const failing: LlmProvider = {
+      id: 'failing',
+      model: 'failing',
+      supportsImages: false,
+      chat: async () => {
+        throw new LlmError('HTTP 402: Insufficient Balance', 'BAD_REQUEST', false)
+      },
+    }
+    const service = withSettings(secrets, () => failing)
+    service.send('十字架上加上耶稣，因为耶稣被钉在十字架上')
+    await settleService(service)
+
+    const view = service.chatView()
+    expect(view.running).toBe(false)
+    // 以前这里只有 `view.error`，而界面从来没有渲染过它 —— 用户看到的就是"没反应"
+    const failed = view.messages.filter((message) => message.failed === true)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]!.text).toContain('402')
+    expect(view.error).toContain('402')
   })
 })

@@ -15,6 +15,7 @@ import type {
   Budget,
   CostTable,
   DiscoveryResult,
+  LlmMessage,
   LlmProvider,
   PresetKey,
   ProviderConfig,
@@ -53,6 +54,8 @@ export interface ChatMessageView {
   imageView?: string
   /** 完成闸门的提醒（§9.4）。 */
   gate?: boolean
+  /** 这一轮**失败**了（请求报错、空回复……）。界面据此把它画红，而不是混在正常回复里。 */
+  failed?: boolean
   ts: string
 }
 
@@ -110,7 +113,21 @@ export type ChatRunner = (
   provider: LlmProvider,
   onEvent: (event: AgentEvent) => void,
   shouldStop: () => boolean,
-) => Promise<{ stopReason: string; error?: string; usage: { in: number; out: number; cachedIn?: number } }>
+  /**
+   * **上一轮之后的消息**。桌面端一次 send 就是一次 `runAgent`，
+   * 不把它接上的话，模型对这次会话毫无记忆（见 `AgentOptions.history`）。
+   */
+  history: readonly LlmMessage[],
+  /** 上一轮结束时还没读回的改动数（完成闸门的跨轮状态）。 */
+  pendingMutations: number,
+) => Promise<{
+  stopReason: string
+  error?: string
+  usage: { in: number; out: number; cachedIn?: number }
+  /** 跑完之后的完整消息数组，下一轮原样接上。省略表示这个 provider 不留历史。 */
+  messages?: LlmMessage[]
+  pendingMutations?: number
+}>
 
 export interface ChatOptions {
   settings?: ProviderSettings
@@ -136,6 +153,20 @@ export class ChatController {
   private nextId = 1
   private meter = new UsageMeter()
   private issues: SettingsIssue[] = []
+  /**
+   * **发给模型的历史**（跨轮延续）。
+   *
+   * 与界面上那份 `messages` 刻意分开：那份是给人看的——工具结果只留第一行（400 字符）、
+   * 参数截断到 300 字符——拿它回灌给模型等于把工具结果砍成残废。
+   * 这份是上一轮 `runAgent` 真正发给模型的消息，只追加、不修改。
+   *
+   * 打开旧工程时**接不回**来：`.mcai` 的对话档案按设计只存"给人看的过程"，
+   * 不含原始消息（system prompt / 工具 schema / 图片 base64，见 `mcai/transcript.ts`），
+   * 而 DeepSeek 又要求历史里每一轮的 `reasoning_content` 原样回传。
+   */
+  private modelHistory: LlmMessage[] = []
+  /** 上一轮结束时还没读回的改动数（完成闸门的跨轮状态）。 */
+  private pendingMutations = 0
   /**
    * 对话录制器。
    *
@@ -448,6 +479,9 @@ export class ChatController {
     this.stopReason = undefined
     this.error = undefined
     this.budgetStop = undefined
+    // 换了工程：上一个工程的对话不能带进新工程的请求里
+    this.modelHistory = []
+    this.pendingMutations = 0
     // 录制器接着这份档案往下录：否则"打开旧工程 → 再问一轮 → 保存"会把档案抹掉
     this.recorder = new TranscriptRecorder({ title: this.recorderTitle() })
     this.recorder.seed(transcript, captures)
@@ -461,6 +495,9 @@ export class ChatController {
     this.stopReason = undefined
     this.error = undefined
     this.meter.reset()
+    // 清空对话 = 也清掉发给模型的历史，否则下一轮它还记得你刚删掉的那些话
+    this.modelHistory = []
+    this.pendingMutations = 0
     // 录制器也要跟着重置——否则清空对话后保存，工程文件里还留着上一次的内容
     this.recorder = new TranscriptRecorder({ title: this.recorderTitle() })
     return this.view()
@@ -525,21 +562,48 @@ export class ChatController {
       const config = activeProvider(this.settings)!
       const apiKey = await resolveApiKey(config.apiKeyRef, (ref) => this.resolveRef(ref))
       const provider = this.providerFactory?.(config, apiKey) ?? createProvider(config, { ...(apiKey !== undefined ? { apiKey } : {}) })
-      const outcome = await this.runner(goal, provider, (event) => this.handle(event), () => this.stopRequested)
+      // **把上一轮接上**：模型看到的不是"一句话 + 一行状态"，而是这次会话到目前为止的
+      // 全部往来（含它自己调过的工具与读回结果）。
+      const outcome = await this.runner(
+        goal,
+        provider,
+        (event) => this.handle(event),
+        () => this.stopRequested,
+        this.modelHistory,
+        this.pendingMutations,
+      )
       this.stopReason = outcome.stopReason
-      if (outcome.error !== undefined) this.error = outcome.error
+      if (outcome.error !== undefined) {
+        this.error = outcome.error
+        // **失败必须在对话里看得见。**
+        //
+        // 以前这里只写 `this.error`，而界面从来没渲染过这个字段——于是一次 provider
+        // 报错看上去就是"消息发出去了、然后什么都没发生"。用户没有任何线索，
+        // 只能反复重发（每一次都同样静默）。顶栏那行 `本轮结束（error）`
+        // 不是给人看的失败反馈。
+        this.fail(t('chat.errorLine', { message: outcome.error }))
+      }
+      if (outcome.messages !== undefined) this.modelHistory = retainHistory(outcome.messages)
+      if (outcome.pendingMutations !== undefined) this.pendingMutations = outcome.pendingMutations
       this.meter.add(outcome.usage)
       this.recorder.attachUsage(outcome.usage, provider.model)
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error)
       this.stopReason = 'error'
       // 让用户看见失败原因，而不是一个静默停住的界面
-      this.messages.push(this.newMessage('assistant', this.error))
+      this.fail(this.error)
     } finally {
       this.running = false
       this.emitView()
       this.afterRun()
     }
+  }
+
+  /** 往对话里放一条**失败**消息（红色）。用户必须看得见，不能只进顶栏那行状态。 */
+  private fail(text: string): void {
+    const message = this.newMessage('assistant', text)
+    message.failed = true
+    this.messages.push(message)
   }
 
   private handle(event: AgentEvent): void {
@@ -613,6 +677,14 @@ export class ChatController {
         this.messages.push(message)
         break
       }
+      case 'truncated': {
+        // 输出撞上 token 上限。**必须显示**：这一轮多半是"正文空、工具零"，
+        // 不显示的话用户看到的就是"发了消息没反应"（plan §16 记过这个翻车）。
+        const message = this.newMessage('assistant', t('chat.truncated', { out: String(event.out) }))
+        message.gate = true
+        this.messages.push(message)
+        break
+      }
       case 'stop':
         this.stopReason = event.reason
         break
@@ -661,6 +733,26 @@ export class ChatController {
 function summarize(result: ToolResult): string {
   const first = result.summary.split('\n')[0] ?? ''
   return first.length > 400 ? `${first.slice(0, 400)}…` : first
+}
+
+/**
+ * 下一轮要接上的历史。**只做一件事：把上一轮的截图丢掉。**
+ *
+ * 为什么丢图：截图对下一轮**已经过期**——revision 变了，而系统提示里明确要求
+ * "图与当前 revision 不一致就作废那个判断"。把过期的大图每轮重发一遍，
+ * 是纯粹的钱（一张 800×800 的图要吃掉几千 token）。信息不丢：工具结果里
+ * 仍然留着"截了哪张图、哪个 revision"那一行。
+ *
+ * 为什么其余字段原样带：`reasoningContent` 必须回传（DeepSeek 要求带了 tools 的
+ * 请求里历史每一轮的思维链原样回传，否则 400），`toolCalls` 与 `toolCallId`
+ * 的配对关系也不能动。
+ */
+function retainHistory(messages: readonly LlmMessage[]): LlmMessage[] {
+  return messages.map((message) => {
+    if (message.images === undefined || message.images.length === 0) return { ...message }
+    const { images, ...rest } = message
+    return { ...rest, content: `${message.content}\n(${images.length} screenshot(s) omitted from retained history)` }
+  })
 }
 
 function compactJson(value: unknown): string {

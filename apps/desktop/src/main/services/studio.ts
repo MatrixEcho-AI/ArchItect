@@ -320,7 +320,7 @@ export class StudioService {
     this.chat = new ChatController(
       options.chat ?? { secrets: createMemorySecretStore() },
       // 每轮都重新读 this.session：newProject/open 会把它换成新的
-      async (goal, provider, onEvent, shouldStop) => {
+      async (goal, provider, onEvent, shouldStop, history, pendingMutations) => {
         // 用户设的花费上限要**真的刹车**，不能只记账。价格表来自当前 provider。
         const settings = this.chat.settingsValue
         const active = activeProvider(settings)
@@ -332,6 +332,10 @@ export class StudioService {
             ctx: this.session.ctx,
             system: this.session.buildSystem(),
             stateLine: this.session.buildStateLine(),
+            // 上一轮的对话与闸门状态一起接上：模型记得刚才发生了什么，
+            // 也不会因为"换了一轮"就把没读回的改动当成已完成
+            history,
+            pendingMutations,
             onEvent,
             shouldStop,
             ...(settings.budget !== undefined ? { budget: settings.budget } : {}),
@@ -346,6 +350,9 @@ export class StudioService {
           stopReason: state.stopReason,
           ...(state.error !== undefined ? { error: state.error } : {}),
           usage: state.usage,
+          // 下一轮原样接在这后面（append-only：前缀不稳，缓存就全废）
+          messages: state.messages,
+          pendingMutations: state.pendingMutations,
         }
       },
     )

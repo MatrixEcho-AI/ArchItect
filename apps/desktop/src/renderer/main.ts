@@ -81,6 +81,8 @@ interface ChatMessageView {
   imageRevision?: number
   imageView?: string
   gate?: boolean
+  /** 这一轮失败了（请求报错 / 空回复 / 撞上输出上限）。画红，别让用户以为是"没反应"。 */
+  failed?: boolean
 }
 
 interface ChatView {
@@ -1504,13 +1506,15 @@ function renderMessage(message: ChatMessageView): HTMLLIElement {
   const who = document.createElement('span')
   who.className = 'who'
   who.textContent =
-    message.gate === true
-      ? t('chat.nudge')
-      : message.role === 'tool'
-        ? `${t('chat.toolCall')} · ${message.toolName ?? ''}`
-        : message.role === 'user'
-          ? 'you'
-          : t('app.name')
+    message.failed === true
+      ? t('chat.failed')
+      : message.gate === true
+        ? t('chat.nudge')
+        : message.role === 'tool'
+          ? `${t('chat.toolCall')} · ${message.toolName ?? ''}`
+          : message.role === 'user'
+            ? 'you'
+            : t('app.name')
   li.append(who)
 
   if (message.args !== undefined && message.args !== '{}') {
@@ -1521,6 +1525,8 @@ function renderMessage(message: ChatMessageView): HTMLLIElement {
   }
 
   if (message.role === 'tool' && message.toolOk === false) li.classList.add('bad')
+  // 失败的这一轮画红：它和"模型说了句话"必须一眼分得开
+  if (message.failed === true) li.classList.add('bad')
 
   const body = document.createElement('div')
   body.textContent = message.text

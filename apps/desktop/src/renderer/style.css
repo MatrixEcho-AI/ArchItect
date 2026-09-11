@@ -487,6 +487,13 @@ dd {
   border-left-color: var(--bad);
 }
 
+/* 失败的一轮（请求报错 / 空回复）：**必须显眼**——以前它什么都不显示，
+   用户以为消息发丢了，只能反复重发 */
+.messages li.assistant.bad {
+  border-left-color: var(--bad);
+  color: var(--bad);
+}
+
 .messages li.gate {
   border-left-color: var(--warn);
   color: var(--warn);

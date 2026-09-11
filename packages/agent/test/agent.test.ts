@@ -8,7 +8,7 @@ import { buildStateMessage, buildSystemPrompt } from '../src/prompts.js'
 import { ScriptedProvider, scriptFromCalls } from '../src/providers/scripted.js'
 import { AgentSession } from '../src/session.js'
 import { LlmError } from '../src/types.js'
-import type { LlmProvider } from '../src/types.js'
+import type { LlmMessage, LlmProvider, LlmRequest, LlmResponse } from '../src/types.js'
 import type { AgentEvent } from '../src/loop.js'
 
 const volume: Bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } }
@@ -50,6 +50,16 @@ describe('System Prompt', () => {
     const line = buildStateMessage({ revision: 7, blocks: 128, bounds: '0,0,0..3,3,3' })
     expect(line).toContain('revision=7')
     expect(buildSystemPrompt(base)).not.toContain('revision=7')
+  })
+
+  it('明确告诉模型"输出是流式的、不设上限"——只要求每个回合都落到工具调用上', () => {
+    const prompt = buildSystemPrompt(base)
+    expect(prompt).toContain('[TURN DISCIPLINE]')
+    // 流式 + 不设上限这件事要写在提示词里：模型不必为了"怕被掐断"而压缩自己的输出
+    expect(prompt).toContain('streamed and NOT capped')
+    expect(prompt).toContain('Do NOT restate the plan')
+    // 被打断之后要接着做，而不是从头再来一遍
+    expect(prompt).toContain('resume at the')
   })
 })
 
@@ -499,5 +509,203 @@ describe('设计笔记：模型写下的计划要活过上下文裁剪（§9.2 �
       designNotes: '八角基座 17 格（这是上一个会话留下的）',
     })
     expect(session.buildSystem()).toContain('八角基座 17 格')
+  })
+})
+
+describe('跨轮延续：把上一轮接上（桌面端的"接续提问"）', () => {
+  /** 按剧本回话，并把每次请求原样记下来。 */
+  function capturing(responses: LlmResponse[]): { provider: LlmProvider; requests: LlmRequest[] } {
+    const requests: LlmRequest[] = []
+    const provider: LlmProvider = {
+      id: 'capture',
+      model: 'capture',
+      supportsImages: false,
+      chat: async (request) => {
+        requests.push(request)
+        return (
+          responses.shift() ?? { text: '', toolCalls: [], usage: { in: 0, out: 0 }, finishReason: 'stop' }
+        )
+      },
+    }
+    return { provider, requests }
+  }
+
+  const text = (value: string): LlmResponse => ({
+    text: value,
+    toolCalls: [],
+    usage: { in: 1, out: 1 },
+    finishReason: 'stop',
+  })
+
+  /** 跑一轮"改一格石地板"，返回循环状态（含完整消息与闸门计数）。 */
+  async function buildOneFloor(session: AgentSession) {
+    const { provider } = capturing([
+      {
+        text: '',
+        toolCalls: [
+          { id: 'c1', name: 'fill_box', args: { from: [0, 0, 0], to: [3, 0, 3], block: 'minecraft:stone' } },
+        ],
+        usage: { in: 1, out: 1 },
+        finishReason: 'tool_calls',
+      },
+      text('铺好了。'),
+    ])
+    return runAgent(
+      {
+        provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        stateLine: session.buildStateLine(),
+        requireVerification: false,
+      },
+      '先铺一层石地板',
+    )
+  }
+
+  it('第二轮请求里带着第一轮的对话，历史在前、新状态行与需求在后', async () => {
+    const session = makeSession()
+    const first = await buildOneFloor(session)
+    expect(first.pendingMutations).toBe(1)
+
+    const second = capturing([text('开好了。')])
+    await runAgent(
+      {
+        provider: second.provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        stateLine: session.buildStateLine(),
+        history: first.messages,
+        pendingMutations: first.pendingMutations,
+        requireVerification: false,
+      },
+      '再开一扇窗',
+    )
+
+    const sent = second.requests[0]!.messages
+    // 第一轮的状态行**逐字节**还在最前面：接续是追加，不是重排——
+    // 重排会让 DeepSeek 的前缀缓存从那一句开始全部作废
+    expect(sent[0]!.content).toBe(first.messages[0]!.content)
+    expect(sent.map((message) => message.content)).toContain('先铺一层石地板')
+    // assistant 的工具调用与它的 tool 结果成对带过去
+    expect(sent.find((message) => message.role === 'assistant')?.toolCalls?.[0]?.name).toBe('fill_box')
+    expect(sent.find((message) => message.role === 'tool')?.toolCallId).toBe('c1')
+    // 本次的状态行与需求在最后
+    expect(sent.at(-1)!.content).toBe('再开一扇窗')
+    expect(sent.at(-2)!.content).toContain('[STATE]')
+  })
+
+  it('历史只追加：传进去的数组不被改写', async () => {
+    const session = makeSession()
+    const first = await buildOneFloor(session)
+    const snapshot: LlmMessage[] = first.messages.map((message) => ({ ...message }))
+
+    const second = capturing([text('好。')])
+    await runAgent(
+      {
+        provider: second.provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        history: first.messages,
+        requireVerification: false,
+      },
+      '继续',
+    )
+    expect(first.messages).toEqual(snapshot)
+  })
+
+  it('**闸门跨轮有效**：上一轮没读回，这一轮说"都做好了"不算完成', async () => {
+    const session = makeSession()
+    const first = await buildOneFloor(session)
+    expect(first.pendingMutations).toBe(1)
+
+    // 三个"我做完了"：闸门会提醒两次，第三次才以 unverified 收场
+    const second = capturing([text('都做好了！'), text('真的做好了！'), text('完成了！')])
+    const state = await runAgent(
+      {
+        provider: second.provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        history: first.messages,
+        pendingMutations: first.pendingMutations,
+      },
+      '就这样吧',
+    )
+    expect(state.stopReason).toBe('unverified')
+    expect(state.pendingMutations).toBe(1)
+  })
+})
+
+describe('被掐断的重试：原样重发，不往对话里塞东西', () => {
+  const VOLUME: Bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 15, y: 15, z: 15 } }
+
+  it('响应体被掐断 → 原样重试一次；历史里一个字都不多', async () => {
+    const session = new AgentSession({ volume: VOLUME, plain: true })
+    const requests: LlmRequest[] = []
+    let call = 0
+    const provider: LlmProvider = {
+      id: 'flaky',
+      model: 'flaky',
+      supportsImages: false,
+      chat: async (request) => {
+        requests.push(request)
+        call++
+        if (call === 1) {
+          // 网关在 ~50 s 处切连接：正文读到一半就断了
+          throw new LlmError('响应读到一半连接被掐断（terminated）', 'TRUNCATED', true)
+        }
+        return { text: '好，接着做。', toolCalls: [], usage: { in: 1, out: 1 }, finishReason: 'stop' }
+      },
+    }
+    const events: AgentEvent[] = []
+    const state = await runAgent(
+      {
+        provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        stateLine: session.buildStateLine(),
+        requireVerification: false,
+        onEvent: (event) => events.push(event),
+      },
+      '造一座小屋',
+    )
+
+    expect(state.stopReason).toBe('completed')
+    expect(requests).toHaveLength(2)
+    // **重试就是重发同一个请求**：不往历史里插提示词、不改一个字。
+    // 想"让模型少想一点"要靠上限（`maxOutputTokens`）从源头上把生成截住，
+    // 不是在重试时塞一句嘱咐——那会把用户的对话弄脏，而且并不解决问题。
+    expect(requests[1]!.messages).toEqual(requests[0]!.messages)
+    expect(state.messages.some((m) => m.content.includes('[GATE]'))).toBe(false)
+    // 重试这件事在事件流里说了，界面与档案都能看见
+    expect(events.some((e) => e.type === 'retry')).toBe(true)
+  })
+
+  it('重试到底还是失败时，如实把错误抛上去（不吞）', async () => {
+    const session = new AgentSession({ volume: VOLUME, plain: true })
+    const provider: LlmProvider = {
+      id: 'always-cut',
+      model: 'always-cut',
+      supportsImages: false,
+      chat: async () => {
+        throw new LlmError('响应读到一半连接被掐断（terminated）', 'TRUNCATED', true)
+      },
+    }
+    const state = await runAgent(
+      {
+        provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        requireVerification: false,
+      },
+      '造一座小屋',
+    )
+    expect(state.stopReason).toBe('error')
+    expect(state.error).toContain('掐断')
   })
 })

@@ -651,11 +651,15 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     // **拖动 = 原地转头**：角度变了，位置一动不动。
     // 以前拖动是"绕着画面中心转"（位置在这套语义里根本不存在），现在相机有一个真实位置，
     // 拖动只改朝向——所以这条断言同时钉住了"拖动仍然能转"和"转的时候人不跟着飞"。
+    //
+    // **方向也要钉住**：往右拖 = 画面跟着手往右走 = 相机**左**转（方位角增大）。
+    // 这条只能在这里验，因为"dx 有没有被取反"发生在事件接线里，单元测试测不到；
+    // 而枢轴从"绕中心"换成"原地转头"时，正是这一步把方向悄悄弄反的。
     const poseOf = (text) => {
       const angles = /(-?\\d+)°[^\\d-]*(-?\\d+)°/.exec(text);
       const at = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
       return {
-        azimuth: angles === null ? null : angles[1],
+        azimuth: angles === null ? null : Number(angles[1]),
         position: at === null ? null : at.slice(1).join(','),
       };
     };
@@ -684,8 +688,9 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       'drag-turn-in-place',
       beforeTurn.position !== null &&
         beforeTurn.position === afterTurn.position &&
-        beforeTurn.azimuth !== afterTurn.azimuth,
-      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°，位置保持在 ' + beforeTurn.position,
+        beforeTurn.azimuth !== afterTurn.azimuth &&
+        afterTurn.azimuth > beforeTurn.azimuth,
+      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°（往右拖 = 左转 = 角度增大），位置保持在 ' + beforeTurn.position,
     );
     return results;
   })()`

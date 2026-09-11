@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { basisFromAngles, projectPoint } from '@architect/render/browser'
+import type { CameraSpec } from '@architect/render/browser'
+
 import {
   createFreeCamera,
   forwardOf,
@@ -12,15 +15,17 @@ import {
   turn,
   zoom,
 } from '../src/renderer/freecamera.js'
+import type { Vec3 } from '../src/renderer/freecamera.js'
 
 /**
  * 自由相机的**数学**。
  *
- * 断言的是三件用户能感觉到的性质：
+ * 断言的是四件用户能感觉到的性质：
  * 1. WASD 相对**相机自己**走（抬头按 W 会上升，横移不会改高度）；
  * 2. 转头是**原地**的（位置一动不动）——这正是"像 Minecraft 那样转头"与
  *    "建筑像个托盘一样自转"的全部差别；
- * 3. 仰角能抬头（负值）但不会翻过极点，视场角有上下限。
+ * 3. **拖动的方向感**：画面跟着手走（这条对着投影结果断言，见下面的用例）；
+ * 4. 仰角能抬头（负值）但不会翻过极点，视场角有上下限。
  */
 
 const cameraAt = (azimuth: number, elevation: number) => {
@@ -28,6 +33,24 @@ const cameraAt = (azimuth: number, elevation: number) => {
   place(camera, [0, 0, 10])
   return camera
 }
+
+/** 把一个世界点投影到屏幕上（用当前的自由相机）——方向感只能这么验。 */
+const screenOf = (camera: ReturnType<typeof createFreeCamera>, point: Vec3) => {
+  const eye = camera.eye!
+  const spec: CameraSpec = {
+    azimuth: camera.azimuth,
+    elevation: camera.elevation,
+    roll: camera.roll,
+    scale: 0,
+    width: 800,
+    height: 600,
+    target: { x: 0, y: 0, z: 0 },
+    perspective: { eye: { x: eye[0], y: eye[1], z: eye[2] }, fov: camera.fov },
+  }
+  const basis = basisFromAngles(camera.azimuth, camera.elevation, camera.roll)
+  return projectPoint({ x: point[0], y: point[1], z: point[2] }, spec, basis)
+}
+
 
 describe('自由相机', () => {
   it('落地之前没有位置；place 之后就是那个点', () => {
@@ -87,12 +110,34 @@ describe('自由相机', () => {
     const camera = cameraAt(0, 0)
     const before = [...camera.eye!]
     turn(camera, 90, 0, 1) // 往右拖 90 px，灵敏度 1°/px
-    expect(camera.azimuth).toBeCloseTo(-90, 9)
+    expect(camera.azimuth).toBeCloseTo(90, 9)
     expect(camera.eye).toEqual(before) // **位置不变**
-    // 转了 90°：原本看向 -Z，现在看向 +X
+    // 转了 90°：原本看向 -Z，现在看向 -X（往右拖 = 相机往左转，见下一个用例）
     const forward = forwardOf(camera)
-    expect(forward[0]).toBeCloseTo(1, 6)
+    expect(forward[0]).toBeCloseTo(-1, 6)
     expect(forward[2]).toBeCloseTo(0, 6)
+  })
+
+  /**
+   * **拖动的方向感**：手往哪边走，画面里的东西就往哪边走。
+   *
+   * 这条必须对着**投影结果**断言，不能只对角度符号断言。同样的"往右拖 = 方位角减小"，
+   * 在"绕画面中心转"的旧相机上会让建筑跟着手往右走，换成"原地转头 + 透视"之后就成了反的
+   * （用户的原话："拖动视角反了"）。角度符号只是实现细节，屏幕上往哪边挪才是手感，
+   * 所以这里真的把世界点投影出来比对——换任何一台相机，方向错了这条就红。
+   */
+  it('**画面跟着手走**：往右拖，右边的东西往右移；往下拖，上面的东西往下移', () => {
+    const sideways = cameraAt(0, 0)
+    const right: Vec3 = [5, 0, 0] // 相机右方 5 格
+    const beforeX = screenOf(sideways, right).x
+    turn(sideways, 20, 0, 1) // 往右拖 20 px
+    expect(screenOf(sideways, right).x).toBeGreaterThan(beforeX)
+
+    const updown = cameraAt(0, 0)
+    const above: Vec3 = [0, 5, 0] // 相机上方 5 格
+    const beforeY = screenOf(updown, above).y
+    turn(updown, 0, 20, 1) // 往下拖 20 px
+    expect(screenOf(updown, above).y).toBeGreaterThan(beforeY)
   })
 
   it('方位角只保留一轮：一直往一个方向拖不会攒到 500°', () => {
@@ -100,15 +145,15 @@ describe('自由相机', () => {
     turn(camera, 400, 0, 1) // 往右拖 400 px
     expect(camera.azimuth).toBeGreaterThanOrEqual(-180)
     expect(camera.azimuth).toBeLessThanOrEqual(180)
-    expect(camera.azimuth).toBeCloseTo(-40, 9) // -400° 折回 -40°
+    expect(camera.azimuth).toBeCloseTo(40, 9) // 400° 折回 40°
   })
 
-  it('仰角能抬头到 -89，但翻不过去', () => {
+  it('仰角夹在 ±89：拖到底也翻不过极点', () => {
     const camera = cameraAt(0, 0)
-    turn(camera, 0, 10_000, 1)
-    expect(camera.elevation).toBe(89)
-    turn(camera, 0, -10_000, 1)
+    turn(camera, 0, 10_000, 1) // 往下拖到底 = 抬头到极限
     expect(camera.elevation).toBe(-89)
+    turn(camera, 0, -10_000, 1)
+    expect(camera.elevation).toBe(89)
   })
 
   it('滚轮改视场角：上滚放大（fov 变小），且夹在范围内', () => {

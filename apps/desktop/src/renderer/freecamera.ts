@@ -86,16 +86,24 @@ export function place(camera: FreeCamera, eye: Vec3): void {
 /**
  * **原地转头**：`dx` / `dy` 是鼠标位移（像素），`unit` 是"每像素多少度"。
  *
- * 和拖动一样的方向感：往右拖 = 画面往右转，往下拖 = 从上往下看。
+ * 方向是**画面跟着手走**（抓着世界拖）：往右拖 → 眼前的东西整体往右移 →
+ * 相机**左**转；往下拖 → 东西整体往下移 → 相机**抬**头。为此 `azimuth` 要加、`elevation` 要减。
+ *
+ * 这一点踩过坑：换成透视 + 真实位置之前，相机是绕着画面中心转的，
+ * 同样"往右拖 = 方位角减小"却让建筑**跟着手往右走**（近角在屏幕上右移）。
+ * 于是枢轴一换，手势的方向感整个反了——用户的原话是"拖动视角反了"。
+ * 现在两件事绑在一起：**`azimuth`/`elevation` 的符号按屏幕上的实际位移定**，
+ * 谁改投影都不用再回来猜方向（`test/freecamera.test.ts` 里对着投影结果断言）。
+ *
  * `eye` 一动不动——这正是"相对相机转"与"绕着目标转"的全部差别。
  * 仰角夹在 `±FREE_ELEVATION_LIMIT`：正好 90° 时 up 与视线共线，画面会退化。
  */
 export function turn(camera: FreeCamera, dx: number, dy: number, unit: number): void {
   // 方位角**只保留一轮**（-180..180）：一直往一个方向拖不该攒到 500°，
   // 那既让面板上的数字没法读，也让"和预设机位比角度"这种事失去意义
-  const azimuth = camera.azimuth - dx * unit
+  const azimuth = camera.azimuth + dx * unit
   camera.azimuth = ((((azimuth + 180) % 360) + 360) % 360) - 180
-  camera.elevation = clampFreeElevation(camera.elevation + dy * unit * 0.8)
+  camera.elevation = clampFreeElevation(camera.elevation - dy * unit * 0.8)
 }
 
 /** 滚轮：改视场角。指数变化，手感才均匀（和原来的缩放一致）。 */

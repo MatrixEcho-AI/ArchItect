@@ -28,7 +28,7 @@ export const zhCN = {
   viewport: {
     status: '视角 方位 {{az}}° / 仰角 {{el}}° · {{ms}}',
     statusAt: '视角 方位 {{az}}° / 仰角 {{el}}° · 位置 {{pos}} · {{ms}}',
-    hint: '第一人称透视：WASD 走（Shift 加速）· 拖动转头 · 滚轮变焦 · 双击回到自动取景',
+    hint: '第一人称透视：WASD 走（Shift 加速）· 拖动 = 画面跟手走（往右拖 = 往左看）· 滚轮变焦 · 双击回到自动取景',
     camera: '机位',
     empty: '空世界 —— 点「生成示例」看一座房子，或在右边描述你想造的建筑',
     angles: {

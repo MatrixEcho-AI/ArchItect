@@ -31,7 +31,7 @@ export const enUS = {
   viewport: {
     status: 'azimuth {{az}}°  elevation {{el}}° · {{ms}}',
     statusAt: 'azimuth {{az}}°  elevation {{el}}° · at {{pos}} · {{ms}}',
-    hint: 'First-person perspective: WASD to move (Shift to sprint) · drag to turn · wheel to zoom · double-click to reset framing',
+    hint: 'First-person perspective: WASD to move (Shift to sprint) · drag = the view follows your hand (drag right to look left) · wheel to zoom · double-click to reset framing',
     camera: 'Camera',
     empty: 'Empty world — load the sample hut, or describe a building on the right',
     angles: {

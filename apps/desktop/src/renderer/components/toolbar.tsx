@@ -6,6 +6,7 @@ import {
   PlusOutlined,
   RedoOutlined,
   SaveOutlined,
+  SettingOutlined,
   UndoOutlined,
 } from '@ant-design/icons'
 import { t } from '@architect/i18n'
@@ -14,13 +15,13 @@ import type { StudioState } from '../types.js'
 import type { MessageKey } from '@architect/i18n'
 
 /**
- * 顶栏。**七个图标按钮，没有文字**：
- * 新建 │ 打开 │ 保存 ‖ 撤销 │ 重做 ‖ 导出 │ 导入。
+ * 顶栏。**八个图标按钮，没有文字**：
+ * 新建 │ 打开 │ 保存 ‖ 撤销 │ 重做 ‖ 导出 │ 导入 ……设置。
  *
  * 这是个**纯展示组件**：所有动作由 `App` 通过 props 传进来。这样做的理由是
- * "按一下会发生什么"集中在一处，而不是散在七个按钮的 `onClick` 里。
+ * "按一下会发生什么"集中在一处，而不是散在八个按钮的 `onClick` 里。
  *
- * 三件事按用户要求改了，改法都写在这儿：
+ * 四件事按用户要求改了，改法都写在这儿：
  *
  * 1. **文字改成图标**。按钮上不再有字，所以**每个都必须有 Tooltip**——图标认不出来
  *    的时候，悬停是唯一的解释来源。`aria-label` 也一起给上（不只为了无障碍，
@@ -29,10 +30,14 @@ import type { MessageKey } from '@architect/i18n'
  *    机位那条路现在由视口直接操作（WASD / 拖动 / 双击回自动取景），下拉框是重复入口；
  *    示例工程在界面上就没有入口了（`--demo` 那条诊断路径还在）。
  * 3. 底色换成极淡的浅蓝，在 `theme.ts` 的 `Layout.headerBg` 里。
+ * 4. **「设置」从隐藏改回可见，并用齿轮图标放到右上角**（`#btn-settings`）。
+ *    "配置模型 API"此前只能从对话里那条"还没配模型"的横幅进，等于没配过的人
+ *    才有入口、配过的人反而找不到。
  *
- * 两个**隐藏但保留**的元素照旧，它们不是残留（`dom-ids` 测试与 gui-smoke 都盯着）：
- * `#cost`（成本读数，写入点仍在）与 `#status`（渲染进程里唯一读得到的相机快照，
- * gui-smoke 的 wasd-move / space-shift-vertical / 拖动方向三条断言读的就是它）。
+ * 三个**隐藏但保留**的元素照旧，它们不是残留（`dom-ids` 测试都盯着）：
+ * `#cost`（成本读数，写入点仍在）、`#status`（渲染进程里唯一读得到的相机快照，
+ * gui-smoke 的 wasd-move / space-shift-vertical / 拖动方向三条断言读的就是它）、
+ * 以及左栏的机位面板与调色板。
  */
 export interface ToolbarProps {
   state: StudioState | undefined
@@ -126,10 +131,19 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
         {costText}
       </span>
 
-      {/* 设置入口：**隐藏**，但 `#blocking-settings` 仍然打开同一个对话框 */}
-      <Button size="small" id="btn-settings" className="hidden" onClick={props.onOpenSettings}>
-        {t('menu.settings')}
-      </Button>
+      {/* 设置入口：**回到可见**，而且搬到右上角。
+          它与左边那组"文件/编辑"按钮不同类——那是改工程的，这是配应用自身的，
+          所以中间用 `flex: 1` 撑开、单独靠右（放在两个隐藏块之后，才是真的贴右边缘）。
+          按钮是**齿轮图标**（`SettingOutlined`），按规定不再带文字，
+          Tooltip + `aria-label` 用 `menu.settings` 兜底。
+          `#btn-settings` 这个 id 留着：`#blocking-settings`（对话里没配模型时的横幅）
+          打开的是同一个对话框。 */}
+      <IconButton
+        id="btn-settings"
+        label="menu.settings"
+        onClick={props.onOpenSettings}
+        icon={<SettingOutlined />}
+      />
 
       {/* 状态行：**隐藏**。同时它是渲染进程里唯一能读到的相机快照——
           gui-smoke 的 WASD / 空格 / 拖动方向断言都读它，所以不能删。 */}

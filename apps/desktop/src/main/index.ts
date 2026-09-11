@@ -726,6 +726,29 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     const cost = document.querySelector('#cost');
     check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
 
+    // **设置入口在右上角、而且是齿轮**（用户报过一次"设置按钮没了，配不了模型 API"）。
+    // 四条一起断言：存在、没带 hidden、antd 图标真的渲染出了 svg、以及它贴着顶栏右缘。
+    // 最后一条才是"右上角"——只看可见性的话，它缩在左边那堆按钮中间也算过。
+    const settings = document.querySelector('#btn-settings');
+    const header = document.querySelector('.ant-layout-header');
+    const gapRight =
+      settings === null || header === null
+        ? NaN
+        : Math.round(header.getBoundingClientRect().right - settings.getBoundingClientRect().right);
+    check(
+      'settings-visible',
+      settings !== null &&
+        !settings.classList.contains('hidden') &&
+        settings.querySelector('svg') !== null &&
+        Number.isFinite(gapRight) &&
+        gapRight < 24,
+      settings === null
+        ? '没有 #btn-settings'
+        : (settings.classList.contains('hidden') ? '被隐藏了' : '可见') +
+          ' / 图标 ' + (settings.querySelector('svg') === null ? '缺失' : '在') +
+          ' / 距顶栏右缘 ' + (Number.isFinite(gapRight) ? gapRight + 'px' : '读不到顶栏'),
+    );
+
     // 挡住发送的时候，必须有一条**能直接解决问题的路**（不然新用户第一屏就卡住）
     const blocking = document.querySelector('#blocking');
     const blocked = blocking !== null && !blocking.classList.contains('hidden');

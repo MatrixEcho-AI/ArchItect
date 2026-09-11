@@ -112,7 +112,11 @@ describe('渲染进程硬取的每个元素 id 都必须有人创建', () => {
     //
     // `#status` 尤其不能少：它是渲染进程里**唯一读得到的相机快照**，
     // gui-smoke 的 wasd-move / space-shift-vertical / 拖动方向三条断言都读它。
-    const hiddenBlocks = ['cost', 'status', 'btn-settings', 'camera-panel', 'palette-panel']
+    //
+    // `#btn-settings` **已经不在这个名单里**：按要求它回到可见，并以齿轮图标
+    // 放在右上角（`toolbar.tsx` 的 `IconButton`）——它不能再带 `hidden`，
+    // 但下面那条"照旧渲染"的断言仍然管着它。
+    const hiddenBlocks = ['cost', 'status', 'camera-panel', 'palette-panel']
     for (const id of hiddenBlocks) {
       expect(declared.has(id), `#${id} 不再被渲染了`).toBe(true)
     }
@@ -126,5 +130,18 @@ describe('渲染进程硬取的每个元素 id 都必须有人创建', () => {
       const window = owner!.text.slice(Math.max(0, at - 260), at + 260)
       expect(window, `#${id} 附近没有 hidden 标记：\n${window}`).toContain('hidden')
     }
+  })
+
+  it('**设置入口可见**：`#btn-settings` 照旧渲染，且不再带隐藏标记', () => {
+    // 这条是上一条的反面：设置按钮从"隐藏但保留"改成"显示在右上角"。
+    // 只把 id 从 hiddenBlocks 里拿掉还不够——那样"它到底还渲不渲染"就没人盯了
+    // （这条测试只查"取 → 有"，而 `#btn-settings` 现在已经没人硬取）。
+    // 所以这里自己声明契约：元素在、且没有 hidden。
+    expect(declared.has('btn-settings'), '#btn-settings 不再被渲染了').toBe(true)
+    const owner = files.find((file) => file.text.includes('id="btn-settings"'))
+    expect(owner, '找不到渲染 #btn-settings 的文件').toBeDefined()
+    const at = owner!.text.indexOf('id="btn-settings"')
+    const window = owner!.text.slice(Math.max(0, at - 260), at + 260)
+    expect(window, `#btn-settings 仍然带隐藏标记：\n${window}`).not.toContain('hidden')
   })
 })

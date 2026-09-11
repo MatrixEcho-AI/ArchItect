@@ -443,86 +443,90 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
     <>
       <Layout style={{ height: '100vh' }}>
         <Layout.Header>
-          <Toolbar
-            state={studio.state}
-            costText={costText(studio.chat?.costUsd, studio.chat?.usage)}
-            statusText={status}
-            onNew={() =>
-              void run(t('menu.new'), async () => {
-                await afterState(await window.architect.newProject())
-              })
-            }
-            onOpen={() =>
-              void run(t('menu.open'), async () => {
-                const next = await window.architect.open()
-                if (next === undefined) return // 用户取消
-                await afterState(next)
-              })
-            }
-            onSave={() =>
-              void run(t('menu.save'), async () => {
-                const path = await window.architect.save()
-                if (path === undefined) return
-                studioRef.current?.setState(await window.architect.state())
-              })
-            }
-            /* 「生成示例」按钮已按用户要求移除，界面上**没有这个入口**了
-               （欢迎提示里那句指引也一并删了，它指的就是这个按钮）。
-               `window.architect.demo()` 仍然在（preload 的 `studio:demo` 通道、
-               `StudioService.demo()` 都没动，`--demo` 诊断开关也用着它）。
-               要恢复：把 `onDemo` 加回 props，取消 toolbar.tsx 里那段注释，
-               并把 `viewport.empty` 的文案改回去。 */
-            onExport={() =>
-              void run(t('menu.export'), async () => {
-                // 扩展名决定格式；`.schem` / `.litematic` / `.obj` 三种
-                const result = await window.architect.exportModel('schem')
-                if (result === undefined) return // 用户取消
-                studioRef.current?.setNotice(
-                  t('notice.exported', {
-                    count: result.paths.length,
-                    names: result.paths.join('、'),
-                  }),
-                )
-                setStatus(result.summary)
-              })
-            }
-            onImport={() =>
-              void run(t('menu.import'), async () => {
-                const result = await window.architect.importModel()
-                if (result === undefined) return // 用户取消
-                await afterState(result.state)
-                // 认不出来的方块要如实说，别让用户以为全导进来了
-                const parts = [t('notice.imported', { summary: result.summary })]
-                if (result.renamed.length > 0) {
-                  parts.push(t('notice.importRenamed', { count: result.renamed.length }))
-                }
-                if (result.unknown.length > 0) {
-                  parts.push(
-                    t('notice.importSkipped', {
-                      count: result.unknown.length,
-                      cells: result.skipped,
-                    }) +
-                      `\n${result.unknown
-                        .slice(0, 5)
-                        .map((entry) => `${entry.name} ×${entry.count}`)
-                        .join('、')}`,
+          {/* Toolbar 内部靠 `flex: 1` 把「设置」齿轮顶到最右，所以这一层必须
+              是满宽的 flex——不然 Toolbar 只按内容宽度收缩，齿轮落在中间。 */}
+          <div style={{ display: 'flex', alignItems: 'center', width: '100%', height: '100%' }}>
+            <Toolbar
+              state={studio.state}
+              costText={costText(studio.chat?.costUsd, studio.chat?.usage)}
+              statusText={status}
+              onNew={() =>
+                void run(t('menu.new'), async () => {
+                  await afterState(await window.architect.newProject())
+                })
+              }
+              onOpen={() =>
+                void run(t('menu.open'), async () => {
+                  const next = await window.architect.open()
+                  if (next === undefined) return // 用户取消
+                  await afterState(next)
+                })
+              }
+              onSave={() =>
+                void run(t('menu.save'), async () => {
+                  const path = await window.architect.save()
+                  if (path === undefined) return
+                  studioRef.current?.setState(await window.architect.state())
+                })
+              }
+              /* 「生成示例」按钮已按用户要求移除，界面上**没有这个入口**了
+                 （欢迎提示里那句指引也一并删了，它指的就是这个按钮）。
+                 `window.architect.demo()` 仍然在（preload 的 `studio:demo` 通道、
+                 `StudioService.demo()` 都没动，`--demo` 诊断开关也用着它）。
+                 要恢复：把 `onDemo` 加回 props，取消 toolbar.tsx 里那段注释，
+                 并把 `viewport.empty` 的文案改回去。 */
+              onExport={() =>
+                void run(t('menu.export'), async () => {
+                  // 扩展名决定格式；`.schem` / `.litematic` / `.obj` 三种
+                  const result = await window.architect.exportModel('schem')
+                  if (result === undefined) return // 用户取消
+                  studioRef.current?.setNotice(
+                    t('notice.exported', {
+                      count: result.paths.length,
+                      names: result.paths.join('、'),
+                    }),
                   )
-                }
-                studioRef.current?.setNotice(parts.join('\n'))
-              })
-            }
-            onUndo={() =>
-              void run(t('menu.undo'), async () => {
-                await afterState(await window.architect.undo())
-              })
-            }
-            onRedo={() =>
-              void run(t('menu.redo'), async () => {
-                await afterState(await window.architect.redo())
-              })
-            }
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
+                  setStatus(result.summary)
+                })
+              }
+              onImport={() =>
+                void run(t('menu.import'), async () => {
+                  const result = await window.architect.importModel()
+                  if (result === undefined) return // 用户取消
+                  await afterState(result.state)
+                  // 认不出来的方块要如实说，别让用户以为全导进来了
+                  const parts = [t('notice.imported', { summary: result.summary })]
+                  if (result.renamed.length > 0) {
+                    parts.push(t('notice.importRenamed', { count: result.renamed.length }))
+                  }
+                  if (result.unknown.length > 0) {
+                    parts.push(
+                      t('notice.importSkipped', {
+                        count: result.unknown.length,
+                        cells: result.skipped,
+                      }) +
+                        `\n${result.unknown
+                          .slice(0, 5)
+                          .map((entry) => `${entry.name} ×${entry.count}`)
+                          .join('、')}`,
+                    )
+                  }
+                  studioRef.current?.setNotice(parts.join('\n'))
+                })
+              }
+              onUndo={() =>
+                void run(t('menu.undo'), async () => {
+                  await afterState(await window.architect.undo())
+                })
+              }
+              onRedo={() =>
+                void run(t('menu.redo'), async () => {
+                  await afterState(await window.architect.redo())
+                })
+              }
+              onOpenSettings={() => setSettingsOpen(true)}
+            />
+          </div>
         </Layout.Header>
 
         <Layout>

@@ -384,6 +384,23 @@ export class ChatController {
    * 探测一个端点，**并把结果写回配置**。
    *
    * 界面上刚输入的明文密钥只在这一次探测里用，不落盘——用户还没点保存。
+   *
+   * ## 为什么要在这里写回（真机事故）
+   *
+   * `createProvider` 的 `supportsImages` 读的是 `config.capabilities.vision`，而它
+   * **只有探针能填**（预设里是 `false`，config.ts 里那条"不读静态表"）。可这条通道
+   * 原来只 `return result`：探针在**本地那份 config** 上量出了 `vision: true`，
+   * 那份 config 随即被丢掉，落盘的仍是预设的 `vision: false`。
+   *
+   * 后果不是"少了个数字"，而是**图被静默丢掉**：`OpenAiCompatibleProvider.serialize`
+   * 见 `supportsImages === false` 就把图换成一行
+   * "(The current model does not support images; N screenshot(s) omitted)"。
+   * 用户看到的是"截图渲染成功、rev 也对，但拿到的只有文字元数据"——一路都是绿的，
+   * 只有画面没有。CLI 那条路没这个毛病，因为它在 `resolveProvider` 里显式
+   * `Object.assign(config, discovery.config)`；桌面这条路漏了同一件事。
+   *
+   * 写回的**前提是这次探测真的是在测已存的那个 provider**（端点与密钥引用都对得上）。
+   * 否则用户只是在拿一个草稿端点试连接，把它的能力记到另一个 provider 上就是撒谎。
    */
   async testConnection(input: TestConnectionInput): Promise<DiscoveryResult> {
     const base = this.settings.providers.find((p) => p.id === this.settings.activeId)
@@ -405,6 +422,25 @@ export class ChatController {
       ...(input.model !== undefined && input.model.length > 0 ? { model: input.model } : {}),
       ...(input.listOnly === true ? { listOnly: true } : {}),
     })
+
+    // 只在"测的就是已存的那个 provider"时写回；草稿端点不污染已存的记录
+    //
+    // ⚠️ 能力要从 `result.config` 取，**不是**上面那份 `config`：`discoverProvider`
+    // 开头就 `structuredClone(base)`，量出来的结论只落在它返回的副本上，
+    // 传进去的那份对象始终没被碰过。这一条踩过一次——写成 `config.capabilities`
+    // 时比较双方都是旧的，条件永远为假，于是"写回"整段静默不执行。
+    const probed = result.config
+    const sameTarget =
+      base !== undefined && base.baseURL === probed.baseURL && base.apiKeyRef === probed.apiKeyRef
+    if (sameTarget && !sameCapabilities(base.capabilities, probed.capabilities)) {
+      this.settings = {
+        ...this.settings,
+        providers: this.settings.providers.map((p) =>
+          p.id === base.id ? { ...p, model: probed.model, capabilities: probed.capabilities } : p,
+        ),
+      }
+      this.emit({ type: 'settings', view: this.settingsView() })
+    }
     return result
   }
 
@@ -412,6 +448,22 @@ export class ChatController {
     if (ref.startsWith('safe:')) return this.secrets.get(ref.slice(5))
     if (ref.startsWith('env:')) return process.env[ref.slice(4)]
     return undefined
+  }
+
+  /**
+   * 能力**还没测过**的当前 provider——就是那种 `source: 'preset'`、`vision` 还是预设
+   * 默认 `false` 的配置。启动时拿它决定"要不要补一次探针"。
+   *
+   * 为什么要有这个：`vision` 是**唯一**决定图发不发给模型的开关，而它在探针之前一律
+   * 是 `false`。没有这一步时，一条"从没测过"的配置会一直静默吞图；用户唯一的补救
+   * 是碰巧点开设置再点一次"测试连接"。所以宁可启动时自己补测一次。
+   *
+   * `source` 是 `'user'` / `'probe'` 的一律不碰——那是用户手填或已经测过的结论。
+   */
+  unmeasuredProvider(): ProviderConfig | undefined {
+    const config = activeProvider(this.settings)
+    if (config === undefined) return undefined
+    return config.capabilities.source === 'preset' ? config : undefined
   }
 
   // ── 对话 ────────────────────────────────────────────────────────────────────
@@ -980,4 +1032,18 @@ function compactJson(value: unknown): string {
   } catch {
     return t('desktop.unserializableArgs')
   }
+}
+
+/**
+ * 两份能力描述是不是同一份。
+ *
+ * 用来判断探针有没有**真的改到东西**——没变就别动设置、别写盘。用 JSON 全量比较而不是
+ * 只比 `vision`：`toolCalling` / `imageTokenCost` / `contextWindow` 都是探针的结论，
+ * 漏比一个就会让那个字段永远停在旧值上（这次这个 bug 就是这么来的）。
+ */
+function sameCapabilities(
+  a: ProviderConfig['capabilities'],
+  b: ProviderConfig['capabilities'],
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b)
 }

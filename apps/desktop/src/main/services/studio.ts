@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
-import type { SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
+import type { DiscoveryResult, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis, WorldStore } from '@architect/core'
 import {
@@ -580,6 +580,23 @@ export class StudioService {
 
   testConnection(input: TestConnectionInput): ReturnType<ChatController['testConnection']> {
     return this.chat.testConnection(input)
+  }
+
+  /**
+   * 启动时给"还没测过能力"的当前 provider 补一次探针。
+   *
+   * 返回 `undefined` 表示不需要补测（没有 provider / 已经测过 / 用户手填过）。
+   * 调用方负责落盘——和 `settings:test` 那条通道一样，设置文件只有一个写入口。
+   */
+  async probeUnmeasured(): Promise<DiscoveryResult | undefined> {
+    const config = this.chat.unmeasuredProvider()
+    if (config === undefined) return undefined
+    return this.chat.testConnection({
+      preset: config.preset,
+      baseURL: config.baseURL,
+      apiKeyRef: config.apiKeyRef,
+      model: config.model,
+    })
   }
 
   get agentSession(): AgentSession {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { LlmError, ScriptedProvider, scriptFromCalls } from '@architect/agent'
+import { createProvider, LlmError, ScriptedProvider, scriptFromCalls } from '@architect/agent'
 import type {
   AgentEvent,
   LlmMessage,
@@ -467,6 +467,182 @@ describe('ChatController：设置的增删改', () => {
     controller.setUi({ view: 'front' })
     expect(seen).toEqual(['settings', 'settings', 'settings'])
     expect(controller.settingsValue.locale).toBe('en-US')
+  })
+})
+
+/**
+ * **探针量出来的能力必须写回设置**（真机事故）。
+ *
+ * 症状：截图明明渲染成功（rev、包围盒、机位都对），模型那边只收到一行
+ * "(The current model does not support images; 1 screenshot(s) omitted)"。
+ *
+ * 根因在桌面这条路上：`createProvider` 的 `supportsImages` 读的是
+ * `config.capabilities.vision`，而预设里它是 `false`，**只有探针能填**。可是
+ * `testConnection` 原来只 `return result`——探针在本地那份 config 上量出了
+ * `vision: true`，那份 config 随即被丢掉，`settings.json` 里留着的仍是 `false`。
+ * CLI 那条路显式 `Object.assign(config, discovery.config)`，所以只有桌面端中招。
+ */
+describe('连接测试：探针的能力会写回配置（否则图被静默丢掉）', () => {
+  /** 打桩的 fetch：`/models` 走普通 JSON，chat 走 SSE；带图的请求多报 184 个 in token。 */
+  function stubProbeFetch(): { restore: () => void; chatBodies: Array<Record<string, unknown>> } {
+    const original = globalThis.fetch
+    const chatBodies: Array<Record<string, unknown>> = []
+    globalThis.fetch = (async (input: unknown, init?: { body?: string }) => {
+      const url = String(input)
+      if (url.endsWith('/models')) {
+        const json = { data: [{ id: 'deepseek-flash', owned_by: 'deepseek' }] }
+        return { ok: true, status: 200, json: async () => json, text: async () => JSON.stringify(json) }
+      }
+      const body = JSON.parse(init?.body ?? '{}') as Record<string, unknown>
+      chatBodies.push(body)
+      const messages = (body['messages'] ?? []) as Array<{ content?: unknown }>
+      const withImage = messages.some(
+        (m) =>
+          Array.isArray(m.content) &&
+          (m.content as Array<{ type?: string }>).some((part) => part.type === 'image_url'),
+      )
+      const tokensIn = withImage ? 225 : 41
+      const frames = [
+        JSON.stringify({ choices: [{ index: 0, delta: { content: 'red' } }] }),
+        JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }),
+        JSON.stringify({ choices: [], usage: { prompt_tokens: tokensIn, completion_tokens: 1 } }),
+      ]
+      const bytes = new TextEncoder().encode(frames.map((f) => `data: ${f}\n\n`).join('') + 'data: [DONE]\n\n')
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes)
+          controller.close()
+        },
+      })
+      return { ok: true, status: 200, body: stream, text: async () => '', json: async () => ({}) }
+    }) as unknown as typeof fetch
+    return { restore: () => (globalThis.fetch = original), chatBodies }
+  }
+
+  /** 一份"从没测过"的设置：能力停在预设的 `vision: false`。 */
+  const unprobed = (): ProviderSettings => ({
+    ...deepseekWithKey(),
+    providers: [
+      {
+        ...deepseekWithKey().providers[0]!,
+        apiKeyRef: '',
+        model: '',
+        capabilities: { vision: false, toolCalling: 'native', promptCache: 'auto', source: 'preset' },
+      },
+    ],
+  })
+
+  const controllerFor = (settings: ProviderSettings): ChatController =>
+    new ChatController({ settings, secrets: createMemorySecretStore() }, async () => ({
+      stopReason: 'completed',
+      usage: { in: 0, out: 0 },
+    }))
+
+  it('**探到的 vision 落进 settingsValue**（这就是图被丢掉的那一环）', async () => {
+    const { restore } = stubProbeFetch()
+    try {
+      const controller = controllerFor(unprobed())
+      const before = controller.settingsValue.providers[0]!.capabilities
+      expect(before.vision).toBe(false)
+
+      const result = await controller.testConnection({
+        preset: 'deepseek',
+        baseURL: 'https://api.deepseek.com',
+        model: '',
+      })
+
+      expect(result.ok).toBe(true)
+      expect(result.config.capabilities.vision).toBe(true)
+      // 关键断言：**存下来的那一份**也变了。只改 result.config 就是原来的 bug。
+      const after = controller.settingsValue.providers[0]!.capabilities
+      expect(after.vision).toBe(true)
+      expect(after.source).toBe('probe')
+      expect(after.imageTokenCost).toBe(184)
+    } finally {
+      restore()
+    }
+  })
+
+  it('写回之后 createProvider 才真的把图发出去（两半接上）', async () => {
+    const { restore, chatBodies } = stubProbeFetch()
+    try {
+      const controller = controllerFor(unprobed())
+      await controller.testConnection({ preset: 'deepseek', baseURL: 'https://api.deepseek.com', model: '' })
+
+      // 用**在设置里存着的那一份**建 provider：它决定 `supportsImages`
+      const provider = createProvider(controller.settingsValue.providers[0]!)
+      expect(provider.supportsImages).toBe(true)
+
+      chatBodies.length = 0
+      await provider.chat({
+        system: '',
+        messages: [{ role: 'user', content: '看看这张图', images: [{ png: new Uint8Array([1]), mimeType: 'image/png', id: 'x' }] }],
+        tools: [],
+        maxTokens: 16,
+      })
+      const content = (chatBodies[0]!['messages'] as Array<{ content: unknown }>)[0]!.content
+      expect(Array.isArray(content), '图应该走 content parts，而不是被换成一行文字').toBe(true)
+      expect(JSON.stringify(content)).toContain('image_url')
+      expect(JSON.stringify(content)).not.toContain('does not support images')
+    } finally {
+      restore()
+    }
+  })
+
+  it('拿**草稿端点**试连接时，不把它的能力记到已存的 provider 上', async () => {
+    const { restore } = stubProbeFetch()
+    try {
+      const controller = controllerFor(unprobed())
+      const result = await controller.testConnection({
+        preset: 'deepseek',
+        baseURL: 'https://gateway.example.com/v1',
+        model: 'deepseek-flash',
+      })
+      // 探针自己照常给出结论……
+      expect(result.config.capabilities.vision).toBe(true)
+      // ……但不许污染"已存的那个端点"的记录
+      expect(controller.settingsValue.providers[0]!.capabilities.vision).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  it('启动自愈：`probeUnmeasured` 只对"没测过"的 provider 动手', async () => {
+    const { restore } = stubProbeFetch()
+    try {
+      // 没测过 → 补测，并把结论落进设置
+      const fresh = new StudioService({
+        plain: true,
+        chat: { settings: unprobed(), secrets: createMemorySecretStore() },
+      })
+      const result = await fresh.probeUnmeasured()
+      expect(result?.config.capabilities.vision).toBe(true)
+      expect(fresh.chat.settingsValue.providers[0]!.capabilities.vision).toBe(true)
+
+      // 已经测过（source: 'probe'）→ 不再重复打网络
+      const tested = new StudioService({
+        plain: true,
+        chat: { settings: deepseekWithKey(), secrets: createMemorySecretStore() },
+      })
+      expect(tested.chat.settingsValue.providers[0]!.capabilities.source).toBe('probe')
+      expect(await tested.probeUnmeasured()).toBeUndefined()
+
+      // 用户手填的能力也不许被覆盖
+      const manual = unprobed()
+      manual.providers[0]!.capabilities = {
+        vision: false,
+        toolCalling: 'native',
+        promptCache: 'auto',
+        source: 'user',
+      }
+      const kept = new StudioService({
+        plain: true,
+        chat: { settings: manual, secrets: createMemorySecretStore() },
+      })
+      expect(await kept.probeUnmeasured()).toBeUndefined()
+    } finally {
+      restore()
+    }
   })
 })
 

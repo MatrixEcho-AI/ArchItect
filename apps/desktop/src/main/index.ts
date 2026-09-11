@@ -469,7 +469,13 @@ function registerIpc(): void {
     persistSettings()
     return view
   })
-  handle('settings:test', (input: TestConnectionInput) => studio.testConnection(input))
+  // 探针会把**量出来的能力**写回配置（见 ChatController.testConnection），所以这里
+  // 必须落盘：不然重启之后 `vision` 又回落到预设的 false，图再次被静默丢掉。
+  handle('settings:test', async (input: TestConnectionInput) => {
+    const result = await studio.testConnection(input)
+    persistSettings()
+    return result
+  })
 
   // ── 对话 ────────────────────────────────────────────────────────────────────
   handle('chat:view', () => studio.chatView())
@@ -1157,6 +1163,37 @@ void app.whenReady().then(async () => {
   if (process.argv.includes('--md-test')) seedMarkdownSample()
   registerIpc()
   createWindow()
+
+  /**
+   * **启动时给"还没测过能力"的 provider 补一次探针。**
+   *
+   * 真机事故：用户配好 API 之后从没点过"测试连接"，`settings.json` 里
+   * `capabilities.vision` 就一直是预设的 `false`。而它是**唯一**决定图发不发给
+   * 模型的开关——于是截图渲染成功、revision 也对，交付时却被换成一行
+   * "(The current model does not support images; N screenshot(s) omitted)"。
+   *
+   * 设置面板里点一次"测试连接"能修好，但那是"碰巧点开设置"才有的运气。
+   * 放在这里补测，配置就能自愈，不必等用户想起来。
+   *
+   * 三条边界：诊断跑不测（`--demo` / `--capture` 这些不等网络）、不阻塞建窗口
+   * （探针要联网，几十秒都可能）、失败只写一行 stderr——**不能因为探测失败就弹窗**。
+   */
+  const diagnostic = isDiagnosticRun(process.argv, new Set(debugFlagNames(process.argv)))
+  if (!diagnostic) {
+    void studio
+      .probeUnmeasured()
+      .then((result) => {
+        if (result === undefined) return
+        persistSettings()
+        process.stdout.write(
+          `[probe] ${result.ok ? '已测出' : '未测通'} ${result.config.model}` +
+            ` 图像输入=${result.config.capabilities.vision ? '支持' : '不支持'}\n`,
+        )
+      })
+      .catch((error: unknown) => {
+        process.stderr.write(`[probe] 能力探测失败：${error instanceof Error ? error.message : String(error)}\n`)
+      })
+  }
 
   // 首次启动把设置里的问题（比如设置文件坏过）告诉用户，而不是静默吞掉
   if (settingsLoad.fresh === false && settingsLoad.issues.length > 0) {

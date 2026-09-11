@@ -96,6 +96,15 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
       setProbe(describeProbe(result))
       // 探针挑出来的模型写回输入框——用户不用手抄
       if (result.config.model.length > 0) setModel(result.config.model)
+      /**
+       * **把量出来的能力同步回界面**。
+       *
+       * 主进程在 `testConnection` 里已经把 `result.config.capabilities` 写回设置并落盘，
+       * 但这里的 `editing` 还是探测前那一份快照；而「应用」按钮走的 `collectConfig()`
+       * 恰恰读的是 `editing.capabilities`。不同步的话，点一下应用就把刚探到的
+       * `vision: true` 又用旧的 `false` 盖回去——图会再次被静默丢掉。
+       */
+      props.onSaved(await window.architect.settings())
     } catch (error) {
       setProbe(error instanceof Error ? error.message : String(error))
     }

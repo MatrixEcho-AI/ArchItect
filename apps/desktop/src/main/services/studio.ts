@@ -1216,7 +1216,11 @@ export class StudioService {
     // `.obj`：用碰撞盒几何，颜色取自当前配色方案（plain 时是确定性兜底色）
     const resolve = this.session.colorResolver
     const result = exportObj(store, {
-      mtlName: `${stem}.mtl`,
+      // `mtllib` 按 OBJ 规范是**文件名** token，不是路径。`stem` 来自另存为对话框的
+      // 完整路径，直接用会让文件头写成 `mtllib C:\...\hut.mtl` —— 反斜杠不是路径
+      // 分隔符、`C:` 也不是文件名该有的东西，第三方工具（three.js OBJLoader、
+      // MeshLab）会把材质整个丢掉。压成本文件名。
+      mtlName: `${baseNameOf(stem)}.mtl`,
       colorOf: (state) => {
         const rgb = resolve(state)
         return rgb === undefined ? undefined : { r: rgb.r, g: rgb.g, b: rgb.b }

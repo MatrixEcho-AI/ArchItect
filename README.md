@@ -2,7 +2,7 @@
 
 **用多模态 LLM 设计 Minecraft 建筑的 harness。**
 
-你说一句"设计一座海边灯塔，塔身收分，顶部有玻璃灯室"，它自主规划、调工具、拍截图自检、
+你说一句「设计一座海边灯塔，塔身收分，顶部有玻璃灯室」，它自主规划、调工具、拍截图自检、
 改到满意，最后产出一个可回放、可导出、可分享的 `.mcai` 工程文件。
 
 ```
@@ -22,18 +22,28 @@ three.js 画（和视口共用同一份几何与相机）；CLI、CI 与无 GPU 
 
 ---
 
-## 5 分钟上手
+## 它能做什么
+
+- **说一句话，造一座建筑。** 它自己量尺寸、铺地基、长墙、开门窗、起屋顶，每一步都拍张截图自己看，不对就改。
+- **全程可回放。** 每一笔编辑都进编辑记录；撤销 / 重做是在时间线上前后移动并**重放**，不写新记录——所以撤销之后时间线、导出、`.mcai` 往返仍然自洽。
+- **`.mcai` 是拿来分享的。** 里面装着方块数据、编辑记录、**完整对话记录与截图存档**：发给别人，他打开就能接着看、接着改。
+- **能拿去游戏里用。** 导出 `.schem`（WorldEdit）/ `.litematic`（Litematica）/ `.obj`（三维软件）。
+- **人手随时能补。** 人改的和模型改的**完全同权**：同一条 op 日志（只差 `source` 字段），所以撤销、时间线、导出、保存全都照常。
+- **不想接云模型也行。** Ollama 本地跑同一套 Provider 配置。
+
+## 上手
+
+需要 Node ≥ 22 与 pnpm。
 
 ```bash
 pnpm install
 
-# 1. 看一眼它长什么样（不需要 API key）
-pnpm demo:v0                     # 脚本化造一座灯塔 → 系统临时目录/v0demo/lighthouse.mcai
-                                 #   （脚本会打印完整路径；Windows 上是 %TEMP%）
-pnpm desktop                     # 打开界面（Electron）
+# 1. 先看一眼它长什么样（不需要 API key）
+pnpm demo:v0                     # 脚本化造一座灯塔，产出一份 .mcai
+pnpm desktop                     # 打开界面
 
 # 2. 接一个模型
-pnpm providers                   # 先探测端点：有哪些模型、吃不吃图、单图多少 token
+pnpm providers                   # 探测端点：有哪些模型、吃不吃图、单图多少 token
 #    没配好的话它会告诉你要 export 哪个环境变量
 
 # 3. 让它真的设计一座
@@ -47,163 +57,61 @@ pnpm architect shoot hut.mcai --out hut.png --view iso_ne
 pnpm architect export hut.mcai --out hut.schem       # 拿去游戏里 //schem load
 ```
 
-**不想接云模型也行**：Ollama 本地跑同样一套 Provider 配置（`--provider ollama`）。
-它没有前缀缓存，harness 会**自动切到保守的上下文策略**：只保留最近 6 轮、最多 3 张截图，
-并在历史里留一句"前面 N 轮被裁掉了"。反过来，有前缀缓存的 provider（DeepSeek）**一轮都不裁**——
-剪掉一张旧图省下的钱，比把它后面十万 token 的缓存打掉亏掉的钱少三个数量级。
-（判据在 `packages/agent/src/context.ts`，两套只在其中一套上跑。）
+还没接模型时界面照样能开、能看、能导出，只是对话栏会提示你先去「设置」里填接口地址与 API Key。
 
----
+### 界面
 
-## 它凭什么比"直接让模型写代码"强
+| 位置 | 里面有什么 |
+|------|-----------|
+| **顶栏** | 新建 / 打开 / 保存 · 撤销 / 重做 · 视图开关 · **设置**（最右那个齿轮） |
+| **左栏** | 工程信息（名称、版本、方块数、文件名）· 材质清单（每种方块用了多少格、占比）· 编辑记录（每一步一行） |
+| **中间** | 视口。拖动转头、滚轮变焦、双击回到自动取景 |
+| **右栏** | 与模型的对话：每一次工具调用、每一张截图都在这里，顶部是 token 与花费读数，底部是输入框（⌘/Ctrl + Enter 发送） |
+| **右下角** | 当前版本号（例如 `rev 7 / 7`） |
+
+⚠️ 左栏的调色板、机位面板，以及顶栏的成本 / 状态读数当前**从界面上隐藏了**——实现都在，见 `plan.md` §10.1。
+
+## 它凭什么比「直接让模型写代码」强
+
+底层是 **24 个 LLM 工具**（以批量几何为主）加一套结构化自检：模型改完必须**读回确认**，
+不允许「嘴上说完成了」。下面这张表是它跟「直接让模型写一段 Python 脚本」的差别：
 
 | 问题 | 做法 |
 |------|------|
-| **模型看不出自己错在哪** | 截图上叠坐标标尺与坐标轴；改动范围高亮；`verify` 让"读回确认"变成一次函数调用而不是口头约定 |
+| **模型看不出自己错在哪** | 截图上叠坐标标尺与坐标轴；改动范围高亮；`verify` 让「读回确认」变成一次函数调用而不是口头约定 |
 | **模型数不清格子** | 截图会被下采样到约 800×800，一格只有几个像素——所以**精确编辑一律走 `slice` 的 ASCII 文本**，图只用来看观感 |
 | **逐格摆放太慢太贵** | 工具集以批量几何为主：`extrude` 画一层平面图长成建筑、`fill_line` 做任意方向的梁与收分、`run_batch` 把多个操作压成**一个 revision** |
-| **复制旋转之后朝向全错** | `copy_region`/`paste_region`/`symmetrize` 用**同一个矩阵**同时算坐标与朝向；在 1.21.4 全部 27 866 个 state × 9 种变换上验证过是双射 |
+| **复制旋转之后朝向全错** | `copy_region` / `paste_region` / `symmetrize` 用**同一个矩阵**同时算坐标与朝向；在 1.21.4 全部 27 866 个 state × 9 种变换上验证过是双射 |
 | **成本失控** | 截图内容寻址去重、前缀缓存友好的 append-only 上下文（DeepSeek 缓存命中便宜 50 倍）、实时成本表盘 |
 | **改了却不说改没改** | 完成闸门：改过东西之后必须有一次通过的结构化读回才允许结束 |
-| **说不清"从这个角度看"** | 机位面板可以填精确的角度或相机坐标/注视点；勾上「模型用这个机位」，模型接下来的截图就从你看的那个位置拍——**人机共用机位**。截图里的标签会带上注视点（`az45/el30→(8,5,8)`），档案里能分辨"看整栋楼"和"盯着檐口" |
-| **想走近了看、或者转个头看** | 视口是**第一人称透视相机**（不是等轴测托盘）：`WASD` 走（抬头按 W 就是上升）、**空格上升 / Shift 下降**（沿世界 Y 的电梯，不跟视线俯仰走）、拖动**转头**（绕相机自己的轴，位置一动不动；方向是**画面跟手走**——往右拖 = 画面往右移 = 往左看）、滚轮改视场角变焦、双击回到自动取景。位置是真的——勾上「模型用这个机位」，模型就从你站的地方朝你看的方向拍（它那张仍是正交等轴测，见 `plan.md` D-76） |
-| **模型改不到的地方人手补** | 左栏调色板选方块，视口里点一下 = 放置、Alt+点 = 挖掉、Cmd/Ctrl+点 = 吸取。**人改的和模型改的完全同权**：同一条 op 日志（只差 `source` 字段），所以撤销、时间线、导出、`.mcai` 保存全都照常。<br>⚠️ 这块和左栏机位面板、顶栏的成本/状态读数当前**从界面上隐藏了**（实现都在，见 `plan.md` §10.1） |
-| **改错一步只能重来** | 撤销 / 重做是**时间线游标前后移动 + 重放**，不写新的 op——所以撤销之后时间线、`.mcai` 往返、导出全都仍然自洽。停在历史版本上时发送框会锁住并说明原因：此时让模型改，它的第一笔就会把后面的步骤覆盖掉 |
+| **说不清「从这个角度看」** | 机位面板可以填精确的角度或相机坐标 / 注视点；勾上「模型用这个机位」，模型接下来的截图就从你看的那个位置拍——**人机共用机位**。截图里的标签会带上注视点（`az45/el30→(8,5,8)`），档案里能分辨「看整栋楼」和「盯着檐口」 |
+| **想走近了看、或者转个头看** | 视口是**第一人称透视相机**：`WASD` 走（抬头按 W 就是上升）、**空格上升 / Shift 下降**（沿世界 Y 的电梯，不跟视线俯仰走）、拖动**转头**（绕相机自己的轴，位置一动不动；方向是**画面跟手走**）、滚轮改视场角变焦、双击回到自动取景 |
+| **模型改不到的地方人手补** | 左栏调色板选方块，视口里点一下 = 放置、Alt+点 = 挖掉、Cmd/Ctrl+点 = 吸取。人改的和模型改的同一条 op 日志，所以撤销、时间线、导出全都照常。<br>⚠️ 这块当前从界面上隐藏了，见上面那条 |
+| **改错一步只能重来** | 撤销 / 重做是**时间线游标前后移动 + 重放**，不写新的 op。停在历史版本上时发送框会锁住并说明原因：此时让模型改，它的第一笔就会把后面的步骤覆盖掉 |
 
----
+## 导出
 
-## 工程结构
+| 格式 | 拿去干什么 |
+|------|-----------|
+| `.mcai` | 工程文件本身：可回放、可分享，含对话与截图存档 |
+| `.schem` | WorldEdit：`//schem load` 然后 `//paste` |
+| `.litematic` | Litematica |
+| `.obj` + `.mtl` | 三维软件 |
 
-```
-packages/
-  core       体素内核 · 状态编解码 · 几何算子 · 世界存储 · 历史回放 · 朝向变换 · linter
-  mcai       .mcai 容器 · 对话与截图存档 · 崩溃恢复 WAL
-  render     软件光栅器 · 原版方块模型网格化 · 纹理图集 · 相机与叠加层 · 正交射线拾取 · PNG 编解码
-  tools      24 个 LLM 工具 · JSON Schema 校验 · 文档生成
-  interop    .schem / .litematic / .obj · 版本迁移
-  agent      Agent 循环 · 完成闸门 · Provider 适配与能力发现
-  i18n       中文优先的文案层（zh-CN 是基准表）
-  cli        无头命令行
-apps/
-  desktop    Electron 桌面端（React 18 + antd 5，白色主题）
-docs/        格式规范 · 工具参考（生成） · prompt 库
-examples/    示例工程
-```
-
-约束：`packages/*` 全部不依赖 Electron、不依赖 DOM。
-
-渲染进程里有一条硬边界：**三份视图（世界 / 对话 / 设置）由 React 持有，视口与相机在
-React 之外**（`viewport-shell.ts`）。拖动的每个像素都不进 `useState`——WebGL 上下文只建
-一次，高频的那一半留给按帧合流的命令式代码。文案一律走 `t()`（键是编译期校验的点分
-路径），语言切换同时驱动 `@architect/i18n` 与 antd 的 `ConfigProvider`。
-
----
-
-## 常用命令
-
-| 命令 | 作用 |
-|------|------|
-| `pnpm test` | 全部测试（含全量枚举、文档一致性、**真实 HTTP 的端到端**） |
-| `pnpm typecheck` | 八个项目一起过类型 |
-| `pnpm docs:gen` | 重新生成工具参考（过期时 `pnpm test` 会失败）。脚本名带 `:gen` 是有原因的：单独一个 `docs` 会被 pnpm 的内建命令抢走，变成打开包的文档页 |
-| `ARCHITECT_UPDATE_GOLDEN=1 pnpm test packages/render/test/golden.test.ts` | 重新签软件光栅器的 golden 基线（改过渲染之后；**签之前先看一眼新图**） |
-| `pnpm bake:gen` / `pnpm bake:check` | 从 `minecraft-assets` 烘出渲染元数据（方块状态表、模型表、方块→纹理反查表、纹理平均色 → `packages/render/data/<版本>/*.json`）；`--check` 在过期时失败 |
-| `pnpm demo:v0` | 不需要 API key 的完整闭环演示 |
-| `pnpm providers` | 探测模型端点：列模型、选模型、实测能力 |
-| `npx vitest run packages/cli` | 起一个协议级假模型端点，用真 `architect build` 跑完整条链路（不需要 API key） |
-| `pnpm bench` | 跑黄金任务出评分表（真模型，五个任务约 $0.19）。`--record <f.jsonl>` 录下全部模型交互，`--replay <f.jsonl>` 之后**完全不联网**重跑同一遍——实测每个数字逐项相同，耗时从 359 s 降到 1.7 s |
-| `pnpm architect <命令>` | CLI：`info` / `ops` / `measure` / `slice` / `replay` / `shoot` / `build` / `export` / `import` |
-| `pnpm desktop` | 打开桌面端 |
-| `pnpm example` | 重新生成 `examples/forest-hut.mcai`（时间戳钉死，所以输出可复现） |
-| `pnpm icon` | 重新生成应用图标（代码画的等轴测方块，1024×1024 PNG） |
-| `pnpm --filter @architect/desktop package:dir` | 打一个不打签名、不做安装包的目录版（验打包用） |
-
-桌面端的几个诊断开关（都要先 `pnpm --filter @architect/desktop build`）。
-它们可以**叠加**，比如 `--no-webgl --drag-test` 验的是"没有 WebGL 时拖动还能不能用"：
-
-```bash
-cd apps/desktop
-npx --no-install electron . --demo --gui-smoke             # 全链路冒烟：GPU 截图 + 一串 DOM 断言（时间线拖得动、编辑记录点得开、WASD 真的移动了相机、拖动是原地转头）；任何一条不过就退 1
-npx --no-install electron . --demo --capture /tmp/gui.png  # 抓用户看到的窗口
-npx --no-install electron . --demo --shot /tmp/eye.png     # 抓**模型收到的那张图**
-npx --no-install electron . --demo --no-webgl              # 强制走软件视口（验兜底路径）
-npx --no-install electron . --demo --undo-test             # 合成两次撤销（停在历史版本上的样子）
-npx --no-install electron . --demo --paint-test            # 合成一次"人手放一格"
-```
-
-> 上面 `/tmp/...` 是 Linux/macOS 的写法。Windows 上请写 `%TEMP%\gui.png`：
-> `/tmp/gui.png` 会被解析成**当前盘符根目录**下的 `tmp\gui.png`（例如 `D:\tmp\gui.png`）。
-
-后两个不是一回事：`--capture` 是用户的视口，`--shot` 走 `ctx.shoot`，
-尺寸、叠加层、用哪条渲染路径都和模型真实收到的一致。
-排查"模型为什么看错了"时先看 `--shot` 那张。
-
-**没有 WebGL 的机器上界面照样能用**：视口会退回主进程的软件光栅器（慢、无抗锯齿、
-拖动降分辨率），并在对话面板上明说这件事。模型截图那条路不受影响——它本来就
-优先走渲染进程的 WebGL，拿不到才退回软件光栅器。
-
----
+纹理默认就是**内置资源包**（开箱即用，不需要先装 Minecraft）。想换自己的：CLI 加
+`--textures <目录|zip|客户端 jar>`，或者设 `ARCHITECT_MINECRAFT_DIR` 指向 `.minecraft`
+让程序自己去读对应版本的客户端 jar。
 
 ## 文档
 
 | 文档 | 内容 |
 |------|------|
-| [`plan.md`](plan.md) | 设计文档：世界模型、格式、渲染、工具语义、Agent 循环、里程碑、决策记录、四个附录 |
+| [`docs/development.md`](docs/development.md) | 参与开发：工程结构、常用命令、调试开关、打包 |
+| [`plan.md`](plan.md) | 设计文档：世界模型、格式、渲染、工具语义、Agent 循环、里程碑、决策记录 |
 | [`docs/mcai-format.md`](docs/mcai-format.md) | `.mcai` 格式规范（字节级） |
 | [`docs/tool-reference.md`](docs/tool-reference.md) | 24 个工具的完整参考——**从 JSON Schema 生成**，不会过期 |
 | [`docs/prompt-library.md`](docs/prompt-library.md) | 建筑风格需求模板：住宅 / 公共建筑 / 结构装饰 / 修问题 |
 | [`examples/README.md`](examples/README.md) | 示例工程怎么看、怎么重新生成 |
-
----
-
-## 打包
-
-```bash
-pnpm --filter @architect/desktop package          # dmg / nsis / AppImage
-pnpm --filter @architect/desktop package:dir      # 只出 .app/.exe 目录，验打包用
-pnpm icon                                         # 重新生成图标（apps/desktop/build/icon.png）
-```
-
-**这台 arm64 Mac 上实测出来的东西**（同一个 `package` 命令，三个平台差别很大）：
-
-| 目标 | 结果 | 产物 |
-|------|------|------|
-| macOS `dmg` + `zip` | ✅ 出来了 | `ArchItect-0.1.0-arm64.dmg`（136 MB）/ `-mac.zip`（132 MB） |
-| Linux `dir`（可运行的目录版） | ✅ 出来了 | `release/linux-arm64-unpacked/`（796 MB 未压缩） |
-| Linux `AppImage` | ⛔ 卡在工具链 | `mksquashfs: bad CPU type in executable` |
-| Windows `nsis` / `zip` | ⛔ 卡在工具链 | `wine64: bad CPU type in executable` |
-
-后两条**不是项目配置的问题**：electron-builder 给 macOS 下的 `mksquashfs` 与 `wine64`
-都是 **x86_64** 二进制，而这台机器没装 Rosetta（`arch -x86_64 /usr/bin/true` 直接报
-`Bad CPU type`）。要出这两个包，任选一条：
-
-1. `softwareupdate --install-rosetta --agree-to-license`（需要管理员口令）；
-2. 用 Docker：`electronuserland/builder` 镜像里跑同一条命令；
-3. 交给 CI（Linux runner 出 AppImage、Windows runner 出 nsis）。
-
-图标是**代码画的**（`scripts/make-icon.ts`，用渲染包自己的 Canvas，等轴测方块 + 界面同色），
-不往仓库里塞二进制：electron-builder 从这一张 1024×1024 PNG 自己转 icns/ico。
-
-已验证：`--dir` 打出来的 `.app` 直接跑 `--smoke`（从世界、截图、崩溃恢复一路到导出/导入）
-都通过——即被标成 external 的 `minecraft-data` / `minecraft-assets` / `prismarine-*`
-在 asar 里都能 require 到。
-
-**体积 748 MB**（原 837 MB）。包里最重的是 `minecraft-data`（427 MB）：它的 `data.js`
-在**加载期跨版本静态 `require`**（读 1.21.4 会去 require `1.21.1/enchantments.json`），
-所以**按目录裁不安全**——试过一次，打包版启动即 `Cannot find module`。
-真正砍掉的是这些：
-
-| 动作 | 省下 |
-|------|------|
-| `minecraft-assets` 只带 1.21.4 的方块贴图（其余版本的贴图目录约 280 MB 不进包；**所有版本的 `*.json` 都留着**，`index.js` 静态 require 它们） | ~300 MB |
-| `three` 挪到 devDependencies（它已被 esbuild 打进渲染进程的 bundle，运行时不需要再躺一份） | ~13 MB |
-| 自己的渲染元数据改成烘出来的 2.3 MB JSON（`pnpm bake:gen`），不再把资源包整个拖进主进程 | ~65 MB |
-
-纹理默认就是**内置资源包**（开箱即用，不需要先装 Minecraft）。想换自己的：
-CLI 加 `--textures <目录|zip|客户端 jar>`，或者设 `ARCHITECT_MINECRAFT_DIR` 指向 `.minecraft`
-让程序自己去读对应版本的客户端 jar。
-
----
 
 ## 非目标
 
@@ -212,6 +120,6 @@ CLI 加 `--textures <目录|zip|客户端 jar>`，或者设 `ARCHITECT_MINECRAFT
 
 ## 明确的安全红线
 
-**API key 不进 git、不进 `.mcai`。** `.mcai` 是要分享给别人的文件，
-里面出现明文密钥就是事故。配置里只存 `env:NAME` / `safe:<id>` 这样的**指针**；
-系统钥匙串不可用时**拒绝落盘**，而不是退回明文。
+**API key 不进 git、不进 `.mcai`。** `.mcai` 是要分享给别人的文件，里面出现明文密钥
+就是事故。配置里只存 `env:NAME` / `safe:<id>` 这样的**指针**；系统钥匙串不可用时
+**拒绝落盘**，而不是退回明文。

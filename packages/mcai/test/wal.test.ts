@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -55,6 +55,28 @@ describe('WAL：崩溃后能把多出来的 op 找回来', () => {
     // patch 也要原样回来——WAL 存的必须是能重建世界的完整 op，不是摘要
     expect(contents.ops[1]?.patch.length).toBe(ops[1]!.patch.length)
     expect(contents.droppedOps).toBe(0)
+  })
+
+  it('**第一次写盘失败之后，下一次仍然会补写表头**（整卷不能因此作废）', () => {
+    const file = join(dir, 'first-write-fails.wal')
+    // 把 WAL 的路径做成**目录**：appendFileSync 必然失败，模拟磁盘满 / Windows 上
+    // 文件被索引器或杀软占着。
+    mkdirSync(file, { recursive: true })
+    const wal = new WriteAheadLog({ file, header: { baseRevision: 0, projectId: 'p', name: 'n', startedAt: 'T' } })
+    const ops = makeOps(2)
+
+    expect(() => wal.append(ops[0]!)).toThrow()
+
+    // 让开之后第二次写入应当成功——而且**必须连表头一起写**。
+    // 少了它，`read()` 会把第一行 op 当成表头、因 `version !== 1` 判掉整卷，
+    // 连已经成功落盘的 op 一起丢。
+    rmSync(file, { recursive: true, force: true })
+    wal.append(ops[1]!)
+
+    const contents = wal.read()
+    expect(contents, '表头没补上，整卷 WAL 被判成不可解释').toBeDefined()
+    expect(contents!.header.baseRevision).toBe(0)
+    expect(contents!.ops).toHaveLength(1)
   })
 
   it('批量追加只写一次，读回来一样', () => {

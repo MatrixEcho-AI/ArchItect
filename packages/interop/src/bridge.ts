@@ -188,8 +188,13 @@ export function importSchematicInto(
         skipped++
         continue
       }
+      // `exact` 与 `renamed` 的 `state` 都是**规范化之后**的串：`migrateState`
+      // 内部走 `canonicalize`，会排序属性、补齐缺失项、把目标方块不接受的取值
+      // 换成声明默认值。只有 `renamed` 采用它是不够的——`exact` 时继续用**原始串**，
+      // 而原始串未必是合法状态（`half=1` 就是），于是 `palette.indexOf` 抛错，
+      // 那一格被记成「未知方块」丢掉，方块凭空消失。
+      state = outcome.state
       if (outcome.kind === 'renamed') {
-        state = outcome.state
         const toName = /^(?:minecraft:)?([a-z0-9_]+)/.exec(outcome.state)?.[1] ?? outcome.state
         const entry = renamed.get(outcome.from) ?? { from: outcome.from, to: toName, count: 0 }
         entry.count++

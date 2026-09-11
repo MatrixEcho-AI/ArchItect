@@ -127,6 +127,13 @@ export class AgentSession {
   private readonly resolve: ColorResolver
   /** 这一场会话用哪套纹理（截图与颜色解析共用同一份）。 */
   private readonly textures: TexturePack
+  /**
+   * 设计笔记（`update_notes` 的落地处）。
+   *
+   * 是**可变**的会话状态，不是构造参数：模型在一轮里写下计划，从**下一轮**起
+   * 它出现在系统提示的稳定前缀里。中途不重建系统提示是有意的——那会把前缀缓存打掉。
+   */
+  private designNotes: string | undefined
   private shotCount = 0
   private fallbacks: string[] = []
 
@@ -148,6 +155,7 @@ export class AgentSession {
     // 而且 `textured` 截图照样能用——每个方块一块纯色，形状/UV/明暗全对。
     // 调用方（CLI / 桌面端）会传自己解析好的来源覆盖它（D-61 的那条"同一个入口"）。
     this.textures = options.textures ?? bakedColorTexturePack(version)
+    this.designNotes = options.designNotes
     this.resolve =
       options.plain === true ? createFallbackColorResolver() : createPackColorResolver(version, this.textures)
 
@@ -156,6 +164,13 @@ export class AgentSession {
       log: this.log,
       history: this.history,
       clipboard: {},
+      // 设计笔记：会话级状态，`update_notes` 写、系统提示读（§9.2 的阶段摘要）
+      notes: {
+        get: () => this.designNotes,
+        set: (next) => {
+          this.designNotes = next
+        },
+      },
       correlationId: 'init',
       record: (tool, args, result) => {
         this.record(tool, args, result, LLM_ACTOR)
@@ -204,6 +219,11 @@ export class AgentSession {
   }
 
   /** 按当前状态构造 system prompt。**前缀要稳定**，所以只放慢变的东西。 */
+  /** 当前的设计笔记（保存工程时要写进 `.mcai`，重开之后模型不该失忆）。 */
+  get currentDesignNotes(): string | undefined {
+    return this.designNotes
+  }
+
   buildSystem(): string {
     const promptContext: PromptContext = {
       volume: `(${this.store.volume.min.x},${this.store.volume.min.y},${this.store.volume.min.z}) .. (${this.store.volume.max.x},${this.store.volume.max.y},${this.store.volume.max.z})`,
@@ -211,7 +231,8 @@ export class AgentSession {
     if (this.options.paletteAllowlist !== undefined) {
       promptContext.palette = this.options.paletteAllowlist
     }
-    if (this.options.designNotes !== undefined) promptContext.designNotes = this.options.designNotes
+    // 用**当前**的笔记（`update_notes` 可能在上一轮改过它），不是构造时那份快照
+    if (this.designNotes !== undefined) promptContext.designNotes = this.designNotes
     return buildSystemPrompt(promptContext)
   }
 

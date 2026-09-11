@@ -297,3 +297,44 @@ describe('.mcai 的损坏检测', () => {
     expect(PATHS.messages).toBe('chat/messages.jsonl')
   })
 })
+
+describe('设计笔记跟着工程走（重开之后模型不该失忆）', () => {
+  it('**保存 → 打开：笔记原样回来；没有笔记时不留空字段**', () => {
+    const store = new WorldStore({ minecraftVersion: '1.21.4', volume })
+    const log = new EditLog()
+    const notes = '八角基座 17 格；塔身收分到 5 格；门朝南非，净高 3 格不能堵'
+
+    // 注入时钟：manifest 里有 modifiedAt，不注入就每次都不一样（确定性测试的前提）
+    const now = '2026-01-01T00:00:00.000Z'
+    const withNotes = packProject({
+      name: '灯塔',
+      projectId: 'P1',
+      store,
+      log,
+      settings: { volume },
+      designNotes: notes,
+      now,
+    })
+    const opened = openProject(withNotes).project
+    expect(opened.manifest.designNotes).toBe(notes)
+    // 打包是确定性的：同一份输入两次结果逐字节相同（笔记不该引入任何抖动）
+    expect(
+      packProject({ name: '灯塔', projectId: 'P1', store, log, settings: { volume }, designNotes: notes, now }),
+    ).toEqual(withNotes)
+
+    const without = packProject({ name: '灯塔', projectId: 'P1', store, log, settings: { volume }, now })
+    const plain = openProject(without).project
+    expect(plain.manifest.designNotes).toBeUndefined()
+    // 空字符串也当"没有"，不写进 manifest（省得每份工程都挂一个空字段）
+    const empty = packProject({
+      name: '灯塔',
+      projectId: 'P1',
+      store,
+      log,
+      settings: { volume },
+      designNotes: '',
+      now,
+    })
+    expect(openProject(empty).project.manifest.designNotes).toBeUndefined()
+  })
+})

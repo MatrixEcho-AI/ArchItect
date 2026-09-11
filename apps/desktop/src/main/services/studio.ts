@@ -589,6 +589,10 @@ export class StudioService {
       volume: store.volume,
       minecraftVersion: project.manifest.minecraftVersion,
       palette: project.palette,
+      // 模型写的设计笔记跟着工程走：重开之后它不该失忆（§9.2 阶段摘要）
+      ...(project.manifest.designNotes !== undefined
+        ? { designNotes: project.manifest.designNotes }
+        : {}),
     })
     // 把打开的世界装进 session（复用它的日志与工具上下文）
     const target = this.session.store
@@ -616,6 +620,9 @@ export class StudioService {
       settings: { volume: this.session.store.volume },
       chat: recording.transcript,
       captures: recording.captures,
+      ...(this.session.currentDesignNotes !== undefined
+        ? { designNotes: this.session.currentDesignNotes }
+        : {}),
     })
     await writeFile(target, bytes)
     this.projectPath = target

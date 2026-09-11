@@ -625,3 +625,24 @@ describe('StudioService：导入之后能接着改（M7 验收的另一半）', 
     expect(state.revision).toBe(0)
   })
 })
+
+describe('StudioService：设计笔记的保存与恢复（模型重开工程不该失忆）', () => {
+  it('**模型写下笔记 → 保存 → 重开，笔记还在，而且进了系统提示**', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    // 走真实的工具路径写笔记
+    const result = await studio.agentSession.registry.call(studio.agentSession.ctx, 'update_notes', {
+      notes: '八角基座 17 格；塔身收分到 5 格；门朝南非',
+    })
+    expect(result.ok).toBe(true)
+    expect(studio.agentSession.currentDesignNotes).toContain('八角基座')
+
+    const path = join(workspace, 'notes.mcai')
+    await studio.save(path)
+
+    const reopened = makeStudio()
+    await reopened.open(path)
+    expect(reopened.agentSession.currentDesignNotes).toContain('八角基座')
+    expect(reopened.agentSession.buildSystem()).toContain('八角基座 17 格')
+  })
+})

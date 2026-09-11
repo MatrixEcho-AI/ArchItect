@@ -9,6 +9,7 @@ export * from './tools/batch.js'
 export * from './tools/analyze.js'
 export * from './docs.js'
 export * from './tools/fixstates.js'
+export * from './tools/notes.js'
 
 import { ToolRegistry } from './registry.js'
 import {
@@ -33,6 +34,7 @@ import { copyRegionTool, pasteRegionTool } from './tools/transform.js'
 import { replaceBlocksTool, runBatchTool } from './tools/batch.js'
 import { analyzeStructureTool } from './tools/analyze.js'
 import { fixStatesTool } from './tools/fixstates.js'
+import { updateNotesTool } from './tools/notes.js'
 
 /**
  * v0 的默认工具集。
@@ -63,6 +65,7 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(analyzeStructureTool)
     .register(screenshotTool)
     .register(setCameraTool)
+    .register(updateNotesTool)
     .register(undoRedoTools[0]!)
     .register(undoRedoTools[1]!)
 }

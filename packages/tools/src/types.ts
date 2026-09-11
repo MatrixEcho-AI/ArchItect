@@ -26,6 +26,8 @@ export type ToolErrorCode =
   | 'NEEDS_CONFIRM'
   | 'TOO_LARGE'
   | 'NOT_FOUND'
+  /** 当前会话没有这个能力（比如宿主没注入 `ctx.notes`）。 */
+  | 'UNSUPPORTED'
   | 'INTERNAL'
 
 export interface ToolError {
@@ -118,6 +120,17 @@ export interface ToolContext {
    * 会话层会把日志截断到游标处（打算丢掉的支线真的没了，还没有 `branch` 字段）。
    */
   history: ReplaySession
+  /**
+   * **设计笔记**（`update_notes` 写、系统提示的 `[DESIGN NOTES]` 段读）。
+   *
+   * 和 `clipboard` / `camera` 一样是会话级状态：模型在这一轮写下的东西，
+   * 要活到后面几轮——尤其是 Regime B 把中间那些轮次裁掉之后。
+   * 宿主不接这个能力时字段缺省，`update_notes` 会如实报错而不是假装记下了。
+   */
+  notes?: {
+    get(): string | undefined
+    set(next: string | undefined): void
+  }
   /** 记录一条 EditOp。mutating 工具写入成功后必须调用。 */
   record: (tool: string, args: unknown, result: WriteResult) => void
   /**

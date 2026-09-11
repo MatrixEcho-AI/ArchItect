@@ -8,6 +8,7 @@ import { buildStateMessage, buildSystemPrompt } from '../src/prompts.js'
 import { ScriptedProvider, scriptFromCalls } from '../src/providers/scripted.js'
 import { AgentSession } from '../src/session.js'
 import { LlmError } from '../src/types.js'
+import type { LlmProvider } from '../src/types.js'
 import type { AgentEvent } from '../src/loop.js'
 
 const volume: Bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } }
@@ -454,5 +455,49 @@ describe('工具结果格式化', () => {
     })
     expect(text).toContain('ERROR [INVALID_ARGS]')
     expect(text).toContain('HINT: 检查 from')
+  })
+})
+
+describe('设计笔记：模型写下的计划要活过上下文裁剪（§9.2 阶段摘要）', () => {
+  it('**这一轮写下的笔记，从下一轮起进系统提示**', async () => {
+    const session = new AgentSession({ volume, plain: true })
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: 'update_notes', args: { notes: '塔身收分到 5 格；门朝南非' } }] },
+      { text: '记下了' },
+    ])
+    const seen: string[] = []
+    const spy: LlmProvider = {
+      id: provider.id,
+      model: provider.model,
+      supportsImages: false,
+      chat: async (request) => {
+        seen.push(request.system)
+        return provider.chat(request)
+      },
+    }
+    const agentOptions = {
+      provider: spy,
+      registry: session.registry,
+      ctx: session.ctx,
+      system: session.buildSystem(),
+    }
+    await runAgent(agentOptions, '先记一下计划')
+
+    // 这一轮的系统提示是**构建时就定下的**：中途改它会把前缀缓存打掉
+    expect(seen[1]).not.toContain('塔身收分')
+    // 会话里存住了
+    expect(session.currentDesignNotes).toContain('塔身收分')
+    // 下一轮（宿主重新构建系统提示）就带上它了
+    expect(session.buildSystem()).toContain('[DESIGN NOTES]')
+    expect(session.buildSystem()).toContain('塔身收分到 5 格')
+  })
+
+  it('从工程里带进来的笔记一开始就在系统提示里', () => {
+    const session = new AgentSession({
+      volume,
+      plain: true,
+      designNotes: '八角基座 17 格（这是上一个会话留下的）',
+    })
+    expect(session.buildSystem()).toContain('八角基座 17 格')
   })
 })

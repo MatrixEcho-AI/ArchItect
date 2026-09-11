@@ -55,6 +55,8 @@ export interface PackInput {
   chat?: ChatTranscript
   /** 截图存档。省略则写成空索引。 */
   captures?: CaptureBundle
+  /** 模型写的设计笔记（省略表示没有）。 */
+  designNotes?: string
   appVersion?: string
   now?: string
 }
@@ -83,6 +85,10 @@ export function packProject(input: PackInput): Uint8Array {
     appVersion: input.appVersion,
     now: input.now,
   })
+  // 设计笔记进 manifest：它是"这栋建筑的当前计划"，重开工程时要接着用
+  if (input.designNotes !== undefined && input.designNotes.length > 0) {
+    manifest.designNotes = input.designNotes
+  }
   const chat = input.chat ?? emptyTranscript()
   const captures = input.captures ?? buildCaptureBundle([])
   // 打包前自查一次：索引与文件对不上是能看见的问题，值得在写盘前就把话说清楚

@@ -86,7 +86,10 @@ project.mcai
   "worldHash": "…",             // WorldStore.contentHash()，打开后应当核对
   "minY": -64,                  // 世界 Y 下界
   "worldHeight": 384,           // 世界 Y 高度
-  "counters": { "ops": 185, "captures": 4, "llmCalls": 37 }
+  "counters": { "ops": 185, "captures": 4, "llmCalls": 37 },
+  // 可选：模型自己写的设计笔记（`update_notes` 工具）。它是"这栋建筑的当前计划"，
+  // 跨会话有效——关掉再打开，模型不该失忆。省略表示没有笔记。
+  "designNotes": "八角基座 17 格，塔身收到 5 格；门朝南非，净高 3 格不能堵"
 }
 ```
 
@@ -96,6 +99,8 @@ project.mcai
 - `revision` 是**游标**，不是"日志有多长"。撤销 / 时间旅行只把它前后移动，
   不写新的 op（plan §6）。所以 `revision < counters.ops` 是**合法且常见**的状态：
   它表示"世界停在历史版本上，日志后面那几步是重做分支"。
+- `designNotes` 是**给模型看的**一段短文（上限 1200 字符，由工具自己把关），
+  读方把它塞进系统提示的 `[DESIGN NOTES]` 段即可；它不参与任何校验。
 - `counters.ops` 才是日志的行数，**全量写入**——包括游标之后的重做分支，
   这样重开工程之后仍然能重做。
 - 保存时 `baseRevision` 取**游标**而不是日志长度：快照写的是世界现在的样子，

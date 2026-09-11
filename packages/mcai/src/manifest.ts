@@ -65,6 +65,13 @@ export interface Manifest {
   minY: number
   worldHeight: number
   counters: ManifestCounters
+  /**
+   * 模型自己写的**设计笔记**（`update_notes` 工具，§9.2 的阶段摘要）。
+   *
+   * 存在 manifest 而不是某个会话里：它是"这栋建筑的当前计划"，跨会话有效——
+   * 关掉再打开，模型不该失忆。省略时表示没有笔记。
+   */
+  designNotes?: string
 }
 
 export interface ProjectSettings {

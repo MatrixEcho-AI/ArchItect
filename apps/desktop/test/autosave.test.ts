@@ -42,6 +42,43 @@ function makeStudio(steps = 3): StudioService {
   return studio
 }
 
+describe('保存之后的 WAL 基准', () => {
+  it('**撤销之后再保存，基准取的是世界游标而不是日志长度**', async () => {
+    // 基准被写成 `log.length` 的话：撤销之后游标（5→2）比日志长度小，而 WAL 只记
+    // `rev > baseRevision` 的 op——保存之后重放出来的那几笔全都不进 WAL，崩溃时
+    // **静默丢失**，界面连「有几步没保存」都不弹。
+    const studio = makeStudio(5)
+    const wal = make()
+    studio.attachAutosave(wal)
+
+    studio.seek(2)
+    expect(studio.state().revision).toBe(2)
+    expect(studio.state().totalOps, '游标没有退到日志长度之前，这条测试就不成立').toBe(5)
+
+    const path = join(dir, 'base.mcai')
+    await studio.save(path)
+    expect(existsSync(path)).toBe(true)
+
+    // 保存之后再做一笔编辑：它必须进 WAL
+    const store = studio.agentSession.store
+    const result = store.write((emit) => emit(0, 1, 0), store.palette.indexOf('minecraft:stone'), {
+      confirm: true,
+    })
+    studio.agentSession.log.record(result, {
+      tool: 'place_block',
+      args: { pos: [0, 1, 0] },
+      source: 'llm',
+      actor: 'assistant',
+    })
+
+    // 保存那一刻游标是 2、日志长度是 5：文件里只有 rev ≤ 2 的内容，所以 3、4、5 这
+    // 三笔仍然只活在日志里，**必须进 WAL**；再加上刚写的那笔，一共 4 笔。
+    // 基准若被写成 `log.length`(5)，就只会记到刚写的那 1 笔，3..5 静默丢失——
+    // 崩溃之后用户看到的是「没有待恢复的草稿」，而实际上有三笔没保存。
+    expect(studio.autosaveNow(), '撤销之后重放出来的那几笔没进 WAL').toBe(4)
+  })
+})
+
 describe('AutosaveService：只记新 op，不做全量快照', () => {
   it('**第一次 journal 记下当前全部 op，第二次没有新 op 就一次盘都不写**', () => {
     const studio = makeStudio(3)

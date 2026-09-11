@@ -1,4 +1,4 @@
-import { rename, readFile, writeFile } from 'node:fs/promises'
+import { rm, rename, readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
@@ -693,7 +693,14 @@ export class StudioService {
     // 目标。`services/settings.ts` 用的就是这个模式，这里照抄。
     const temp = `${target}.tmp`
     await writeFile(temp, bytes)
-    await rename(temp, target)
+    try {
+      await rename(temp, target)
+    } catch (error) {
+      // 替换失败时把临时文件收掉：否则工程文件旁边会留一个来路不明的
+      // `<名字>.mcai.tmp`，而用户只看到「保存失败」
+      await rm(temp, { force: true })
+      throw error
+    }
     this.projectPath = target
     // 保存成功 = 基准推进：WAL 里这一段已经进了工程文件，不必再留着
     this.commitAutosave()

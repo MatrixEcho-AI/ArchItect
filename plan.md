@@ -1660,7 +1660,7 @@ secrets.bin
 |--------|------|----------|
 | **M0 脚手架** | pnpm 工作区、TS strict、eslint/prettier、vitest、electron-vite 骨架 | `pnpm test` 与 `pnpm dev` 都能跑通空壳 |
 | **M1 体素内核** | palette、稀疏 chunk、BuildVolume、EditOp、几何算法（box/line/plane/extrude/symmetrize）、UndoStack | 单元+属性测试全绿；能脚本化搭出一座房子 |
-| **M2 .mcai 格式** | zip 读写、manifest、edits.jsonl、replay、checkpoint、WAL、迁移框架、CLI `architect info/replay` | 往返 hash 相等；replay 任意 rev 与增量结果一致；杀进程后能恢复 |
+| **M2 .mcai 格式** | zip 读写、manifest、edits.jsonl、replay、checkpoint、WAL、**版本策略**（迁移器暂无，理由见 `docs/mcai-format.md` §7）、CLI `architect info/replay` | 往返 hash 相等；replay 任意 rev 与增量结果一致；杀进程后能恢复；未知字段原样保留、缺可选字段照常打开（有测试钉住） |
 | **M3 渲染管线** | CameraSpec、预设机位、叠加层（标尺/坐标轴/高亮）、隐藏窗口截图、内容寻址缓存、软件等轴测后端、CLI `architect shoot` | CLI 能出六视图 contact sheet；重复请求命中缓存；**iso 后端 golden 测试通过**（4 张签名图，改渲染就重新签，见 §14） |
 | **M4 工具层 + Agent 循环** | 全部 v0 工具的 JSON Schema 与执行器、工具返回规范、Provider 适配、上下文管理、CLI `architect build "需求"` | **给定文字需求，CLI 能自主产出 `.mcai`，其中有一座可辨认的建筑**；黄金任务 1、2 通过 |
 

@@ -338,3 +338,48 @@ describe('设计笔记跟着工程走（重开之后模型不该失忆）', () =
     expect(openProject(empty).project.manifest.designNotes).toBeUndefined()
   })
 })
+
+describe('格式版本策略：可选字段可以随便加，破坏性改动必须升版本', () => {
+  it('**未来的读取方字段不认识也能打开**（新增可选字段不升版本的前提）', () => {
+    const { store, log } = scenario()
+    const entries = unzipSync(pack(store, log))
+    const manifest = JSON.parse(strFromU8(entries[PATHS.manifest]!)) as Record<string, unknown>
+    // 模拟"更高版本的 app 写出来的文件"：额外字段 + 已知字段的新取值
+    manifest.futureSection = { anything: [1, 2, 3] }
+    manifest.designNotes = '来自未来的笔记'
+    entries[PATHS.manifest] = strToU8(JSON.stringify(manifest))
+
+    const project = unpackProject(zipSync(entries))
+    expect(project.manifest.revision).toBeGreaterThanOrEqual(0)
+    // 未知字段**留着**：将来要原样转发（`extra` 那套也是同一个理由）
+    expect((project.manifest as Record<string, unknown>)['futureSection']).toEqual({ anything: [1, 2, 3] })
+  })
+
+  it('**老文件缺可选字段也能打开**（向后兼容）', () => {
+    const { store, log } = scenario()
+    const entries = unzipSync(pack(store, log))
+    const manifest = JSON.parse(strFromU8(entries[PATHS.manifest]!)) as Record<string, unknown>
+    delete manifest.designNotes
+    entries[PATHS.manifest] = strToU8(JSON.stringify(manifest))
+    const project = unpackProject(zipSync(entries))
+    expect(project.manifest.designNotes).toBeUndefined()
+  })
+
+  it('**主版本不同就直接拒**（而不是猜着读）', () => {
+    const { store, log } = scenario()
+    const entries = unzipSync(pack(store, log))
+    const manifest = JSON.parse(strFromU8(entries[PATHS.manifest]!)) as Record<string, unknown>
+    manifest.formatVersion = '9.0'
+    entries[PATHS.manifest] = strToU8(JSON.stringify(manifest))
+    expect(() => unpackProject(zipSync(entries))).toThrow(/主版本不同/)
+  })
+
+  it('缺必填字段时报出**具体缺了哪个**（迁移器不做，但错误要能指导人）', () => {
+    const { store, log } = scenario()
+    const entries = unzipSync(pack(store, log))
+    const manifest = JSON.parse(strFromU8(entries[PATHS.manifest]!)) as Record<string, unknown>
+    delete manifest.minecraftVersion
+    entries[PATHS.manifest] = strToU8(JSON.stringify(manifest))
+    expect(() => unpackProject(zipSync(entries))).toThrow(/minecraftVersion/)
+  })
+})

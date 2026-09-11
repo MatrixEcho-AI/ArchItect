@@ -1,3 +1,4 @@
+import { DEFAULT_HARD_LIMIT } from '@architect/core'
 import type { Bounds, Pos, WorldStore } from '@architect/core'
 
 import { migrateState } from './migrate.js'
@@ -130,6 +131,22 @@ export function importSchematicInto(
   const min = at
   const max: Pos = { x: at.x + data.size[0] - 1, y: at.y + data.size[1] - 1, z: at.z + data.size[2] - 1 }
   const filter = options.region
+
+  // 目标盒子完全由**文件里声明的尺寸**推出，所以必须先自己卡一道。
+  //
+  // 下面那个三重循环会为盒子里的**每一格**建一条 `plan` 记录（`clear` 默认开），
+  // 而 `writeBlocks` 的硬上限要到它自己把 `changes` 攒完、已经开始分配之后才生效——
+  // 中间没有任何东西挡着。于是几百字节的文件只要声明 4096×4096×1，就能在分配阶段
+  // 把进程打死（实测 V8 致命 OOM，不是可捕获的异常；桌面端这条跑在主进程里，
+  // 等于整个应用消失、未保存的编辑一起没）。
+  //
+  // 合法导入本来就该在这个上限之内：超了 `writeBlocks` 也只会静默截断。
+  const targetVolume = data.size[0] * data.size[1] * data.size[2]
+  if (targetVolume > DEFAULT_HARD_LIMIT) {
+    throw new Error(
+      `导入目标盒 ${data.size.join('x')} = ${targetVolume} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+    )
+  }
 
   const unknown = new Map<string, UnknownBlock>()
   const renamed = new Map<string, RenamedBlock>()

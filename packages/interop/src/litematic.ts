@@ -1,3 +1,4 @@
+import { DEFAULT_HARD_LIMIT } from '@architect/core'
 import type { Bounds, WorldStore } from '@architect/core'
 
 import {
@@ -208,7 +209,20 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
     const longs = asUnsignedLongArray(region['BlockStates'])
     if (longs === undefined) throw new Error(`区域 ${regionName} 缺少 BlockStates`)
 
+    // `count` 是**文件声明的**体积：下面按它分配、也按它遍历，所以必须先卡一道。
+    // 一个 168 字节的文件只要写 Size 20000×20000×1，`new Array(4e8)` 就会被 V8
+    // 直接 abort——不是可捕获的异常，桌面端跑在主进程里等于整个应用消失。
+    // 上限用仓库自己的单次写入上限：超了 `writeBlocks` 本来也只会静默截断。
+    //
+    // 注意别把这道守卫塞进 `unpackBlockStates`：它「读到超出长度的位置补 0 而不是
+    // 抛错」是明写的行为，有测试盯着（formats.test.ts）。
     const count = size[0] * size[1] * size[2]
+    if (count > DEFAULT_HARD_LIMIT) {
+      throw new Error(
+        `Litematica: 区域 ${regionName} 声明了 ${size.join('x')} = ${count} 格，` +
+          `超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+      )
+    }
     const indices = unpackBlockStates(longs, count, palette.length)
 
     const blocks: SchematicBlock[] = []

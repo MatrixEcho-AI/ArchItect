@@ -28,7 +28,8 @@ three.js 画（和视口共用同一份几何与相机）；CLI、CI 与无 GPU 
 pnpm install
 
 # 1. 看一眼它长什么样（不需要 API key）
-pnpm demo:v0                     # 脚本化造一座灯塔 → /tmp/v0demo/lighthouse.mcai
+pnpm demo:v0                     # 脚本化造一座灯塔 → 系统临时目录/v0demo/lighthouse.mcai
+                                 #   （脚本会打印完整路径；Windows 上是 %TEMP%）
 pnpm desktop                     # 打开界面（Electron）
 
 # 2. 接一个模型
@@ -129,6 +130,9 @@ npx --no-install electron . --demo --no-webgl              # 强制走软件视�
 npx --no-install electron . --demo --undo-test             # 合成两次撤销（停在历史版本上的样子）
 npx --no-install electron . --demo --paint-test            # 合成一次"人手放一格"
 ```
+
+> 上面 `/tmp/...` 是 Linux/macOS 的写法。Windows 上请写 `%TEMP%\gui.png`：
+> `/tmp/gui.png` 会被解析成**当前盘符根目录**下的 `tmp\gui.png`（例如 `D:\tmp\gui.png`）。
 
 后两个不是一回事：`--capture` 是用户的视口，`--shot` 走 `ctx.shoot`，
 尺寸、叠加层、用哪条渲染路径都和模型真实收到的一致。

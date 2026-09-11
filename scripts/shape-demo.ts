@@ -1,5 +1,15 @@
 import { writeFileSync } from 'node:fs'
-import { createAssetColorResolver, encodePng, fitCamera, presetAngles, renderIsometric } from '@architect/render'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import {
+  bakedColorTexturePack,
+  createPackColorResolver,
+  encodePng,
+  fitCamera,
+  presetAngles,
+  renderIsometric,
+} from '@architect/render'
 import { WorldStore } from '@architect/core'
 
 function main(): void {
@@ -36,11 +46,16 @@ function main(): void {
   put(14, 0, 11, 'minecraft:stone_pressure_plate')
 
   const bounds = store.contentBounds()!
-  const resolve = createAssetColorResolver('1.21.4')
+  // 用烘好的平均色包（确定性输入，且不必拖进 66.7 MB 的 minecraft-assets）——
+  // 这个脚本演示的是**几何**，不是纹理。`createAssetColorResolver` 是改名前的旧
+  // 名字，API 变过一次之后这里没跟上，脚本一直跑不起来（同一条 import 也少了一层）。
+  const resolve = createPackColorResolver('1.21.4', bakedColorTexturePack('1.21.4'))
   const camera = fitCamera(bounds, presetAngles('iso_ne'), 720, 480)
   const result = renderIsometric(store, { camera, resolve, overlays: { ruler: false } })
-  writeFileSync('/tmp/shapes.png', encodePng(result.canvas))
-  console.log(`已渲染 /tmp/shapes.png  ${result.blocks} 方块 / ${result.faces} 面`)
+  // 同 v0-demo：系统临时目录，别写死 `/tmp`（Windows 上那会落到盘根）
+  const outFile = join(tmpdir(), 'shapes.png')
+  writeFileSync(outFile, encodePng(result.canvas))
+  console.log(`已渲染 ${outFile}  ${result.blocks} 方块 / ${result.faces} 面`)
   console.log(`（改之前所有方块都会画成整立方体，约 ${result.blocks * 3} 面且全是方块状）`)
 }
 

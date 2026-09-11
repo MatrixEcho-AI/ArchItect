@@ -352,7 +352,10 @@ describe('格式版本策略：可选字段可以随便加，破坏性改动必�
     const project = unpackProject(zipSync(entries))
     expect(project.manifest.revision).toBeGreaterThanOrEqual(0)
     // 未知字段**留着**：将来要原样转发（`extra` 那套也是同一个理由）
-    expect((project.manifest as Record<string, unknown>)['futureSection']).toEqual({ anything: [1, 2, 3] })
+    // 读它要过一道 `unknown`：`Manifest` 没有索引签名，直接转 `Record` 不合法
+    expect((project.manifest as unknown as Record<string, unknown>)['futureSection']).toEqual({
+      anything: [1, 2, 3],
+    })
   })
 
   it('**老文件缺可选字段也能打开**（向后兼容）', () => {

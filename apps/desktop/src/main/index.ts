@@ -1,5 +1,5 @@
-import { writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 import { detectLocale, initI18n, setLocale, t } from '@architect/i18n'
 import type { Budget, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
@@ -513,23 +513,35 @@ function registerIpc(): void {
     // 抓窗口得到的是用户的视口，这个得到的才是模型的眼睛——两者的差别
     // （叠加层、尺寸、是否 GPU）只有落在文件上才比得出来。
     if (shotPath !== undefined) {
-      void assertGpuShot(report).then(async (result) => {
-        process.stdout.write(`[shot] ${result.ok ? 'OK' : 'FAILED'}: ${result.detail}\n`)
-        if (result.png === undefined) {
+      void assertGpuShot(report)
+        .then(async (result) => {
+          process.stdout.write(`[shot] ${result.ok ? 'OK' : 'FAILED'}: ${result.detail}\n`)
+          if (result.png === undefined) {
+            app.exit(1)
+            return
+          }
+          // 路径是调用方给的，父目录可能还不存在——`writeFile` 自己不会建。
+          await mkdir(dirname(shotPath), { recursive: true })
+          await writeFile(shotPath, result.png)
+          process.stdout.write(`已写出模型视角截图 → ${shotPath}\n`)
+          app.exit(result.ok ? 0 : 1)
+        })
+        .catch((error: unknown) => {
+          // 这一条以前没有 catch：写盘失败会变成未处理的 rejection，
+          // 而退出码也不是 1（`--capture` 那条一直有 catch，两条不一致）
+          process.stderr.write(`写截图失败：${String(error)}\n`)
           app.exit(1)
-          return
-        }
-        await writeFile(shotPath, result.png)
-        process.stdout.write(`已写出模型视角截图 → ${shotPath}\n`)
-        app.exit(result.ok ? 0 : 1)
-      })
+        })
     }
     if (capturePath !== undefined) {
       // 等一下让首帧真的画上，然后抓窗口
       setTimeout(() => {
         void mainWindow?.webContents
           .capturePage()
-          .then((image) => writeFile(capturePath, image.toPNG()))
+          .then(async (image) => {
+            await mkdir(dirname(capturePath), { recursive: true })
+            return writeFile(capturePath, image.toPNG())
+          })
           .then(() => {
             process.stdout.write(`已抓取窗口 → ${capturePath}\n`)
             app.exit(0)

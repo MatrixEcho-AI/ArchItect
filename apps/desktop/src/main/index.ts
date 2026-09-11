@@ -648,6 +648,37 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       '相机位置 ' + afterW + ' →（按 A 横移）' + afterA,
     );
 
+    // **空格上升 / Shift 下降**：同一条真实键盘路径。
+    // 断言三件事一起：Y 真的变了、升与降方向相反、以及**X/Z 一动不动**。
+    // 最后一条才是重点——要是有人把空格接到"沿视线飞"（forward）上，抬头状态下
+    // 水平位置会跟着跑，这条立刻红。所以它和 wasd-move 不是重复的。
+    // （注意这段脚本整个是 TS 模板字符串：注释里不能出现反引号。）
+    const partsOf = (text) => {
+      const at = positionOf(text);
+      return at === null ? null : at.split(',');
+    };
+    const yOf = (text) => {
+      const parts = partsOf(text);
+      return parts === null ? null : Number(parts[1]);
+    };
+    const xzOf = (text) => {
+      const parts = partsOf(text);
+      return parts === null ? null : parts[0] + ',' + parts[2];
+    };
+    const resting = status === null ? '' : status.textContent;
+    const rose = await walk(' ', 12);
+    const sank = await walk('shift', 12);
+    check(
+      'space-shift-vertical',
+      yOf(resting) !== null &&
+        yOf(rose) > yOf(resting) &&
+        yOf(sank) < yOf(rose) &&
+        xzOf(rose) === xzOf(resting) &&
+        xzOf(sank) === xzOf(resting),
+      'Y ' + yOf(resting) + ' →（空格）' + yOf(rose) + ' →（Shift）' + yOf(sank) +
+        '，水平位置保持在 ' + xzOf(rose),
+    );
+
     // **拖动 = 原地转头**：角度变了，位置一动不动。
     // 以前拖动是"绕着画面中心转"（位置在这套语义里根本不存在），现在相机有一个真实位置，
     // 拖动只改朝向——所以这条断言同时钉住了"拖动仍然能转"和"转的时候人不跟着飞"。

@@ -7,7 +7,17 @@ import {
 } from '@architect/render/browser'
 
 import { cacheShare } from './format.js'
-import { createFreeCamera, forwardOf, FOV_RANGE, lookAtFrom, moveStep, place, turn, zoom } from './freecamera.js'
+import {
+  createFreeCamera,
+  dragUnitFor,
+  forwardOf,
+  FOV_RANGE,
+  lookAtFrom,
+  moveStep,
+  place,
+  turn,
+  zoom,
+} from './freecamera.js'
 import { SoftwareViewport, Viewport } from './viewport.js'
 import type { FreeCamera } from './freecamera.js'
 import type { FrameSink, SceneViewport, SoftwareFrame, ViewportCamera } from './viewport.js'
@@ -1129,8 +1139,9 @@ function wireViewport(): void {
     // 往右拖 = 画面里的东西跟着手往右走（相机左转）；往下拖 = 东西往下走（相机抬头）。
     // 方向的定义放在 `turn()` 里，注释也写在那儿——透视投影下"画面往哪边走"才是手感，
     // 角度本身的符号只是实现细节。
-    // 灵敏度按视口高度归一：固定 °/px 在窄窗口里会转得太快。
-    const unit = 360 / Math.max(320, surface.clientHeight)
+    // 灵敏度按视口高度归一（固定 °/px 在窄窗口里会转得太快），再乘一个整体手感系数；
+    // 两个数都在 `dragUnitFor()` 里，改动它会同步影响"拖动 = 转多少度"的单元测试
+    const unit = dragUnitFor(surface.clientHeight)
     // **先把相机落到一个位置上**：视角从此相对**相机自己**转（世界绕你摆）。
     // 不落点的话画面中心一直钉在内容中心，转起来就还是"绕建筑转"——就是这一步之前的行为
     settleCamera()
@@ -1210,21 +1221,30 @@ function walkSpeed(): number {
 }
 
 /**
- * **WASD 移动视角**（像游戏里那样走）。
+ * **WASD / 空格 / Shift 移动视角**（像游戏里那样走）。
  *
- * 三件事决定了它为什么要单独一段：
+ * 四件事决定了它为什么要单独一段：
  *
  * 1. **按住就连续走**，所以是个按帧推进的循环。键盘自动重复（~30 Hz，还有一段延迟）
  *    和帧率对不上，靠它驱动会一顿一顿的。
- * 2. **打字时不抢**。焦点在输入框/文本域/下拉框里（下拉框也吃字母键）就完全不接。
- * 3. **方向取自相机自己**：W/S 沿视线前后（抬头按 W 就是上升），A/D 水平横移。
- *    速度随内容大小走（按包围盒算），Shift 加速——不然 200 格的城堡要走到天荒地老。
+ * 2. **打字时不抢**。焦点在输入框/文本域/下拉框里就完全不接（它们吃字母键）；
+ *    空格另有一条：焦点停在按钮上时归按钮，见下面 `keydown` 里的注释。
+ * 3. **方向取自相机自己**：W/S 沿视线前后（抬头按 W 就是上升），A/D 水平横移，
+ *    **空格上升 / Shift 下降**沿世界 Y（垂直电梯，见 `lift()`）。
+ * 4. **速度随内容大小走**（按包围盒算）——200 格的城堡要走到天荒地老，而 12 格的
+ *    小屋用同一个速度又能接受，所以不另设加速键，见 `walkSpeed()`。
  */
 function wireWalk(): void {
   const held = new Set<string>()
   let frame: number | undefined
   let last = 0
 
+  /** 移动键的键名（`event.key.toLowerCase()`）：空格是 `' '`，Shift 是 `'shift'`。 */
+  const MOVE_KEYS = new Set(['w', 'a', 's', 'd', ' ', 'shift'])
+
+  /**
+   * **焦点在输入类控件上时不抢键**：字母键会被它们吃掉（下拉框也吃）。
+   */
   const typing = (target: EventTarget | null): boolean =>
     target instanceof HTMLElement &&
     (target instanceof HTMLInputElement ||
@@ -1244,8 +1264,7 @@ function wireWalk(): void {
     const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
     last = now
     settleCamera()
-    const speed = (held.has('shift') ? 3 : 1) * walkSpeed()
-    moveStep(camera, held, dt, speed)
+    moveStep(camera, held, dt, walkSpeed())
     viewSelect.value = 'free'
     requestFrame(true)
     frame = requestAnimationFrame(step)
@@ -1255,12 +1274,15 @@ function wireWalk(): void {
     if (event.metaKey || event.ctrlKey || event.altKey) return
     if (typing(event.target)) return
     const key = event.key.toLowerCase()
-    if (key !== 'w' && key !== 'a' && key !== 's' && key !== 'd' && key !== 'shift') return
+    if (!MOVE_KEYS.has(key)) return
+    // **空格在按钮上归按钮**：焦点停在按钮上时按空格是"点它"，抢过来当"上升"就变成
+    // "再发一次消息 / 再导出一次"。只让空格这一条：按钮不吃字母键，没理由因为焦点
+    // 在按钮上就把 WASD 一起停掉。视口不可聚焦，所以在画面上点/拖一下（mousedown 会把
+    // 焦点落回 body）之后空格就归相机了。
+    if (key === ' ' && event.target instanceof HTMLButtonElement) return
+    // 空格默认还会滚动页面。既然要拿它当"上升"，默认行为就得吃掉
+    if (key === ' ') event.preventDefault()
     // 系统自动重复会把同一个键反复送进来：已经在走就什么都不用做
-    if (key === 'shift') {
-      held.add('shift')
-      return
-    }
     if (held.has(key)) return
     held.add(key)
     if (frame === undefined) {

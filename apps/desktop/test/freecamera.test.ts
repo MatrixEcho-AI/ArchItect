@@ -5,6 +5,8 @@ import type { CameraSpec } from '@architect/render/browser'
 
 import {
   createFreeCamera,
+  DRAG_SENSITIVITY,
+  dragUnitFor,
   forwardOf,
   FOV_RANGE,
   lookAtFrom,
@@ -98,6 +100,55 @@ describe('自由相机', () => {
     expect(camera.eye![0]).toBeCloseTo(before[0]! + 3, 6)
   })
 
+  /**
+   * **空格上升 / Shift 下降**。
+   *
+   * 两条性质缺一不可：只沿世界 Y（抬头按空格也是直着上去，不是斜着飞），
+   * 且水平位置一动不动。所以这里特意把相机设成大幅度抬头——`W` 在这种姿态下
+   * 明明会往水平方向跑，空格不该跑。
+   */
+  it('**空格上升 / Shift 下降**：沿世界 Y 直上直下，不跟视线俯仰走', () => {
+    const camera = cameraAt(30, -60) // 抬着头，且不是正对着某个轴
+    const [fx, fy, fz] = forwardOf(camera)
+    // 视线确实斜着：水平分量不为零，垂直分量也不为 1
+    expect(Math.hypot(fx, fz)).toBeGreaterThan(0.3)
+    expect(fy).toBeGreaterThan(0.3)
+    const eye = camera.eye!
+    const before: Vec3 = [eye[0], eye[1], eye[2]]
+
+    const up = moveStep(camera, new Set([' ']), 1, 2)
+    expect(up.vertical).toBe(2)
+    expect(camera.eye![1]).toBeCloseTo(before[1] + 2, 6)
+    expect(camera.eye![0]).toBeCloseTo(before[0], 9)
+    expect(camera.eye![2]).toBeCloseTo(before[2], 9)
+
+    const down = moveStep(camera, new Set(['shift']), 1, 2)
+    expect(down.vertical).toBe(-2)
+    expect(camera.eye).toEqual(before)
+  })
+
+  it('空格和 Shift 同时按住互相抵消（升降是同一个轴）', () => {
+    const camera = cameraAt(20, 20)
+    const before = [...camera.eye!]
+    moveStep(camera, new Set([' ', 'shift']), 1, 5)
+    expect(camera.eye).toEqual(before)
+  })
+
+  it('升降与前后可以叠加（空格 + W 是斜着往前上）', () => {
+    const camera = cameraAt(0, 0) // 平视：W 只往前走
+    const eye = camera.eye!
+    const before: Vec3 = [eye[0], eye[1], eye[2]]
+    moveStep(camera, new Set(['w', ' ']), 1, 4)
+    expect(camera.eye![1]).toBeCloseTo(before[1] + 4, 6) // 空格给的垂直量
+    expect(camera.eye![2]).toBeCloseTo(before[2] - 4, 6) // W 给的水平量
+  })
+
+  it('相机没落地时升降也是空操作', () => {
+    const camera = createFreeCamera({ azimuth: 0, elevation: 0, fov: 70 })
+    moveStep(camera, new Set([' ']), 1, 5)
+    expect(camera.eye).toBeUndefined()
+  })
+
   it('按住相反的方向互相抵消（W+S 不动、A+D 不动）', () => {
     const camera = cameraAt(20, 20)
     const before = [...camera.eye!]
@@ -146,6 +197,24 @@ describe('自由相机', () => {
     expect(camera.azimuth).toBeGreaterThanOrEqual(-180)
     expect(camera.azimuth).toBeLessThanOrEqual(180)
     expect(camera.azimuth).toBeCloseTo(40, 9) // 400° 折回 40°
+  })
+
+  /**
+   * **拖动灵敏度**。三件事一起钉住：归一化还在（窗口越矮 °/px 越大，但不超过下限）、
+   * 有下限（再矮也不继续变慢）、以及**总体上比"一屏转一圈"慢**——最后这条正是
+   * "把灵敏度调低一点"的可检验定义，改回去就会红。
+   */
+  it('拖动灵敏度：按视口高度归一，但拖满一屏转不满一圈', () => {
+    // 归一化 + 手感系数
+    expect(dragUnitFor(800)).toBeCloseTo((360 / 800) * DRAG_SENSITIVITY, 9)
+    expect(dragUnitFor(400)).toBeGreaterThan(dragUnitFor(800))
+    // 320 px 是下限：更矮的视口不再变慢
+    expect(dragUnitFor(320)).toBeCloseTo((360 / 320) * DRAG_SENSITIVITY, 9)
+    expect(dragUnitFor(200)).toBe(dragUnitFor(320))
+    // **比"拖满一整条视口高度 = 360°"更慢**
+    expect(DRAG_SENSITIVITY).toBeLessThan(1)
+    expect(dragUnitFor(800) * 800).toBeLessThan(360)
+    expect(dragUnitFor(800) * 800).toBeCloseTo(360 * DRAG_SENSITIVITY, 6)
   })
 
   it('仰角夹在 ±89：拖到底也翻不过极点', () => {

@@ -411,12 +411,14 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
 
     // 执行本轮的全部工具调用
     const images: LlmImage[] = []
+    let answered = 0
     for (const call of response.toolCalls) {
       state.toolCalls++
       if (state.toolCalls > maxToolCalls) {
         state.stopReason = 'max_tool_calls'
         break
       }
+      answered++
       emit({ type: 'tool_call', turn: state.turn, id: call.id, name: call.name, args: call.args })
 
       const result = await registry.call(ctx, call.name, call.args)
@@ -450,6 +452,22 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
           images.push({ png: result.image.png, mimeType: 'image/png', id })
         }
       }
+    }
+
+    // 预算在中途用尽时，**assistant 消息里不能留下没有回复的 `tool_calls`**。
+    //
+    // 上面那条 assistant 消息是把本轮全部调用**一次性**挂上去的，而这个循环会中途
+    // `break`，于是总有几个 call 拿不到对应的 `role:'tool'`。OpenAI / DeepSeek 要求
+    // 每个 `tool_call_id` 后面都必须跟一条 tool 消息，否则下一次请求直接 400。
+    //
+    // 要紧的是这份历史会被原样留下当下一轮的 history（`retainHistory` 只剥图，
+    // 不动 tool_calls 的配对），所以 400 不是一次性的——之后每次发送都会 400，
+    // 聊天框就此永久不可用，只能清空对话。
+    //
+    // 这里把没执行的那些从消息上摘掉：不往对话里塞合成的错误文案，模型看到的就是
+    // 「这轮只调了这些」，而 `stopReason` 已经如实说明了为什么停下。
+    if (answered < response.toolCalls.length) {
+      assistantMessage.toolCalls = response.toolCalls.slice(0, answered)
     }
 
     // 截图必须以**独立的 user 消息**回灌：OpenAI 的 tool 消息只接受文本

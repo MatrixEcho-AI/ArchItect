@@ -1001,11 +1001,13 @@ function requestFrame(draft = false): void {
     const isDraft = frameDraft
     frameDraft = false
     if (viewport === undefined || current === undefined) return
-    if (current.blocks === 0) {
-      empty.classList.add('show')
-      return
-    }
-    empty.classList.remove('show')
+    // **空世界也要照画一遍。**
+    //
+    // 以前这里是 `if (blocks === 0) { 显示提示; return }`——于是画布上原封不动留着
+    // **上一帧**的像素：把时间线拖回 rev 0，用户看到的是"旧建筑没清掉"和"空世界提示"
+    // 叠在一起。清画布是渲染器自己的事（它按 clearColor 擦），不该指望提示条去盖
+    // （`.empty` 就是 positioned 的一行字，没有背景）。
+    empty.classList.toggle('show', current.blocks === 0)
     viewport.render(camera, { draft: isDraft })
     if (isDraft) {
       if (refineTimer !== undefined) window.clearTimeout(refineTimer)

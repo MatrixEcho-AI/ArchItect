@@ -310,6 +310,23 @@ body,
   height: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+  /*
+   * 分区间距用 **flex 的 gap**，不用 margin。两个理由：
+   *
+   * 1. **margin 会折叠**，而这里的分区之间有 `display: none` 的隐藏块
+   *    （机位面板、调色板，见 left-panel.tsx）。相邻 margin 折叠之后，
+   *    "隐藏了什么"会悄悄改变"还剩多少间距"——调一次机位面板的显隐，
+   *    整个左栏的疏密就变了。
+   * 2. `gap` 只作用于**在布局里**的子元素，所以上面那两种隐藏态自动是对的。
+   *
+   * 上下各留一档：上面那档是"工程分区与顶栏之间"要的间隔（顶栏和侧栏是
+   * Layout 的兄弟节点，`gap` 管不到它们之间），下面那档免得最后一张卡片
+   * 紧贴时间线。
+   */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
 }
 
 /* 编辑记录最多 50 条，不限高的话它会把左栏撑成一屏半 */

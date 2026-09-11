@@ -10,9 +10,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { startMockModel } from './mock-deepseek.js'
 import type { MockModel } from './mock-deepseek.js'
+import { TSX_CLI } from './run-cli.js'
 
 const execFileAsync = promisify(execFile)
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const CLI_ENTRY = join(root, 'packages/cli/src/index.ts')
 
 /**
  * **端到端：一句需求 → 一个可回放的 `.mcai`，全程走真实 HTTP。**
@@ -50,11 +52,10 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
   ): Promise<{ stdout: string; stderr: string; code: number }> => {
     try {
       const { stdout } = await execFileAsync(
-        'npx',
+        process.execPath,
         [
-          '--no-install',
-          'tsx',
-          join(root, 'packages/cli/src/index.ts'),
+          TSX_CLI,
+          CLI_ENTRY,
           'build',
           '造一座 8x8 的林间小屋，云杉木板墙、橡木地板，南面开一扇门',
           '--out',
@@ -173,11 +174,10 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
       const out = join(dir, 'nope.mcai')
       await expect(
         execFileAsync(
-          'npx',
+          process.execPath,
           [
-            '--no-install',
-            'tsx',
-            join(root, 'packages/cli/src/index.ts'),
+            TSX_CLI,
+            CLI_ENTRY,
             'build',
             '造个房子',
             '--out',
@@ -262,11 +262,10 @@ describe('端到端：无缓存 provider 的上下文窗口', () => {
   it('**发出去的请求体里历史真的被裁了**，而且 CLI 会说出来', async () => {
     const out = join(dir, 'windowed.mcai')
     const { stdout } = await execFileAsync(
-      'npx',
+      process.execPath,
       [
-        '--no-install',
-        'tsx',
-        join(root, 'packages/cli/src/index.ts'),
+        TSX_CLI,
+        CLI_ENTRY,
         'build',
         '造一座小屋',
         '--out',

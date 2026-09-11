@@ -14,6 +14,7 @@ import { assetsTexturePack } from '@architect/render/assets'
 import { AutosaveService } from './services/autosave.js'
 import type { StudioEvent, TestConnectionInput } from './services/chat.js'
 import type { Cipher } from './services/settings.js'
+import { autosaveDirFor, debugFlagNames, isDiagnosticRun } from './services/diagnostics.js'
 import { createSecretStore, loadSettings, saveSettings, secretsFile, settingsFile } from './services/settings.js'
 import { StudioService } from './services/studio.js'
 import type {
@@ -143,12 +144,16 @@ function initStudio(): void {
 
   // 崩溃恢复：WAL 只记"上次保存之后"的 op，所以文件很小，写盘与工区大小无关
   autosave = new AutosaveService({
-    dir: join(app.getPath('userData'), 'autosave'),
+    // 诊断跑（--demo / --capture / 各种 *-test）用**独立目录**：它们也会真的编辑世界，
+    // 混进用户自己的草稿里就会在下次启动时弹一条"上次有 N 步没保存"——而那是调试垃圾
+    dir: autosaveDirFor(app.getPath('userData'), process.argv, new Set(debugFlagNames(process.argv))),
     projectId: 'active',
     name: studio.state().name,
   })
   studio.attachAutosave(autosave)
-  studio.recover()
+  // 诊断跑不提示恢复：那个目录里躺的是**上一次调试跑**留下的草稿，
+  // 弹出来只会让人以为"应用出问题了"（截图里也会多一条没人关心的横幅）
+  if (!isDiagnosticRun(process.argv, new Set(debugFlagNames(process.argv)))) studio.recover()
   autosaveTimer = setInterval(() => {
     try {
       studio.autosaveNow()
@@ -269,24 +274,9 @@ function createWindow(): void {
   // `--no-webgl --drag-test` 验的是"没有 WebGL 时拖动还能不能用"，
   // 而 spread 写法里后一个会把前一个覆盖掉（真机上就吃过这个亏：抓出来的图
   // 看着没拖动过，其实是 drag-test 被 no-webgl 顶掉了）。
-  const debugFlags: string[] = []
-  // `--open-settings`：窗口直接带着设置面板起来，便于抓图做视觉检查
-  if (process.argv.includes('--open-settings')) debugFlags.push('settings')
-  // `--drag-test`：启动时合成一次拖动再抓图，用来验证"拖动中降分辨率"那条路
-  // （不合成事件的话，`--capture` 抓到的永远是静止的第一帧，拖动路径一次都没被走到）
-  if (process.argv.includes('--drag-test')) debugFlags.push('drag-test')
-  // `--camera-test`：合成一次"在机位面板里填坐标 + 共享给模型"，
-  // 于是 `--shot` 拿到的就是**用户定的那个机位**拍的图（人机共用机位的验收）
-  if (process.argv.includes('--camera-test')) debugFlags.push('camera-test')
-  // `--no-webgl`：强制走软件视口。没有 WebGL 的机器（虚拟机、远程桌面、驱动被禁）
-  // 走的就是这条路，只是平时没法在 CI 上复现——这个开关让它可复现
-  if (process.argv.includes('--no-webgl')) debugFlags.push('no-webgl')
-  // `--undo-test`：启动时请求撤销两次，用来抓"停在历史版本上"那张图
-  // （发送框禁用 + 重做可用 + 时间线不在最右）
-  if (process.argv.includes('--undo-test')) debugFlags.push('undo-test')
-  // `--paint-test`：启动时打开编辑模式并在视口里合成一次点击，
-  // 用来验证"人手放一格"这条链路（拾取 → 写世界 → 记成 source:user 的一步）
-  if (process.argv.includes('--paint-test')) debugFlags.push('paint-test')
+  // 开关的**定义**在 diagnostics.ts（一处定义、两处使用：渲染进程读 hash 合成事件，
+  // 主进程据此把草稿写到独立目录）
+  const debugFlags = debugFlagNames(process.argv)
 
   void mainWindow.loadFile(join(__dirname, 'renderer', 'index.html'), {
     ...(debugFlags.length > 0 ? { hash: debugFlags.join(',') } : {}),

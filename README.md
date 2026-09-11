@@ -99,6 +99,7 @@ examples/    示例工程
 | `pnpm test` | 全部测试（含全量枚举、文档一致性、**真实 HTTP 的端到端**） |
 | `pnpm typecheck` | 八个项目一起过类型 |
 | `pnpm docs:gen` | 重新生成工具参考（过期时 `pnpm test` 会失败）。脚本名带 `:gen` 是有原因的：单独一个 `docs` 会被 pnpm 的内建命令抢走，变成打开包的文档页 |
+| `pnpm bake:gen` / `pnpm bake:check` | 从 `minecraft-assets` 烘出渲染元数据（方块状态表、模型表、方块→纹理反查表、纹理平均色 → `packages/render/data/<版本>/*.json`）；`--check` 在过期时失败 |
 | `pnpm demo:v0` | 不需要 API key 的完整闭环演示 |
 | `pnpm providers` | 探测模型端点：列模型、选模型、实测能力 |
 | `npx vitest run packages/cli` | 起一个协议级假模型端点，用真 `architect build` 跑完整条链路（不需要 API key） |
@@ -150,12 +151,24 @@ pnpm --filter @architect/desktop package          # dmg / nsis / AppImage
 pnpm --filter @architect/desktop package:dir      # 只出 .app/.exe 目录，验打包用
 ```
 
-已验证：`--dir` 打出来的 `.app` 直接跑 `--smoke` 与 `--gui-smoke` 都通过——
-即被标成 external 的 `minecraft-data` / `minecraft-assets` / `prismarine-*` 在 asar 里都能 require 到。
+已验证：`--dir` 打出来的 `.app` 直接跑 `--smoke`（从世界、截图、崩溃恢复一路到导出/导入）
+都通过——即被标成 external 的 `minecraft-data` / `minecraft-assets` / `prismarine-*`
+在 asar 里都能 require 到。
 
-**体积 837 MB**，比预期大得多：`minecraft-assets` 把整个资源包（65 275 个文件）装了进来，
-而我们只用到其中一小部分纹理。这是成本问题不是可用性问题，两条路见 `plan.md` §10.3——
-根本解法是**不内置素材**，让用户指向自己的 `.minecraft`，那同时也解决了素材授权问题。
+**体积 748 MB**（原 837 MB）。包里最重的是 `minecraft-data`（427 MB）：它的 `data.js`
+在**加载期跨版本静态 `require`**（读 1.21.4 会去 require `1.21.1/enchantments.json`），
+所以**按目录裁不安全**——试过一次，打包版启动即 `Cannot find module`。
+真正砍掉的是这些：
+
+| 动作 | 省下 |
+|------|------|
+| `minecraft-assets` 只带 1.21.4 的方块贴图（其余版本的贴图目录约 280 MB 不进包；**所有版本的 `*.json` 都留着**，`index.js` 静态 require 它们） | ~300 MB |
+| `three` 挪到 devDependencies（它已被 esbuild 打进渲染进程的 bundle，运行时不需要再躺一份） | ~13 MB |
+| 自己的渲染元数据改成烘出来的 2.3 MB JSON（`pnpm bake:gen`），不再把资源包整个拖进主进程 | ~65 MB |
+
+纹理默认就是**内置资源包**（开箱即用，不需要先装 Minecraft）。想换自己的：
+CLI 加 `--textures <目录|zip|客户端 jar>`，或者设 `ARCHITECT_MINECRAFT_DIR` 指向 `.minecraft`
+让程序自己去读对应版本的客户端 jar。
 
 ---
 

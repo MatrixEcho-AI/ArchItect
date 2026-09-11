@@ -1313,32 +1313,61 @@ interface ProviderConfig {
 - `fileAssociations` 注册 `.mcai` → 双击直接打开项目。
 - 自动更新（electron-updater）+ 崩溃上报（可选、默认关、明确告知）。
 
-#### 体积：实测 837 MB，与预期差得多，原因是资源包
+#### 体积：从 837 MB 到 748 MB，以及"什么能裁、什么不能"
 
 `--dir` 打包实测（macOS arm64）：
 
-| 项 | 实测 | 原预期 |
-|----|------|--------|
-| 整个 `.app` | **837 MB** | ~220 MB |
-| `app.asar` | 592 MB | — |
-| 其中 `minecraft-assets` | **65 275 个文件** | 纹理 ~20 MB |
+| 项 | 一开始 | 现在 |
+|----|--------|------|
+| 整个 `.app` | 837 MB | **748 MB** |
+| `app.asar` | 592 MB | 509 MB |
+| 其中 `minecraft-data` | 427 MB | 427 MB（**没动**，原因见下） |
+| 其中 `minecraft-assets` | 65 275 个文件 | 66.7 MB（只留 1.21.4 的方块贴图） |
+| `dist/main.cjs` | 65 MB（含被误打进来的资源包） | 1.3 MB |
 
-差在 `minecraft-assets`：它把**全部资源包文件**都装进了包里，而我们只用到其中
-一小部分纹理。这不是"打包没配好"，是依赖本身的形态问题。
+裁掉的三块：
 
-两条路（都还没做，属于发布前的事）：
+1. **`minecraft-assets` 只带 1.21.4 的方块贴图**（~300 MB）。运行时只会按 `fs` 读
+   当前版本那一份，其余版本的贴图目录没有用。
+   ⚠️ **但每个版本的 `*.json` 必须全留着**：`index.js` 在加载期静态 `require` 它们，
+   少一个就是"启动即 `Cannot find module`"。
+2. **`three` 挪到 devDependencies**（13 MB）：它已经被 esbuild 打进渲染进程的 bundle，
+   运行时不需要再在 `node_modules` 里躺一份。
+3. **渲染元数据改成烘出来的 JSON**（65 MB）：`bake.ts` 把方块状态表、模型表、
+   方块→纹理反查表、纹理平均色烘成 `packages/render/data/<版本>/*.json`（2.3 MB）。
+   不烘的话，主进程的 bundle 会顺着一条 `import` 边把 352 MB 的资源包**整个打进去**
+   （实测 65 MB 的 `main.cjs`）——那不是配置问题，是一条 import 边的后果。
 
-1. **按需裁剪**：打包时只保留注册表里实际引用到的纹理。能砍掉绝大部分，
-   但需要一份"方块 → 纹理文件"的反查表在打包期跑一遍。
-2. **不内置素材**（§16 风险表里本来就写的那条）：让用户指向自己的 `.minecraft`
-   自行提取。这同时解决了 Mojang 素材的授权问题——**这才是根本解法**，
-   裁剪只是把问题变小。
+**`minecraft-data` 那块 427 MB 动不了**，这条值得记下来：它的 `data.js` 在**加载期
+跨版本静态 `require`**（读 1.21.4 会去 require `1.21.1/enchantments.json`），
+按目录裁会得到一个"启动即 `Cannot find module`"的包——**试过，就是这么炸的**。
+要真砍下去只有一条路：**按"实际被 require 到的文件"生成精确白名单**
+（hook `Module._load` 跑一次 `require('minecraft-data')('1.21.4')`，记下它碰过的每个文件）。
+预计能从 427 MB 砍到个位数 MB、App 落到 ~330 MB，但它改的是依赖的数据面，
+属于"要么不做、要么做到底并写清约束"的那类事——**留作待定（§17.2）**。
 
 > 打包的**正确性**已经验证过：`electron-builder --dir` 产出的 `.app` 直接跑
-> `--smoke` 与 `--gui-smoke` 都通过。这证明被 esbuild 标成 external 的
+> `--smoke`（世界 → 截图 → 崩溃恢复 → 导出/导入全过）与窗口抓图（真实纹理正常）
+> 都通过。这证明被 esbuild 标成 external 的
 > `minecraft-data` / `minecraft-assets` / `prismarine-*` / `fflate` 在 asar 里
 > 都能被 require 到——这是打包最容易翻车的地方（当年 pnpm 的隔离 node_modules
 > 就踩过一次）。体积是**成本问题**，不是**可用性问题**。
+
+#### 纹理从哪儿来（D-69）
+
+纹理走一个可插拔的 `TexturePack`（`packages/render/src/texturepack.ts`），四种来源：
+
+| 来源 | 什么时候用 | 谁解析 |
+|------|-----------|--------|
+| **内置资源包** | 默认。装完就有真实纹理，不需要先装 Minecraft | 桌面端主进程 `assetsTexturePack()` |
+| 用户资源包目录 / zip / 客户端 jar | 想换自己的材质包 | CLI `--textures <path>`；`resolveTexturePack({kind:'pack'})` |
+| 用户的 `.minecraft` 客户端 jar | 自动探测标准安装位置 | `resolveTexturePack({kind:'minecraft'})`（`ARCHITECT_MINECRAFT_DIR` 可指定） |
+| **烘好的平均色** | 最兜底一级：没有资源时每格一块纯色，形状/UV/明暗照旧 | `bakedColorTexturePack()` |
+
+两级兜底都是**真实的降级**而不是"渲染坏了"：平均色那一路仍然走同一套网格化与光栅化，
+所以画面不会变成满屏洋红棋盘格（那正是"图集里一张纹理都没有"时会出现的症状）。
+界面上那行**纹理来源**会把当前用的是哪一种说出来——用户问"为什么我的石头没有纹理"时，
+答案就在那儿，不用猜。
 
 ### 10.4 国际化（D-01：中文优先，走 i18n）
 
@@ -1417,8 +1446,9 @@ ArchItect/
 │   │   └── src/{world,palette,editops,geometry,hash,undo}.ts
 │   ├── mcai/                       # .mcai 编解码、zip、迁移、WAL、校验
 │   │   └── src/{reader,writer,manifest,migrate,wal}.ts
-│   ├── render/                     # CameraSpec、场景构建、叠加层、后端(webgl/iso)
-│   │   └── src/{camera,scene,overlays,backends/{webgl,isometric}}.ts
+│   ├── render/                     # CameraSpec、网格化、纹理来源、软件光栅器
+│   │   ├── src/{camera,atlas,texturepack,assets,baked,bake,mesher,isometric,pick}.ts
+│   │   └── data/<版本>/{render,blockmap}.json   # bake:gen 烘出来的元数据（可复现）
 │   ├── tools/                      # 工具定义 + JSON Schema + 执行器 + 校验
 │   │   └── src/{registry,executors/*,schema/*}.ts
 │   ├── agent/                      # Agent 循环、上下文管理、prompts、DesignNotes、Provider 配置与发现
@@ -1651,7 +1681,7 @@ secrets.bin
 > "不裁剪"的依据——裁一次历史，这 98% 会全部以全价重算。
 | **M5 Electron UI** | 3D 视口、对话面板（内联截图）、时间线时间旅行、工具调用检查器、调色板、成本表盘、人在环路 | 全流程可在 GUI 完成；拖动时间线能看到历史状态；双击 `.mcai` 能打开。三条都由 `pnpm desktop:gui-smoke` 里的 DOM 断言钉住（在页面里真派发点击与拖动，而不是读内部状态） |
 | **M6 高级编辑** | copy/rotate/mirror（含 state 重映射）、fix_states、analyze_structure linter、run_batch 优化 | linter 能抓出测试 fixture 里预埋的 5 类**结构**问题（实现里另加 2 类 info，共 7 个 id） |
-| **M7 互操作与导出** | `.schem` / `.litematic` 往返、`.obj` 导出（附录 E.4：碰撞盒几何还原不了状态，所以**故意不做导入**）、导入侧版本迁移、资源包纹理提取 | 导出的 `.schem` **逐格正确还原**（换一个世界导入后 `contentHash` 对拍）；能导入外部 `.schem` 继续编辑 |
+| **M7 互操作与导出** | `.schem` / `.litematic` 往返、`.obj` 导出（附录 E.4：碰撞盒几何还原不了状态，所以**故意不做导入**）、导入侧版本迁移、纹理来源（内置资源包 / 用户资源包或客户端 jar / `.minecraft` 自动探测 / 平均色兜底，见 D-69） | 导出的 `.schem` **逐格正确还原**（换一个世界导入后 `contentHash` 对拍）；能导入外部 `.schem` 继续编辑 |
 | **M8 打磨** | 安装包、自动保存、崩溃恢复、i18n 补全、文档、prompt 库、示例项目 | 三平台能打包安装；新用户 5 分钟内能产出第一座建筑 |
 
 > **打包已实测可用，但体积 837 MB 而不是预估的 220 MB**——差在 `minecraft-assets`
@@ -1768,6 +1798,7 @@ secrets.bin
 | D-66 | **图像的预算是从最新往回数的** | `keepImages` 优先给最后几轮，被剪的消息留住文字并标明剪了几张 | 模型最需要的是"我刚改完的样子"。实现时两层循环只有一层倒着走，结果预算花在了最旧的那一轮上——被测试里"留下的应当是最后那两张"这句断言抓住 |
 | D-67 | **裁剪要留在档案里** | 新增 `context` 事件 → `TranscriptEvent` 的 `note: 'context'` 与界面上的 `[CONTEXT]` 一行 | 事后看"模型为什么忘了前面那几步"，答案在这里：那些轮次**根本没发出去**。不记的话，只能归因成"模型变笨了" |
 | D-68 | **回放走到录音尽头就停下，绝不补一个空响应** | `ReplayProvider.chat` 在 `cursor` 用尽时抛错（"录音只有 N 轮，但对话已经走到第 N+1 轮"），只有显式要求"用完就停"时才返回空回复 | 录音是响应到手之后才追加的，所以被打断的跑（超预算、402、断网）留下的是一段**短的**录音。这时安静地接着跑，会重放出一座完全不同的建筑，而且没有任何地方看得出不对——错得最贵的一种。宁可失败得吵（§14.2） |
+| D-69 | **纹理默认内置，来源可换成用户自己的** | `TexturePack` 抽象四种来源（内置资源包 / 用户资源包或客户端 jar / `.minecraft` 自动探测 / 烘好的平均色），桌面端默认注入内置资源包；CLI 用 `--textures` 换 | 一开始按“不内置素材”做的（省体积、避开素材授权），结果是**这台机器上没装 Minecraft 就直接没有纹理**——用户明确不接受：装完就该看到真实纹理。于是默认改回内置，把“换自己的包”降级成一个选项。代价是包里多背 66.7 MB，这是**有意买下来的**取舍 |
 
 ### 17.2 待定
 
@@ -1783,6 +1814,13 @@ secrets.bin
 **录音进仓库**：`--record` 的产出能不能当 CI 基线提交进去。它不含密钥、可离线重放、
 能防住"改 prompt 改坏了没人发现"，但一段真模型录音是几百 KB 的 JSONL，
 而且**模型或 price 表一变它就过期**。倾向是"按需生成、不提交"，还没定。
+
+**`minecraft-data` 的精确白名单**：它占包里 427 MB，按目录裁不安全（`data.js` 跨版本
+静态 `require`，试过、启动即报错）。可行的做法是 hook `Module._load` 跑一次
+`require('minecraft-data')('1.21.4')`、记下实际被 require 的每个文件，生成一份精确白名单
+（预计 App 从 748 MB 落到 ~330 MB）。没做的理由：它把“我们只支持 1.21.4”这条约束
+从一句注释变成一条**打包期规则**，将来要开第二个版本时会静默缺文件——
+要做就得连“版本白名单”一起设计，不能只裁文件。
 
 **软件光栅器的 golden 基线**：渲染测试目前只对软件后端做"非空白 + 尺寸正确"的弱断言，
 没有签名图基线。要加就得接受"改一点渲染就得重新签"，收益还没算清。

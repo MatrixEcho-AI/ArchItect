@@ -537,6 +537,28 @@ export class ChatController {
     return view
   }
 
+  /**
+   * **只给诊断用**：往对话里放一条模型回复，内容覆盖 markdown 的各种块。
+   *
+   * 为什么需要它：模型回复的 markdown 渲染、以及它在 330px 窄栏里会不会溢出，
+   * 都属于"只有看一眼才知道对不对"的那类东西，而真的跑一轮模型要花钱、要联网、
+   * 结果还不稳定（每次写的内容都不一样）。
+   *
+   * ⚠️ **它刻意绕过 `recorder`**，所以这条消息不会进 `.mcai`：一份带着假消息的
+   * 工程文件比没有样本更糟。也因此它只在诊断开关下被调用（`main/index.ts`）。
+   */
+  seedDiagnosticMessage(text: string, toolName: string, args: string, result: string): void {
+    const assistant = this.newMessage('assistant', text)
+    this.messages.push(assistant)
+    const tool = this.newMessage('tool', result.slice(0, 200))
+    tool.toolName = toolName
+    tool.args = args
+    tool.toolOk = true
+    tool.toolResult = result
+    this.messages.push(tool)
+    this.emit({ type: 'chat', view: this.view() })
+  }
+
   clear(): ChatView {
     this.messages = []
     this.stopReason = undefined

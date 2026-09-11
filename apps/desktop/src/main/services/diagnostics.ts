@@ -32,6 +32,9 @@ export const DEBUG_FLAGS: ReadonlyArray<readonly [flag: string, name: string]> =
   ['--paint-test', 'paint-test'],
   // 合成一次"新建"：**先载入示例工程再按新建**，用来抓"新建之后该清空的东西清没清"
   ['--new-test', 'new-test'],
+  // 往对话里塞一条 markdown 样本：用来肉眼验"模型回复渲染成什么样"（窄栏里的溢出、
+  // 表格、代码块）。它**只进这一个会话，不写进 `.mcai`**——见 `seedMarkdownSample`。
+  ['--md-test', 'md-test'],
 ]
 
 /** 这一趟带了哪些诊断开关（顺序与定义一致，便于做 hash 时稳定）。 */

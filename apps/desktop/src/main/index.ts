@@ -262,6 +262,22 @@ function createWindow(): void {
     void shell.openExternal(url)
     return { action: 'deny' }
   })
+  /**
+   * **普通 `<a href>` 的点击也要拦住。**
+   *
+   * `setWindowOpenHandler` 只管 `window.open` / `target=_blank`；直接点一个
+   * `<a href="https://…">` 会让**这个窗口自己导航过去**。这是个单页应用，
+   * 导航走之后没有历史可回——用户看到的是一个白屏的应用，只能重启。
+   *
+   * 链接现在会出现在对话里（模型写的说明常带文档地址），所以这条从"理论上该有"
+   * 变成了"点一下就会遇到"。判据是按 URL 而不是按"是不是我们自己的页面"：
+   * 只要不是 `file:` 起的本地页面，一律交给系统浏览器。
+   */
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file://')) return
+    event.preventDefault()
+    void shell.openExternal(url)
+  })
 
   // 窗口一渲染好就把系统要求打开的那个工程装进去
   mainWindow.webContents.once('did-finish-load', () => {
@@ -1074,6 +1090,50 @@ async function loadExampleOrDemo(): Promise<void> {
   process.stdout.write('[demo] 没找到示例工程，改为脚本化生成小屋\n')
 }
 
+/**
+ * `--md-test`：往对话里塞一条覆盖各种 markdown 块的模型回复 + 一条工具调用。
+ *
+ * 目的是把"模型回复渲染成什么样"变成一张**能反复看的图**：标题、列表、表格、
+ * 行内代码、代码块、引用、链接、长 URL（窄栏溢出的主要风险）都放进去。
+ * 真的跑一轮模型要花钱、要联网，而且每次写的内容都不一样，没法当样本。
+ */
+function seedMarkdownSample(): void {
+  // 逐行 push：中文写在 `lines.push(` 的参数位置上，i18n 那条测试按"离开发者出口
+  // 几行内"判归属，这样它才认得出来这是诊断夹具而不是界面文案
+  const lines: string[] = []
+  lines.push('## 设计说明')
+  lines.push('')
+  lines.push('我打算这样处理这座**林间小屋**：')
+  lines.push('')
+  lines.push('1. 先铺地基，用 `minecraft:cobblestone`')
+  lines.push('2. 再起墙，主体是 `minecraft:spruce_planks`')
+  lines.push('3. 最后搭斜坡屋顶，屋檐外扩一格')
+  lines.push('')
+  lines.push('| 部件 | 材质 | 尺寸 |')
+  lines.push('|------|------|------|')
+  lines.push('| 地基 | 圆石 | 9×9 |')
+  lines.push('| 墙 | 云杉木板 | 高 4 |')
+  lines.push('| 屋顶 | 深色橡木 | 外扩 1 |')
+  lines.push('')
+  lines.push('> 注意：门洞净高必须 ≥ 2 格，否则 `analyze_structure` 会报 `doorway`。')
+  lines.push('')
+  lines.push('一个很长的方块 id 用来试窄栏溢出：')
+  lines.push('`minecraft:spruce_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]`')
+  lines.push('')
+  lines.push('```json')
+  lines.push('{ "check": "block_at", "pos": [8, 1, 4], "expect": "minecraft:spruce_door" }')
+  lines.push('```')
+  lines.push('')
+  lines.push('参考：[Minecraft Wiki](https://minecraft.wiki/w/Stairs)')
+  const markdown = lines.join('\n')
+  studio.chat.seedDiagnosticMessage(
+    markdown,
+    'fill_box',
+    '{"from":[4,0,4],"to":[12,0,12],"block":"minecraft:cobblestone"}',
+    'changed 81 cells, bounds (4,0,4)..(12,0,12). revision 1.\noverwritten: 0, clipped: 0',
+  )
+}
+
 void app.whenReady().then(async () => {
   if (smokeIndex >= 0) return
   initStudio()
@@ -1093,6 +1153,8 @@ void app.whenReady().then(async () => {
     // 而 `--capture` 正好可能抓到那一帧（状态到位前的空对话列）。
     await loadExampleOrDemo()
   }
+  // `--md-test`：往对话里塞一条 markdown 样本（只给诊断，不写进工程）
+  if (process.argv.includes('--md-test')) seedMarkdownSample()
   registerIpc()
   createWindow()
 

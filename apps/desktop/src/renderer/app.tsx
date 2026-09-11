@@ -14,6 +14,7 @@ import {
   simulateDrag,
   simulateNewProject,
   simulatePaint,
+  scrollChatToBottom,
 } from './simulate.js'
 import { debugFlags, useStudio } from './use-studio.js'
 import type { CameraFields } from './components/left-panel.js'
@@ -202,6 +203,7 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
       }
       if (flags.has('paint-test')) await simulatePaint()
       if (flags.has('new-test')) await simulateNewProject()
+      if (flags.has('md-test')) await scrollChatToBottom()
       if (flags.has('settings')) setSettingsOpen(true)
 
       const canvas = document.getElementById('canvas') as HTMLCanvasElement | null

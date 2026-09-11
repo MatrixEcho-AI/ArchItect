@@ -204,3 +204,17 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<bo
   }
   return predicate()
 }
+
+/**
+ * `--md-test`：把对话滚到底。
+ *
+ * 那条样本比一屏长，不滚的话抓到的图只有上半段——而"长方块 id 会不会撑破卡片"
+ * 这类问题恰恰在下半段。它同时**验证贴底自动滚还能用**（这是用户报过的 bug）。
+ */
+export async function scrollChatToBottom(): Promise<void> {
+  const list = document.getElementById('messages')
+  if (list === null) return
+  await waitUntil(() => list.scrollHeight > list.clientHeight, 1000)
+  list.scrollTop = list.scrollHeight
+  await new Promise((resolve) => requestAnimationFrame(resolve))
+}

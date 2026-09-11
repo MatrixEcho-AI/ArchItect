@@ -4,6 +4,7 @@ import { DownOutlined, RightOutlined } from '@ant-design/icons'
 import { t } from '@architect/i18n'
 
 import { usageText } from '../cost.js'
+import { Markdown } from './markdown.js'
 import type { ChatMessageView, ChatView, StudioState } from '../types.js'
 
 /**
@@ -343,8 +344,19 @@ export function Message({ message }: { message: ChatMessageView }): React.JSX.El
           还在生成时这一行就是"它还活着"的证据；生成完之后它仍然留着，可以回看。 */}
       {thinking.length > 0 && <ThinkingBlock text={thinking} streaming={message.streaming === true} />}
 
-      {/* 工具消息的正文进折叠区了（见上面），这里只管 user / assistant */}
-      {message.role !== 'tool' && message.text.length > 0 && (
+      {/*
+        **模型的回复按 markdown 渲染，用户的原样显示。**
+        
+        非对称是有理由的：
+          - 模型的输出天然是 markdown（标题、列表、表格、`verify` 的 JSON 片段），
+            按纯文本铺出来在 330px 宽的栏里很难读——`**粗体**` 带着星号，表格挤成一团；
+          - 用户写的是**需求**，不是文档。他自己打的 `*` 或 `1.` 不该被重新排版，
+            改写用户的原话是界面能做的最讨厌的事之一。
+        
+        工具消息走上面的折叠区（等宽文本），这里不掺和。
+      */}
+      {message.role === 'assistant' && message.text.length > 0 && <Markdown text={message.text} />}
+      {message.role === 'user' && message.text.length > 0 && (
         <div className="body">{message.text}</div>
       )}
 

@@ -631,3 +631,120 @@ body,
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
+
+/* ── markdown（模型回复） ─────────────────────────────────────────────────────
+   这一栏只有 330px，所以这里的规矩是"**宁可换行，不要横向溢出**"：
+   长 URL、长方块 id、长 JSON 片段都会把卡片撑破。
+
+   颜色一律走 antd 的 token（`cssVar` 已开，见 theme.ts），不抄色号。 */
+
+.md {
+  /* 卡片本来就是 pre-wrap，markdown 的块级元素得自己管间距 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* 块与块之间：只在**相邻**处留空，避免首尾多出一截 */
+.md > * + * {
+  margin-top: 6px;
+}
+
+.md p {
+  margin: 0;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.md ul,
+.md ol {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.md li + li {
+  margin-top: 2px;
+}
+
+.md blockquote {
+  margin: 0;
+  padding: 2px 0 2px 8px;
+  border-left: 2px solid var(--ant-color-border);
+  color: var(--ant-color-text-secondary);
+}
+
+/* 行内代码：**不能**用 nowrap——长方块 id（`minecraft:oak_stairs[facing=north,…]`）
+   一 nowrap 就横向撑破卡片。让它换行。 */
+.md code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--ant-color-fill-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* 代码块：自己滚。这是唯一允许横向滚动的地方——代码的缩进与对齐有意义，
+   软换行反而更难读。`pre code` 覆盖上面那条的行内内边距。 */
+.md pre {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--ant-color-fill-quaternary);
+  overflow-x: auto;
+}
+
+.md pre code {
+  padding: 0;
+  background: none;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+/* 表格：窄栏里经常放不下，所以让它自己滚而不是压扁 */
+.md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+
+.md th,
+.md td {
+  padding: 2px 6px;
+  border: 1px solid var(--ant-color-border-secondary);
+  text-align: left;
+}
+
+.md th {
+  background: var(--ant-color-fill-secondary);
+  font-weight: 600;
+}
+
+.md hr {
+  height: 1px;
+  border: none;
+  background: var(--ant-color-border-secondary);
+}
+
+.md a {
+  color: var(--ant-color-primary);
+  text-decoration: none;
+}
+
+.md a:hover {
+  text-decoration: underline;
+}

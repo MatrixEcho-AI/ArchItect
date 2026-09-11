@@ -126,7 +126,7 @@ export const zhCN = {
       fix: '先调用 analyze_structure 体检，把报出来的问题逐条修掉：\n- floating（悬空）：给悬空的部分加柱子撑到地面\n- doorway（开口不足）：把门洞开到净高 2 格以上\n- headroom（净高不足）：把爬行空间抬高到 2 格\n修完再跑一次 analyze_structure，确认 error 归零。',
       hint: '点一下填进输入框，改掉里面的数字与材质再发',
     },
-    behindTipDetail: '当前停在历史版本 rev {{rev}}／共 {{total}} 步：从这里继续，模型的第一笔改动就会覆盖掉后面的 {{lost}} 步。请先「回到最新」（时间线右端或 ⌘⇧Z 重做），再发消息。',
+    behindTipDetail: '当前停在历史版本 rev {{rev}}／共 {{total}} 步：从这里继续，模型的第一笔改动就会覆盖掉后面的 {{lost}} 步。请先把时间线拖到最右端（或 ⌘⇧Z 重做），再发消息。',
     title: '对话',
     placeholder: '描述你想建造的建筑…（⌘/Ctrl + Enter 发送）',
     send: '发送',
@@ -144,7 +144,7 @@ export const zhCN = {
     truncated:
       '[TRUNCATED] 这一轮输出撞上了 token 上限（输出 {{out}}），正文为空、工具调用为零——额度多半被思维链吃掉了。把要求说得更具体一点再试。',
     noProvider: '还没有配置模型。先到「设置」里填好接口地址与 API Key。',
-    behindTip: '正在看历史版本。此时让模型继续改，它的第一笔就会把后面的步骤覆盖掉——先点「回到最新」（或重做到最新）。',
+    behindTip: '正在看历史版本。此时让模型继续改，它的第一笔就会把后面的步骤覆盖掉——先把时间线拖到最右端（或重做到最新）。',
     turnDone: '本轮结束（{{reason}}）',
     tokens: '{{in}} 入 / {{out}} 出 / {{cached}} 命中缓存',
   },

@@ -36,9 +36,13 @@
       <button id="btn-export" data-i18n="menu.export"></button>
       <button id="btn-import" data-i18n="menu.import"></button>
       <span class="spacer"></span>
-      <span id="cost" class="cost"></span>
-      <button id="btn-settings" data-i18n="menu.settings"></button>
-      <span id="status" class="status"></span>
+      <!-- 注释掉：成本 / 缓存命中读数（#cost）。写入点仍在 main.ts，改回可见只要去掉 hidden -->
+      <span id="cost" class="cost hidden"></span>
+      <!-- 注释掉：设置入口。⚠️ 界面上**只剩**"没配好模型时"那条挡住发送的提示里那个打开设置按钮，
+           配好之后就再没有入口了（要改模型/密钥/预算只能改设置文件）。要找回入口见 main.ts 的注释 -->
+      <button id="btn-settings" class="hidden" data-i18n="menu.settings"></button>
+      <!-- 注释掉：状态行（机位读数 + 「思考中…」/「本轮结束（reason）」等）。写入点仍在 main.ts -->
+      <span id="status" class="status hidden"></span>
     </header>
 
     <main>
@@ -47,9 +51,10 @@
           <h2 data-i18n="panel.project"></h2>
           <dl id="project-info"></dl>
         </div>
-        <!-- 机位：拖动已经能转角度，这里补的是**精确输入**与**自定义注视点**。
-             「模型用这个机位」打开时，它同时写进会话的相机——用户和模型看同一个位置。 -->
-        <div class="block">
+        <!-- 机位：**按要求从界面上隐藏**（`hidden`）。里面的元素用 `el()` 严格取，
+             整块注释掉会让 40 处引用变成 null 检查，所以这里只隐不删。
+             注意：这块里含「模型用这个机位」（人机共用机位）的入口。 -->
+        <div class="block hidden" id="camera-panel">
           <h2 data-i18n="viewport.camera"></h2>
           <div class="camera">
             <select id="cam-mode">
@@ -90,8 +95,10 @@
           </div>
         </div>
         <!-- 人手接管：选一个方块，然后在视口里点哪儿改哪儿。
-             和模型改的完全同权（同一条 op 日志），所以撤销、时间线、导出、.mcai 全都照常。 -->
-        <div class="block">
+             和模型改的完全同权（同一条 op 日志），所以撤销、时间线、导出、.mcai 全都照常。
+             **按要求从界面上隐藏**（`hidden`）：注意「编辑模式」这个开关也在这块里，
+             隐掉之后视口点击不会改世界（那是这个开关控制的）。元素与接线都还在。 -->
+        <div class="block hidden" id="palette-panel">
           <h2><span data-i18n="panel.palette"></span></h2>
           <label class="cam-share">
             <input id="edit-mode" type="checkbox" />
@@ -130,7 +137,6 @@
         <div class="chat-head">
           <h2 data-i18n="chat.title"></h2>
           <span class="spacer"></span>
-          <button id="btn-chat-clear" class="mini" data-i18n="chat.clear"></button>
         </div>
         <div id="notice" class="notice hidden"></div>
         <!-- 崩溃恢复：草稿等着处理，两个按钮各对应主进程一个真实动作 -->
@@ -145,7 +151,6 @@
         <div id="blocking" class="blocking hidden"></div>
         <ol id="messages" class="messages"></ol>
         <form id="chat-form" class="chat-form">
-          <div id="templates" class="templates"></div>
           <textarea id="chat-input" rows="3" data-i18n-placeholder="chat.placeholder"></textarea>
           <div class="chat-actions">
             <button type="submit" id="btn-send" data-i18n="chat.send"></button>
@@ -157,7 +162,6 @@
     </main>
 
     <footer class="timeline">
-      <button id="btn-latest" data-i18n="timeline.latest"></button>
       <input id="scrub" type="range" min="0" max="0" value="0" />
       <span id="rev-label" class="rev"></span>
       <span class="hint" data-i18n="timeline.drag"></span>

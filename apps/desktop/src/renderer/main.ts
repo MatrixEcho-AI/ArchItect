@@ -381,6 +381,14 @@ const presetLabel = (preset: string): string => t(`settings.presets.${preset}` a
 
 // ── 状态与错误 ────────────────────────────────────────────────────────────────
 
+/**
+ * 一行状态文字。
+ *
+ * ⚠️ **状态行按要求从界面上隐藏了**（`#status` 带 `hidden`，见 index.html），所以现在
+ * 这些字**看不见**——包括「思考中…」「本轮结束（reason）」和各种机位提示。
+ * 真正的失败反馈不靠它：失败的回合会在对话里落一条红色消息（见 `renderChat`/`ChatController.fail`），
+ * 那条**仍然可见**。要恢复状态行：去掉 index.html 上的那个 `hidden`。
+ */
 function setStatus(text: string): void {
   statusEl.textContent = text
 }
@@ -1320,7 +1328,8 @@ function renderPanel(next: StudioState): void {
   scrub.max = String(next.totalOps)
   scrub.value = String(next.revision)
   revLabel.textContent = t('timeline.revision', { rev: next.revision, total: next.totalOps })
-  el<HTMLButtonElement>('btn-latest').disabled = next.behindTip
+  // `#btn-latest`（回到最新）已按要求**删除**：回最新的路只剩"把时间线拖到最右端"与 ⌘⇧Z 重做，
+  // 所以 behind-tip 的文案也一并改了（见 i18n 的 chat.behindTip）
   scrub.disabled = next.totalOps === 0
 
   // 撤销 / 重做 = 游标前后还有没有内容（不是"内存栈里还有没有东西"）
@@ -1346,33 +1355,11 @@ function renderPanel(next: StudioState): void {
  * 硬接出来的世界不会是崩溃前的那个。
  */
 /**
- * 需求模板（M8「5 分钟产出第一座建筑」最直接的一步）。
- *
- * 以前模板只躺在 `docs/prompt-library.md` 里——用户得离开应用去复制粘贴。
- * 文案走 i18n（换语言时模板也跟着换），四个模板对应文档里的四类。
+ * 需求模板行已按要求**删除**：`#templates` 的 markup、`TEMPLATE_KEYS`、`renderTemplates()`、
+ * 两处调用点、以及 gui-smoke 里那条 `templates` 断言一起拆掉了。
+ * 模板文案本身还在（`docs/prompt-library.md` 与 i18n 的 `chat.templates.*`），
+ * 要恢复就把 markup 加回 index.html，再把这里那个函数接回来。
  */
-const TEMPLATE_KEYS = ['house', 'public', 'decor', 'fix'] as const
-
-function renderTemplates(): void {
-  const row = el('templates')
-  row.title = t('chat.templates.hint')
-  row.innerHTML = `<span class="label">${escapeHtml(t('chat.templates.label'))}</span>`
-  for (const key of TEMPLATE_KEYS) {
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'mini'
-    button.textContent = t(`chat.templates.${key}`).split('\n')[0]!.slice(0, 14)
-    button.dataset['template'] = key
-    button.addEventListener('click', () => {
-      const input = el<HTMLTextAreaElement>('chat-input')
-      input.value = t(`chat.templates.${key}`)
-      input.focus()
-      // 光标放到末尾：用户接下来要改的就是里面的数字与材质
-      input.setSelectionRange(input.value.length, input.value.length)
-    })
-    row.append(button)
-  }
-}
 
 /**
  * 纹理来源说人话。
@@ -1750,7 +1737,6 @@ function wire(): void {
   wireViewport()
   wireCamera()
   wirePalette()
-  renderTemplates()
 
   el('btn-new').addEventListener('click', () => {
     void guard(t('menu.new'), async () => {
@@ -1840,13 +1826,6 @@ function wire(): void {
     void shoot()
   })
 
-  el('btn-latest').addEventListener('click', () => {
-    void guard(t('timeline.latest'), async () => {
-      renderPanel(await window.architect.seekLatest())
-      await shoot()
-    })
-  })
-
   // 撤销 / 重做：游标前后移动 + 重放。走的是和 seek 同一条路，
   // 所以拖时间线和按 ⌘Z 在语义上没有区别（plan §6）。
   el('btn-undo').addEventListener('click', () => {
@@ -1919,15 +1898,15 @@ function wire(): void {
   stopButton.addEventListener('click', () => {
     void guard(t('chat.stop'), async () => renderChat(await window.architect.stop()))
   })
-  el('btn-chat-clear').addEventListener('click', () => {
-    void guard(t('chat.clear'), async () => {
-      for (const url of imageUrls.values()) URL.revokeObjectURL(url)
-      imageUrls.clear()
-      renderChat(await window.architect.clearChat())
-    })
-  })
+  // 「清空」按钮已按要求**删除**（连 `chat.clear` 的入口一起）。
+  // `ChatController.clear()` 与 IPC `chat:clear` 都还在，要恢复只要把按钮加回 index.html
+  // 并接上这一句：`renderChat(await window.architect.clearChat())`
 
   // ── 设置 ────────────────────────────────────────────────────────────────────
+  // 「设置」按钮按要求**从界面上隐藏**（`hidden`，见 index.html）。
+  // 接线照旧：`#blocking-settings`（没配好模型时那条提示里的按钮）仍然会打开同一个对话框，
+  // 所以"配置不全"这条路径不受影响；受影响的是**配好之后**没有入口再改设置。
+  // 要把它找回来：去掉 index.html 上那个 `hidden`，或者在这里加一个快捷键（例：⌘, ）。
   el('btn-settings').addEventListener('click', () => {
     if (settings !== undefined) renderSettings(settings)
     settingsDialog.showModal()
@@ -2008,7 +1987,6 @@ async function boot(): Promise<void> {
     onLocaleChange(() => {
       applyStaticText()
       renderPresetButtons()
-      renderTemplates()
       if (current !== undefined) renderPanel(current)
       if (chat !== undefined) renderChat(chat)
       if (settings !== undefined) renderSettings(settings)

@@ -130,7 +130,7 @@ export const enUS = {
       fix: 'Start by running analyze_structure, then fix every issue it reports:\n- floating: support the floating parts down to the ground\n- doorway: open the doorway to at least 2 blocks of clearance\n- headroom: raise crawl spaces to 2 blocks\nWhen done, run analyze_structure again and confirm errors are back to zero.',
       hint: 'Click one to drop it into the input box, then change the numbers and materials before sending',
     },
-    behindTipDetail: 'You are sitting on history: rev {{rev}} of {{total}}. Continuing from here means the model\u2019s first edit overwrites the {{lost}} step(s) after it. Go back to the latest first (right end of the timeline, or ⌘⇧Z), then send.',
+    behindTipDetail: 'You are sitting on history: rev {{rev}} of {{total}}. Continuing from here means the model\u2019s first edit overwrites the {{lost}} step(s) after it. Drag the timeline to the far right first (or ⌘⇧Z), then send.',
     title: 'Chat',
     placeholder: 'Describe the building you want… (⌘/Ctrl + Enter to send)',
     send: 'Send',
@@ -149,7 +149,7 @@ export const enUS = {
       '[TRUNCATED] This turn hit the output token limit ({{out}} out) with an empty body and no tool call — the reasoning chain ate the budget. Be more specific and try again.',
     noProvider: 'No model configured yet. Set the endpoint and API key under Settings first.',
     behindTip:
-      'You are viewing a historical revision. Letting the model edit now would discard the later steps — go back to the latest first (or redo up to it).',
+      'You are viewing a historical revision. Letting the model edit now would discard the later steps — drag the timeline to the far right first (or redo up to it).',
     turnDone: 'Turn finished ({{reason}})',
     tokens: '{{in}} in / {{out}} out / {{cached}} cached',
   },

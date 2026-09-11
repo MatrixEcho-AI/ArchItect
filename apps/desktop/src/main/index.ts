@@ -583,14 +583,10 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       detail === null ? '没有 #op-detail' : detail.textContent.replace(/\\s+/g, ' ').slice(0, 60),
     );
 
-    const template = document.querySelector('#templates button');
+    // 需求模板行已按要求删除（M8 里"模板填得进输入框"那条随之作废）：
+    // 这里退一步，只断言输入框还在接线上
     const input = document.querySelector('#chat-input');
-    if (template !== null) template.click();
-    check(
-      'templates',
-      input !== null && input.value.trim().length > 10,
-      input === null ? '没有 #chat-input' : input.value.split('\\n')[0].slice(0, 40),
-    );
+    check('chat-input', input !== null, input === null ? '没有 #chat-input' : '输入框在');
 
     // 恢复条：**有草稿才显示**。这里不能硬断言"一定是隐藏的"——
     // 上一次跑留下的草稿本来就该让这个条亮着；要断言的是"显示与否跟状态一致"。
@@ -613,6 +609,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       );
     }
 
+    // 成本读数按要求从界面上隐藏了（#cost 带 hidden，见 index.html），
+    // 元素与写入点都还在——这里断言的是"接线没被拆掉"，一条 class 就能改回可见
     const cost = document.querySelector('#cost');
     check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
 

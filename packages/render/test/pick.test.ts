@@ -8,7 +8,7 @@
  */
 
 import { WorldStore } from '@architect/core'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 
 import { cameraForShot, projectPoint, cameraBasis } from '../src/camera.js'
 import type { CameraSpec } from '../src/camera.js'
@@ -24,6 +24,17 @@ function world(blocks: Array<[number, number, number, string]>): WorldStore {
   for (const [x, y, z, name] of blocks) store.setBlock({ x, y, z }, `minecraft:${name}`)
   return store
 }
+
+/**
+ * 1.21.4 的渲染数据（方块模型 + 贴图集）加载一次要 1 秒出头，是**整个文件共享**
+ * 的成本（`loadRenderData` 内部有 versionCache）。必须在这里显式付掉，
+ * 否则它会算在「本文件里第一个跑到的测试」头上：那个测试单独跑 1.3 秒，
+ * 全量并行抢 CPU 时膨胀到 5.9 秒，直接撞穿 vitest 默认的 5 秒超时，变成随机假红。
+ * 成本归属摆正之后，单个用例才能回到几十毫秒。
+ */
+beforeAll(() => {
+  loadRenderData(VERSION, assetsTexturePack(VERSION))
+}, 120_000)
 
 const geometryOf = (store: WorldStore): ReturnType<typeof meshWorld> =>
   meshWorld(store, loadRenderData(VERSION, assetsTexturePack(VERSION)))

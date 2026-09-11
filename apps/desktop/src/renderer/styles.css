@@ -1,0 +1,633 @@
+/*
+ * 界面里**只有这些**是自己的样式。
+ *
+ * antd 的组件（按钮、输入、卡片、列表、弹窗…）由它自己的 CSS-in-JS 管，
+ * 主题与配色在 `theme.ts` 里。这里只放两类东西：
+ *
+ * 1. **三维视口**：两层画布必须严格重叠、拖动要抓光标。这是画布，不是组件。
+ * 2. **对话消息的语义配色**：`user` / `assistant` / `tool` / 失败 / 闸门各有颜色，
+ *    它表达的是**这条消息是谁说的、好不好**，不是"一个卡片"。塞进 antd 的组件
+ *    反而不如一条左边框直白。
+ *
+ * 颜色一律走 `--ant-*`：antd 5 默认把 token 挂成了 CSS 变量（`cssVar` 默认开启），
+ * 所以这里不用抄一遍色号——抄一遍就会在改主题时漂移，而那正是接 antd 要避免的事。
+ */
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 视口占满它那一格；两层画布绝对定位叠在一起 */
+.viewport-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #eef6fd;
+  overflow: hidden;
+}
+
+.viewport-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* 拖动旋转；拖动中不要选中文字、光标换成抓取 */
+  cursor: grab;
+  touch-action: none;
+}
+
+/* 叠加层只负责接收指针事件，方块由下面的 WebGL 画布画 */
+.viewport-stage #overlay {
+  background: transparent;
+  pointer-events: auto;
+}
+
+.dragging .viewport-stage canvas {
+  cursor: grabbing;
+}
+
+/* 编辑模式下光标换成十字：不然用户不知道"现在点一下会改东西" */
+.editing .viewport-stage canvas {
+  cursor: crosshair;
+}
+
+/* 空世界提示：盖在视口正中，不吃指针事件 */
+.viewport-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ant-color-text-secondary);
+  text-align: center;
+  padding: 20px;
+  pointer-events: none;
+}
+
+/* ── 对话 ─────────────────────────────────────────────────────────────────
+   卡片按**角色**着色：这是这批改动里加的第一件事——原来所有卡片都是纯白 + 无边框，
+   一整列看下来分不出哪条是谁说的。
+
+   配色规则（都走 antd 的 token，不抄色号）：
+     · user       —— 主色系（蓝）：用户说的话，右边那一栏里其实只有它来自人
+     · assistant  —— 成功色系（绿）：模型的设计叙述
+     · tool       —— 中性灰：机器日志，天生最不显眼的一类
+     · 失败 / 闸门 —— 各自的语义色，见下
+   底色用 `-bg`（极浅）而不是主色本身，所以仍然看得清正文。 */
+
+.messages {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: auto;
+  min-height: 0;
+}
+
+.messages li.msg {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  /* 卡片与背景之间要有**边框**：用户明确说过纯白无边框分不出来 */
+  border: 1px solid var(--ant-color-border-secondary);
+  /* 左边一条 3px 的色带：一眼扫过去就知道这条是谁说的，不用读文字 */
+  border-left: 3px solid var(--ant-color-border);
+  background: var(--ant-color-bg-container);
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 入场弹出动画：新卡片出现时轻微放大 + 上浮。见下面 `@keyframes card-in`。 */
+  animation: card-in 180ms ease-out both;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 尊重系统的"减少动态效果"：这不是装饰性动画，但也没有信息量，该关就关 */
+@media (prefers-reduced-motion: reduce) {
+  .messages li.msg {
+    animation: none;
+  }
+}
+
+.messages li.msg.user {
+  border-left-color: var(--ant-color-primary);
+  background: var(--ant-color-primary-bg);
+}
+
+.messages li.msg.assistant {
+  border-left-color: var(--ant-color-success);
+  background: var(--ant-color-success-bg);
+}
+
+.messages li.msg.tool {
+  border-left-color: var(--ant-color-text-quaternary);
+  background: var(--ant-color-fill-quaternary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+}
+
+.messages li.msg.tool.bad,
+.messages li.msg.assistant.bad {
+  border-left-color: var(--ant-color-error);
+  background: var(--ant-color-error-bg);
+}
+
+/* 失败的一轮（请求报错 / 空回复）：**必须显眼**——以前它什么都不显示，
+   用户以为消息发丢了，只能反复重发 */
+.messages li.msg.assistant.bad {
+  color: var(--ant-color-error-text);
+}
+
+.messages li.msg.gate {
+  border-left-color: var(--ant-color-warning);
+  background: var(--ant-color-warning-bg);
+  color: var(--ant-color-warning-text);
+  font-size: 11.5px;
+}
+
+.messages .who {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ant-color-text-secondary);
+  margin-bottom: 2px;
+}
+
+.messages .body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 流式生成：末尾一个一闪一闪的光标——字是边收边画的，光标证明它还在往外冒 */
+.messages li.msg.streaming > div.body::after {
+  content: '▌';
+  margin-left: 1px;
+  color: var(--ant-color-primary);
+  animation: caret 1s steps(1) infinite;
+}
+
+@keyframes caret {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ── 思维链：一行滚动显示最新内容，点开才展开 ────────────────────────────────
+   Codex 那种做法。旨在一行里给出"它现在想到哪儿了"，而**不是**把草稿铺满对话。 */
+
+.thinking {
+  margin: 2px 0 0;
+}
+
+.thinking-toggle,
+.collapsible-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ant-color-text-secondary);
+  font: inherit;
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thinking-toggle:hover,
+.collapsible-toggle:hover {
+  color: var(--ant-color-text);
+}
+
+.thinking-toggle .anticon,
+.collapsible-toggle .anticon {
+  font-size: 9px;
+  flex: none;
+}
+
+/* **一行**、超长省略。`text-overflow: ellipsis` 只在单行 `nowrap` 下生效 */
+.thinking-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 还在想：给它一点动静，但**不闪**——闪会让人以为出错了 */
+.thinking.live .thinking-line {
+  color: var(--ant-color-primary);
+}
+
+.thinking-full {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid var(--ant-color-border-secondary);
+  color: var(--ant-color-text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 思维链可能很长，展开后限高自己滚，别把整列对话推走 */
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* 刚发出请求、还没开始思考时的那一行 */
+.thinking-line.plain {
+  color: var(--ant-color-text-secondary);
+  font-size: 11.5px;
+}
+
+/* ── 折叠块（工具返回等） ───────────────────────────────────────────────────── */
+
+.collapsible {
+  margin-top: 2px;
+}
+
+/* 折叠正文：等宽 + 自己滚。一条 `get_region` 的平面图有几百行 */
+.collapsible-body {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  max-height: 260px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--ant-color-fill-quaternary);
+  color: var(--ant-color-text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 截图上点一下就放大到 200%：方块只有几个像素，看不清具体放了什么 */
+.messages img.shot {
+  display: block;
+  margin-top: 6px;
+  width: 100%;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 4px;
+  cursor: zoom-in;
+  image-rendering: pixelated;
+}
+
+.messages img.shot.zoom {
+  width: 200%;
+  max-width: none;
+  cursor: zoom-out;
+}
+
+/* ── 隐藏（不是删除） ────────────────────────────────────────────────────────
+   机位面板、调色板、成本读数、状态行按要求从界面上隐藏：元素与接线都还在，
+   去掉一个 class 就能改回可见。用 `hidden` 属性或 `.hidden` 类都行——
+   dom-ids 测试会核对这几个 id 仍然存在，且确实带着隐藏标记。 */
+.hidden {
+  display: none !important;
+}
+
+/* 左栏可以整栏滚动：五个分区在窄窗口下装不下 */
+.panel-scroll {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* 编辑记录最多 50 条，不限高的话它会把左栏撑成一屏半 */
+.ops-scroll {
+  max-height: 220px;
+  overflow: auto;
+}
+
+/* ── 左栏里那些密集小控件 ──────────────────────────────────────────────────────
+   左栏只有 ~232px，所以数字输入框挤在 2~3 列的网格里，标签用小字放在上方。
+   这一块刻意保留自研布局：antd 的 `Form` 带自己的 label 排版与 24px 行距，
+   在 232px 的栏里会把五个分区撑成三屏。 */
+
+.cam-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 6px;
+  align-items: end;
+  margin-top: 4px;
+}
+
+.cam-grid.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.cam-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cam-field > span,
+.cam-label {
+  font-size: 10px;
+  color: var(--ant-color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.cam-label {
+  display: block;
+  margin-top: 6px;
+}
+
+.cam-share {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
+.cam-share input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--ant-color-primary);
+}
+
+.cam-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ant-color-text-secondary);
+}
+
+/* 调色板：搜索框下一条竖列表，最下面一排"用过的" chips */
+.palette-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 168px;
+  overflow: auto;
+  font-size: 12px;
+}
+
+.palette-list li {
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-list li:hover {
+  background: var(--ant-color-fill-secondary);
+}
+
+.palette-chips {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.palette-chips li {
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--ant-color-text-secondary);
+}
+
+.palette-chips li:hover {
+  border-color: var(--ant-color-primary);
+  color: var(--ant-color-text);
+}
+
+/* 当前选中的方块：只有在"选了"和"被点过"两种状态下才区分得出来 */
+.palette-list li.active,
+.palette-chips li.active {
+  border-color: var(--ant-color-primary);
+  color: var(--ant-color-primary);
+  background: var(--ant-color-primary-bg);
+}
+
+.palette-current {
+  margin-top: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+}
+
+.palette-current b {
+  color: var(--ant-color-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 材质与编辑记录：一行两项，数值靠右 */
+.histogram,
+.ops {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.histogram li,
+.ops li {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+}
+
+.histogram li span:last-child,
+.ops li span:last-child {
+  margin-left: auto;
+  color: var(--ant-color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.ops li.op {
+  cursor: pointer;
+}
+
+.ops li.op:hover {
+  background: var(--ant-color-fill-secondary);
+}
+
+.ops li.op.current {
+  background: var(--ant-color-primary-bg);
+  outline: 1px solid var(--ant-color-primary);
+}
+
+.ops li.op .rev {
+  color: var(--ant-color-primary);
+  font-variant-numeric: tabular-nums;
+  min-width: 26px;
+}
+
+/* 人手改的与模型改的用颜色分开 */
+.ops li.op.user .rev {
+  color: var(--ant-color-warning);
+}
+
+.op-detail {
+  margin: 6px 0 8px;
+  padding: 8px;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 4px;
+  background: var(--ant-color-fill-quaternary);
+  font-size: 11px;
+}
+
+.op-detail b {
+  display: inline-block;
+  margin-bottom: 4px;
+}
+
+.op-detail dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0;
+  word-break: break-all;
+}
+
+.op-detail dt {
+  color: var(--ant-color-text-secondary);
+}
+
+.op-detail dd {
+  margin: 0;
+}
+
+/* ── 对话那一栏的容器 ───────────────────────────────────────────────────────── */
+
+.chat-column {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+}
+
+.chat-form {
+  border-top: 1px solid var(--ant-color-border-secondary);
+  padding: 8px 10px;
+  flex: none;
+}
+
+.chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* 标题行右边的那一小串读数（token / 轮数 / 截图 / 缓存%）。
+   它**必须短**：`usageText` 已经把数字压成 k/M、缓存只留百分比（见 cost.ts）。
+   `tabular-nums` 是为了数字变化时不左右抖动。 */
+.chat-usage {
+  margin-left: auto;
+  color: var(--ant-color-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 时间线滑杆 ────────────────────────────────────────────────────────────────
+   原生 `input[type=range]`，不引 antd 的 `Slider`：后者不把 `id` 落到内部
+   `input` 上，而 `#scrub` 是 gui-smoke 拖时间线断言依赖的真契约（见 app.tsx）。
+   下面这几行是把它调到和 antd 的控件同一观感：一条轨道 + 一个圆钮。 */
+
+.scrub {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 18px;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.scrub::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ant-color-border-secondary);
+}
+
+.scrub::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--ant-color-primary);
+  border: 2px solid var(--ant-color-bg-container);
+  box-shadow: 0 0 0 1px var(--ant-color-border-secondary);
+}
+
+.scrub:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.scrub:disabled::-webkit-slider-thumb {
+  background: var(--ant-color-text-quaternary);
+}
+
+/* 折叠块里那一小行段标题（参数 / 结果） */
+.collapsible-label {
+  margin-top: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--ant-color-text-secondary);
+}
+
+/* 收起时那一行摘要：跟在标题后面，超长省略。
+   留它是因为"这一步到底成没成"不该逼用户点开才看得到（工具消息的成功/失败
+   已经由左边框颜色承担一半，这一行给具体数字）。 */
+.collapsible-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ant-color-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}

@@ -54,6 +54,17 @@ export interface ChatMessageView {
   imageView?: string
   /** 完成闸门的提醒（§9.4）。 */
   gate?: boolean
+  /**
+   * 工具调用的**完整返回**（给界面折叠展开用）。
+   *
+   * 与上面的 `text` 是**两份**，别合并：
+   *  - `text` 是给界面**默认显示**的一行摘要（只取首行、最多 400 字，见 `summarize`）；
+   *  - `toolResult` 是原始那一段（完整 summary + 结构化 `data` 的 JSON），只在用户
+   *    点开时才看。
+   *
+   * 分开的理由是"默认视图要短"和"排查时要全"是**两个相反的诉求**，一个字段满足不了。
+   */
+  toolResult?: string
   /** 这一轮**失败**了（请求报错、空回复……）。界面据此把它画红，而不是混在正常回复里。 */
   failed?: boolean
   /**
@@ -62,12 +73,15 @@ export interface ChatMessageView {
    */
   streaming?: boolean
   /**
-   * 流式期间**已经生成、还没吐正文**的思维链字符数。
+   * 流式期间模型吐出的**思维链正文**。
    *
-   * 只给数字不给内容：思维链是模型的草稿，逐字铺在对话里会把真正的回答淹掉；
-   * 但"已经想了 3000 字"能证明这条连接是活的——用户等的就是这一条。
+   * 为什么是正文而不是"已经想了几个字"：界面上要的是 Codex 那种做法——**一行**里滚动
+   * 显示最新的思考内容，点一下才展开全文。只给字数的话那一行无从显示，用户只能干等。
+   *
+   * 但它**永远不该默认铺满对话**：思维链是模型的草稿，逐字铺开会把真正的回答淹掉。
+   * 所以这里的职责只是"如实带出去"，收不收、怎么收由界面决定（默认收着）。
    */
-  thinking?: number
+  thinking?: string
   ts: string
 }
 
@@ -687,7 +701,8 @@ export class ChatController {
     const live = this.live
     if (live === undefined) return
     live.text += event.text
-    if (event.reasoning.length > 0) live.thinking = (live.thinking ?? 0) + event.reasoning.length
+    // 思维链**累加正文**（不是累加长度）：界面要在一行里滚动显示最新内容，也得能展开全文。
+    if (event.reasoning.length > 0) live.thinking = (live.thinking ?? '') + event.reasoning
   }
 
   /**
@@ -718,7 +733,8 @@ export class ChatController {
     this.liveTurn = undefined
     if (live === undefined) return
     live.streaming = false
-    delete live.thinking
+    // **刻意不删 `thinking`**：生成完之后那一段仍然要能点开回看（"它当时在想什么"
+    // 是排查"模型为什么这么改"最直接的线索）。界面默认把它收成一行。
     if (live.text.trim().length === 0) this.messages = this.messages.filter((message) => message !== live)
   }
 
@@ -774,6 +790,7 @@ export class ChatController {
         if (message !== undefined) {
           message.toolOk = event.result.ok
           message.text = summarize(event.result)
+          message.toolResult = fullResult(event.result)
           const image = event.result.image
           if (image !== undefined) {
             message.imageId = this.storeCapture(image.png, image.revision, image.camera)
@@ -879,6 +896,30 @@ export class ChatController {
 function summarize(result: ToolResult): string {
   const first = result.summary.split('\n')[0] ?? ''
   return first.length > 400 ? `${first.slice(0, 400)}…` : first
+}
+
+/**
+ * 工具返回的**完整**内容，给界面折叠展开用。
+ *
+ * 两段拼起来：完整 `summary`（LLM 读的那一份，人也能读）+ 结构化 `data` 的 JSON。
+ * `data` 也要给：模型"把参数传成了什么"与"世界实际长什么样"常常只有对着它才说得清
+ * （`verify` 的逐条结论、`slice` 的坐标、`analyze_structure` 的问题列表都在里面）。
+ *
+ * 空的时候给空串，让界面自己决定显示"（空）"——这里替它编一句人话反而会把
+ * "真的没有返回"和"返回了空"混成一样。
+ */
+function fullResult(result: ToolResult): string {
+  const parts = [result.summary]
+  if (result.error !== undefined) parts.push(`error: ${result.error.code} ${result.error.message}`)
+  if (result.data !== undefined && Object.keys(result.data).length > 0) {
+    try {
+      parts.push(JSON.stringify(result.data, null, 2))
+    } catch {
+      // 循环引用之类：`data` 是我们自己造的，理论上不会有，但没必要为了一个折叠块抛
+      parts.push('(data 无法序列化)')
+    }
+  }
+  return parts.join('\n\n')
 }
 
 /**

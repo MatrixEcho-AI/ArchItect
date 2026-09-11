@@ -125,7 +125,10 @@ export const enUS = {
     stop: 'Stop',
     clear: 'Clear',
     thinking: 'Thinking…',
-    thinkingLive: 'Thinking… {{count}} characters so far',
+    thinkingLatest: 'Thinking: {{text}}',
+    thinkingDone: 'Thought for {{count}} characters',
+    showMore: 'Show more',
+    showLess: 'Show less',
     toolCall: 'Tool call',
     toolResult: 'Result',
     attached: '{{count}} screenshot(s) attached',
@@ -210,6 +213,10 @@ export const enUS = {
     tokens: '{{in}} in / {{out}} out',
     cached: '{{count}} cached ({{percent}}% of input)',
     noPrice: 'No unit prices configured — token counts only',
+    compactTokens: '{{in}} in / {{out}} out',
+    compactTurns: '{{turns}} turns',
+    compactShots: '{{shots}} shots',
+    compactCache: '{{percent}}% cached',
   },
   dialog: {
 

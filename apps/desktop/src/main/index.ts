@@ -241,7 +241,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     title: 'ArchItect',
-    backgroundColor: '#1a1c22',
+    backgroundColor: '#ffffff',
     show: false,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
@@ -516,7 +516,15 @@ function registerIpc(): void {
             process.stderr.write(`抓取失败：${String(error)}\n`)
             app.exit(1)
           })
-      }, 900)
+        /**
+         * 等界面真的画上再抓。
+         *
+         * 原来是 900ms，不够：`ready` 只是"渲染进程报了到"，此后 React 还要提交首次
+         * 渲染、antd 的 CSS-in-JS 还要注入样式、字体还要回流。抓早了会抓到一张
+         * **半成品**——实测表现为"对话卡片的边框与底色都没上"，看起来像样式写错了，
+         * 而其实是抓图时机的问题。这类假象特别费时间，所以宁可多等。
+         */
+      }, 2000)
     }
     return { ok: true, value: undefined }
   })
@@ -554,6 +562,30 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       }
       return false;
     };
+    /**
+     * **把值写进一个 React 管的输入框。**
+     *
+     * ⚠️ 整段脚本是 TS 模板字符串：**注释里不能出现反引号**（会把字符串提前闭合，
+     * 症状是 tsc 报 "',' expected"）。
+     *
+     * 不能直接给 node.value 赋值：React 在节点上挂了一个 value tracker，直接赋值会把
+     * tracker 一起写脏，于是它判定"值没变"并**丢掉**随后的 input 事件，onChange 不触发。
+     * （真机症状：滑杆写成了 3，但界面上的 rev 标签一动不动，值还被 effect 同步回 8。）
+     *
+     * 走原型上的原生 setter、再把 tracker 抹掉，React 才会认为这是一次真实变化。
+     * 这是自动化里驱动受控组件的标准做法；真用户拖动不受影响（那是元素自身的值变化）。
+     */
+    const setNativeValue = (node, value) => {
+      const proto = node instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : node instanceof HTMLSelectElement
+          ? HTMLSelectElement.prototype
+          : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      if (setter) setter.call(node, value);
+      else node.value = value;
+      if (node._valueTracker) node._valueTracker.setValue(undefined);
+    };
 
     const ops = document.querySelectorAll('#ops li.op');
     check('ops-list', ops.length > 0, ops.length + ' 条可点的编辑记录');
@@ -561,26 +593,59 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     const label = document.querySelector('#rev-label');
     const scrub = document.querySelector('#scrub');
     const before = label ? label.textContent : '';
-    const target = Math.max(0, Math.min(Number(scrub.max) - 1, 3));
-    scrub.value = String(target);
-    scrub.dispatchEvent(new Event('input', { bubbles: true }));
-    await frames();
+    // 时间线在旧标记里是原生 range，换 React 之后若滑杆被换成受控组件、或 id 落到
+    // 别处去了，这里会读到 undefined / NaN。把"它到底是什么"写进断言消息，
+    // 比只报一句"没拖动"省一整轮排查。
+    const shape =
+      scrub === null
+        ? '没有 #scrub'
+        : scrub.tagName.toLowerCase() + ' max=' + scrub.max + ' disabled=' + String(scrub.disabled);
+    const target = Math.max(0, Math.min(Number(scrub === null ? 0 : scrub.max) - 1, 3));
+    if (scrub !== null) {
+      setNativeValue(scrub, String(target));
+      scrub.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    /**
+     * **轮询等结果，不等固定帧数。**
+     *
+     * 拖时间线是一条异步链：input 事件 → requestAnimationFrame 合流 → IPC seek →
+     * 主进程重放 → 推回新状态 → React 重渲染。等两帧在空闲机器上够，但在首屏还在
+     * 解码截图（--demo 现在载入的是带一张图的示例工程）时就不够——实测偶发红。
+     * 这个脚本里已经有 waitFor，用它才是对的写法。
+     */
+    const labelChanged = await waitFor(
+      () => label !== null && label.textContent !== before && label.textContent.includes(String(target)),
+    );
     check(
       'timeline-drag',
-      label.textContent !== before && label.textContent.includes(String(target)),
-      '"' + before + '" → "' + label.textContent + '"（拖到 rev ' + target + '）',
+      labelChanged,
+      '"' + before + '" → "' + (label ? label.textContent : '?') + '"（拖到 rev ' + target +
+        '；读到的是 ' + shape + '）',
     );
 
     const items = document.querySelectorAll('#ops li.op');
     if (items.length > 1) items[1].click();
-    const detail = document.querySelector('#op-detail');
-    const detailReady = await waitFor(
-      () => detail !== null && !detail.classList.contains('hidden') && detail.textContent.trim().length > 0,
-    );
+    // ⚠️ **查询必须在轮询的判据里，不能在点击之前先查一次。**
+    //
+    // 这里原来是查一次 #op-detail 存进变量、然后拿那个变量去轮询。
+    // 在旧标记时代成立（元素一开始就在 index.html 里，点击前就查得到），
+    // 但点开一条编辑记录是**异步 + 条件渲染**的：点下去那一刻元素还不存在，
+    // 于是那个变量永远是 null，轮询多少次都没用，断言必然红。
+    // 这正是"断言跟着 DOM 契约一起搬"时最容易漏的一类。
+    // （注意这段脚本整个是 TS 模板字符串：注释里不能出现反引号。）
+    let detailChars = 0;
+    const detailReady = await waitFor(() => {
+      const node = document.querySelector('#op-detail');
+      if (node === null || node.classList.contains('hidden')) return false;
+      const text = node.textContent.replace(/\\s+/g, ' ').trim();
+      if (text.length === 0) return false;
+      detailChars = text.length;
+      return true;
+    });
     check(
       'op-detail',
       detailReady,
-      detail === null ? '没有 #op-detail' : detail.textContent.replace(/\\s+/g, ' ').slice(0, 60),
+      detailReady ? '展开出 ' + detailChars + ' 字' : '等了 1.5s 也没等到 #op-detail（或它是空的）',
     );
 
     // 需求模板行已按要求删除（M8 里"模板填得进输入框"那条随之作废）：
@@ -606,6 +671,31 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         'recovery-buttons',
         apply !== null && discard !== null && apply.disabled === !state.recovery.baseExists,
         '恢复' + (apply.disabled ? '禁用' : '可用') + ' / 丢掉存在=' + (discard !== null),
+      );
+    }
+
+    /**
+     * **卡片配色真的生效了吗。**
+     *
+     * 这一条拦的是一类**静默失效**：styles.css 里那些 var(--ant-color-*-bg) 全部来自
+     * antd 的 CSS 变量模式，而**变量不存在时 CSS 不报错**——它只是回落到继承值，
+     * 于是"卡片按角色着色"变成"所有卡片一个色"，从截图上看只像配色不好看，
+     * 看不出是配置错了。单元测试也拦不住：jsdom 不算样式。
+     *
+     * 所以判据放在真页面里：读一张真卡片的计算背景色，必须与**页面背景**不同。
+     *
+     * （注意这段脚本整个是 TS 模板字符串：上面注释里不能出现反引号。）
+     */
+    const bodies = document.querySelectorAll('#messages li.msg');
+    if (bodies.length > 0) {
+      const card = getComputedStyle(bodies[0]);
+      const cardBg = card.backgroundColor;
+      // 判据：卡片底色**必须真的被画出来**（不是透明的）。透明就说明那些
+      // var(--ant-color-*-bg) 没解析出来——见 theme.ts 里 cssVar 那段注释。
+      check(
+        'card-colors',
+        cardBg !== '' && cardBg !== 'rgba(0, 0, 0, 0)' && cardBg !== 'transparent',
+        '卡片底色 ' + cardBg + ' / 左边框 ' + card.borderLeftColor,
       );
     }
 
@@ -959,11 +1049,50 @@ if (smokeIndex >= 0) {
     })
 }
 
-void app.whenReady().then(() => {
+/**
+ * `--demo` 的两种填法（见调用点的注释）：先试示例工程，失败则脚本化生成。
+ *
+ * 路径从 `__dirname` 往上找仓库根：打包后 `dist/` 在 `apps/desktop/` 下，
+ * 而 `examples/` 在仓库根——**打包版里没有这个目录**，那时自然会落到 `demo()`。
+ * 这是刻意的：演示数据不该进安装包。
+ */
+async function loadExampleOrDemo(): Promise<void> {
+  const candidates = [
+    join(__dirname, '..', '..', '..', 'examples', 'forest-hut.mcai'),
+    join(__dirname, '..', '..', 'examples', 'forest-hut.mcai'),
+  ]
+  for (const candidate of candidates) {
+    try {
+      await studio.open(candidate)
+      process.stdout.write(`[demo] 已载入示例工程 ${candidate}\n`)
+      return
+    } catch {
+      // 换下一个候选；都没有就走脚本化生成
+    }
+  }
+  studio.demo()
+  process.stdout.write('[demo] 没找到示例工程，改为脚本化生成小屋\n')
+}
+
+void app.whenReady().then(async () => {
   if (smokeIndex >= 0) return
   initStudio()
-  // --demo：启动时先生成示例小屋，便于抓图/演示
-  if (process.argv.includes('--demo')) studio.demo()
+  /**
+   * `--demo`：启动时先把界面填上东西，便于抓图/演示。
+   *
+   * **优先载入仓库里的示例工程**（`examples/forest-hut.mcai`），载不到才退回
+   * "脚本化生成一座小屋"。这个顺序是有理由的：示例工程里带着**对话记录与截图**
+   * （22 条消息、1 张图），而 `studio.demo()` 只造方块、对话列是空的——于是
+   * "抓一张图看看对话渲染成什么样"这件事一直做不到（卡片配色、思维链折叠、
+   * 工具返回折叠、截图在对话里的样子，全都得靠一个真模型跑一轮才看得见）。
+   *
+   * 示例工程是**确定性生成的**（`pnpm example`，时间戳钉死），所以这条路也可复现。
+   */
+  if (process.argv.includes('--demo')) {
+    // **等它载完再建窗口**：不然窗口会先按"空世界"渲染一帧，
+    // 而 `--capture` 正好可能抓到那一帧（状态到位前的空对话列）。
+    await loadExampleOrDemo()
+  }
   registerIpc()
   createWindow()
 

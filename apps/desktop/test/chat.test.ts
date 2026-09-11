@@ -816,12 +816,14 @@ describe('流式输出', () => {
 
     emit({ type: 'assistant_delta', turn: 1, text: '先', reasoning: '' })
     emit({ type: 'assistant_delta', turn: 1, text: '铺', reasoning: '' })
-    // 思维链只计数不显示内容：它证明"这条连接还活着"
-    emit({ type: 'assistant_delta', turn: 1, text: '', reasoning: '想一想' })
+    // 思维链带的是**正文**（不是"想了几个字"）：界面要在一行里滚动显示最新内容，
+    // 也得能点开看全文。多个碎片是**拼接**，不是取最后一个。
+    emit({ type: 'assistant_delta', turn: 1, text: '', reasoning: '想一' })
+    emit({ type: 'assistant_delta', turn: 1, text: '', reasoning: '想二' })
     const growing = chat.chatView().messages.at(-1)!
     expect(growing.text).toBe('先铺')
     expect(growing.streaming).toBe(true)
-    expect(growing.thinking).toBe(3)
+    expect(growing.thinking).toBe('想一想二')
     // 还是一条消息，不是每个碎片一条
     expect(chat.chatView().messages.filter((message) => message.role === 'assistant')).toHaveLength(1)
 
@@ -830,7 +832,9 @@ describe('流式输出', () => {
     const settled = chat.chatView().messages.at(-1)!
     expect(settled.text).toBe('先铺地板。')
     expect(settled.streaming).toBe(false)
-    expect(settled.thinking).toBeUndefined()
+    // **思维链收口后仍然留着**：生成完之后"它当时在想什么"是排查"模型为什么这么改"
+    // 最直接的线索。界面上默认收成一行，点开才展开。
+    expect(settled.thinking).toBe('想一想二')
 
     await finish()
     expect(views.at(-1)!.running).toBe(false)

@@ -84,12 +84,17 @@ packages/
   i18n       中文优先的文案层（zh-CN 是基准表）
   cli        无头命令行
 apps/
-  desktop    Electron 桌面端
+  desktop    Electron 桌面端（React 18 + antd 5，白色主题）
 docs/        格式规范 · 工具参考（生成） · prompt 库
 examples/    示例工程
 ```
 
 约束：`packages/*` 全部不依赖 Electron、不依赖 DOM。
+
+渲染进程里有一条硬边界：**三份视图（世界 / 对话 / 设置）由 React 持有，视口与相机在
+React 之外**（`viewport-shell.ts`）。拖动的每个像素都不进 `useState`——WebGL 上下文只建
+一次，高频的那一半留给按帧合流的命令式代码。文案一律走 `t()`（键是编译期校验的点分
+路径），语言切换同时驱动 `@architect/i18n` 与 antd 的 `ConfigProvider`。
 
 ---
 

@@ -10,10 +10,12 @@
     ],
     "types": [
       "node"
-    ]
+    ],
+    "jsx": "react-jsx"
   },
   "include": [
     "src/**/*.ts",
+    "src/**/*.tsx",
     "test/**/*.ts",
     "../../packages/render/src/*.d.ts"
   ]

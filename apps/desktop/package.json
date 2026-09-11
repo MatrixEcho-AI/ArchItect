@@ -12,6 +12,7 @@
     "package": "pnpm build && electron-builder"
   },
   "dependencies": {
+    "@ant-design/icons": "5.6.1",
     "@architect/agent": "workspace:*",
     "@architect/core": "workspace:*",
     "@architect/i18n": "workspace:*",
@@ -19,13 +20,18 @@
     "@architect/mcai": "workspace:*",
     "@architect/render": "workspace:*",
     "@architect/tools": "workspace:*",
+    "antd": "5.29.3",
     "fflate": "^0.8.2",
     "minecraft-assets": "^1.19.0",
     "minecraft-data": "^3.116.0",
     "prismarine-block": "^1.22.0",
-    "prismarine-chunk": "^1.41.0"
+    "prismarine-chunk": "^1.41.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
     "@types/three": "^0.180.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8",

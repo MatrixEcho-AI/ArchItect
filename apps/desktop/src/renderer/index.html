@@ -2,227 +2,38 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <!--
+      内容安全策略。
+
+      `script-src 'self'` 仍然锁死：脚本只能来自本包，没有内联脚本、没有远程脚本。
+      **`style-src` 加了 `'unsafe-inline'`**，这是接 antd 时必须付的代价：
+      antd 5 的样式是 CSS-in-JS（`@ant-design/cssinjs`），它在运行时往文档里插
+      `<style>` 标签，并且大量组件（Flex / Space / 网格、拖拽定位、虚拟列表）
+      直接在元素上写内联 `style`。这两样都被原来的 `style-src 'self'` 拦掉——
+      拦住的结果不是"样式降级"，是**布局整个塌掉**。
+
+      这个取舍是有意的：脚本注入面（XSS 的主要风险面）没有变宽，放宽的只是
+      "样式可以从哪来"。`script-src 'self'` 那一条没有任何让步。
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:;"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:;"
     />
     <title>ArchItect</title>
-    <link rel="stylesheet" href="style.css" />
+    <!--
+      esbuild 会把 `main.tsx` 里 import 的 CSS **抽成一个独立文件**（`main.css`），
+      而且抽取模式下它**不做运行时注入**。所以这一行不能少：少了它，整个界面就没有
+      定位样式——`.viewport-stage` 高度塌成 0、两层画布退回 300×150 的默认尺寸。
+      （症状很隐蔽：抓窗口看还行，但模型截图是小图、状态行写着 `canvas 300x150`。）
+
+      `style-src 'self'` 允许本包的同源样式表，所以这条链接与 CSP 不冲突；
+      加 `'unsafe-inline'` 是为了 antd 的 CSS-in-JS（见上面那段注释）。
+    -->
+    <link rel="stylesheet" href="main.css" />
   </head>
   <body>
-    <header class="toolbar">
-      <span class="brand">ArchItect</span>
-      <button id="btn-new" data-i18n="menu.new"></button>
-      <button id="btn-open" data-i18n="menu.open"></button>
-      <button id="btn-save" data-i18n="menu.save"></button>
-      <button id="btn-undo" data-i18n="menu.undo" data-i18n-title="menu.undoTitle"></button>
-      <button id="btn-redo" data-i18n="menu.redo" data-i18n-title="menu.redoTitle"></button>
-      <span class="sep"></span>
-      <label for="view" data-i18n="viewport.camera"></label>
-      <select id="view">
-        <option value="free" data-i18n="viewport.angles.free"></option>
-        <option value="iso_ne" data-i18n="viewport.angles.iso_ne"></option>
-        <option value="iso_nw" data-i18n="viewport.angles.iso_nw"></option>
-        <option value="iso_se" data-i18n="viewport.angles.iso_se"></option>
-        <option value="iso_sw" data-i18n="viewport.angles.iso_sw"></option>
-        <option value="front" data-i18n="viewport.angles.front"></option>
-        <option value="back" data-i18n="viewport.angles.back"></option>
-        <option value="left" data-i18n="viewport.angles.left"></option>
-        <option value="right" data-i18n="viewport.angles.right"></option>
-        <option value="top" data-i18n="viewport.angles.top"></option>
-      </select>
-      <button id="btn-demo" data-i18n="menu.demo"></button>
-      <span class="sep"></span>
-      <button id="btn-export" data-i18n="menu.export"></button>
-      <button id="btn-import" data-i18n="menu.import"></button>
-      <span class="spacer"></span>
-      <!-- 注释掉：成本 / 缓存命中读数（#cost）。写入点仍在 main.ts，改回可见只要去掉 hidden -->
-      <span id="cost" class="cost hidden"></span>
-      <!-- 注释掉：设置入口。⚠️ 界面上**只剩**"没配好模型时"那条挡住发送的提示里那个打开设置按钮，
-           配好之后就再没有入口了（要改模型/密钥/预算只能改设置文件）。要找回入口见 main.ts 的注释 -->
-      <button id="btn-settings" class="hidden" data-i18n="menu.settings"></button>
-      <!-- 注释掉：状态行（机位读数 + 「思考中…」/「本轮结束（reason）」等）。写入点仍在 main.ts -->
-      <span id="status" class="status hidden"></span>
-    </header>
-
-    <main>
-      <aside class="panel left">
-        <div class="block">
-          <h2 data-i18n="panel.project"></h2>
-          <dl id="project-info"></dl>
-        </div>
-        <!-- 机位：**按要求从界面上隐藏**（`hidden`）。里面的元素用 `el()` 严格取，
-             整块注释掉会让 40 处引用变成 null 检查，所以这里只隐不删。
-             注意：这块里含「模型用这个机位」（人机共用机位）的入口。 -->
-        <div class="block hidden" id="camera-panel">
-          <h2 data-i18n="viewport.camera"></h2>
-          <div class="camera">
-            <select id="cam-mode">
-              <option value="angle" data-i18n="viewport.cam.modeAngle"></option>
-              <option value="eye" data-i18n="viewport.cam.modeEye"></option>
-            </select>
-
-            <div class="cam-grid" id="cam-angle">
-              <label><span data-i18n="viewport.cam.azimuth"></span><input id="cam-az" type="number" step="1" /></label>
-              <label><span data-i18n="viewport.cam.elevation"></span><input id="cam-el" type="number" step="1" /></label>
-            </div>
-
-            <div class="cam-grid hidden" id="cam-eye">
-              <span class="cam-label" data-i18n="viewport.cam.eye"></span>
-              <label><span>X</span><input id="cam-ex" type="number" step="1" /></label>
-              <label><span>Y</span><input id="cam-ey" type="number" step="1" /></label>
-              <label><span>Z</span><input id="cam-ez" type="number" step="1" /></label>
-              <span class="cam-label" data-i18n="viewport.cam.lookAt"></span>
-              <label><span>X</span><input id="cam-lx" type="number" step="1" /></label>
-              <label><span>Y</span><input id="cam-ly" type="number" step="1" /></label>
-              <label><span>Z</span><input id="cam-lz" type="number" step="1" /></label>
-            </div>
-
-            <div class="cam-grid">
-              <label><span data-i18n="viewport.cam.roll"></span><input id="cam-roll" type="number" step="5" /></label>
-              <label><span data-i18n="viewport.cam.scale"></span><input id="cam-scale" type="number" step="5" min="25" max="110" placeholder="70" /></label>
-            </div>
-
-            <label class="cam-share">
-              <input id="cam-share" type="checkbox" />
-              <span data-i18n="viewport.cam.share"></span>
-            </label>
-            <div class="cam-actions">
-              <button type="button" id="cam-apply" class="mini" data-i18n="viewport.cam.apply"></button>
-              <button type="button" id="cam-reset" class="mini" data-i18n="viewport.cam.reset"></button>
-            </div>
-            <p class="cam-hint" data-i18n="viewport.cam.hint"></p>
-          </div>
-        </div>
-        <!-- 人手接管：选一个方块，然后在视口里点哪儿改哪儿。
-             和模型改的完全同权（同一条 op 日志），所以撤销、时间线、导出、.mcai 全都照常。
-             **按要求从界面上隐藏**（`hidden`）：注意「编辑模式」这个开关也在这块里，
-             隐掉之后视口点击不会改世界（那是这个开关控制的）。元素与接线都还在。 -->
-        <div class="block hidden" id="palette-panel">
-          <h2><span data-i18n="panel.palette"></span></h2>
-          <label class="cam-share">
-            <input id="edit-mode" type="checkbox" />
-            <span data-i18n="palette.editMode"></span>
-          </label>
-          <p class="cam-hint" data-i18n="palette.hint"></p>
-          <input id="block-search" type="search" spellcheck="false" data-i18n-placeholder="palette.search" />
-          <ul id="palette-matches" class="palette-list"></ul>
-          <div class="palette-current">
-            <span data-i18n="palette.current"></span>
-            <b id="palette-current">—</b>
-          </div>
-          <ul id="palette-used" class="palette-chips"></ul>
-        </div>
-        <div class="block">
-          <h2 data-i18n="panel.materials"></h2>
-          <ul id="histogram" class="histogram"></ul>
-        </div>
-        <div class="block grow">
-          <h2 data-i18n="panel.ops"></h2>
-          <!-- 点一条记录展开它的参数与改动量：排查"模型哪一步改坏了"的入口 -->
-          <div id="op-detail" class="op-detail hidden"></div>
-          <ol id="ops" class="ops"></ol>
-        </div>
-      </aside>
-
-      <section class="viewport">
-        <canvas id="canvas" data-i18n-title="viewport.hint"></canvas>
-        <!-- 叠加层单独一层 2D 画布：three.js 画方块，标尺/坐标轴/文字画在这上面。
-             两层尺寸完全一致，共用同一份相机投影，所以线永远贴在方块上。 -->
-        <canvas id="overlay"></canvas>
-        <div id="empty" class="empty" data-i18n="viewport.empty"></div>
-      </section>
-
-      <aside class="panel chat">
-        <div class="chat-head">
-          <h2 data-i18n="chat.title"></h2>
-          <span class="spacer"></span>
-        </div>
-        <div id="notice" class="notice hidden"></div>
-        <!-- 崩溃恢复：草稿等着处理，两个按钮各对应主进程一个真实动作 -->
-        <div id="recovery" class="notice recovery hidden">
-          <b data-i18n="recovery.title"></b>
-          <span id="recovery-detail"></span>
-          <button type="button" id="btn-recover" class="mini" data-i18n="recovery.apply"></button>
-          <button type="button" id="btn-discard-recovery" class="mini" data-i18n="recovery.discard"></button>
-        </div>
-        <!-- 停在历史版本上时挡住发送：模型的第一笔改动会从历史分叉，把后面几步截断丢掉 -->
-        <div id="behind-tip" class="blocking hidden" data-i18n="chat.behindTip"></div>
-        <div id="blocking" class="blocking hidden"></div>
-        <ol id="messages" class="messages"></ol>
-        <form id="chat-form" class="chat-form">
-          <textarea id="chat-input" rows="3" data-i18n-placeholder="chat.placeholder"></textarea>
-          <div class="chat-actions">
-            <button type="submit" id="btn-send" data-i18n="chat.send"></button>
-            <button type="button" id="btn-stop" class="hidden" data-i18n="chat.stop"></button>
-            <span id="chat-usage" class="usage"></span>
-          </div>
-        </form>
-      </aside>
-    </main>
-
-    <footer class="timeline">
-      <input id="scrub" type="range" min="0" max="0" value="0" />
-      <span id="rev-label" class="rev"></span>
-    </footer>
-
-    <dialog id="settings-dialog" class="settings">
-      <div class="settings-form">
-        <h1 data-i18n="settings.title"></h1>
-
-        <div class="row wide">
-          <label data-i18n="settings.activeProvider"></label>
-          <select id="provider-select"></select>
-          <button type="button" id="btn-remove-provider" class="danger" data-i18n="settings.removeProvider"></button>
-        </div>
-
-        <div class="row wide">
-          <label data-i18n="settings.addProvider"></label>
-          <span id="preset-row" class="preset-row"></span>
-        </div>
-
-        <div class="row wide">
-          <label for="cfg-baseurl" data-i18n="settings.llm.baseURL"></label>
-          <input id="cfg-baseurl" type="text" spellcheck="false" />
-        </div>
-        <div class="row wide">
-          <label for="cfg-key" data-i18n="settings.llm.apiKey"></label>
-          <input id="cfg-key" type="password" spellcheck="false" autocomplete="off" />
-        </div>
-        <div class="row wide">
-          <label for="cfg-model" data-i18n="settings.llm.model"></label>
-          <input id="cfg-model" type="text" spellcheck="false" />
-        </div>
-
-        <p class="note" data-i18n="settings.llm.keyNote"></p>
-
-        <div class="row wide">
-          <label data-i18n="settings.budget"></label>
-          <input id="cfg-usd" type="number" min="0" step="0.5" placeholder="USD" />
-          <input id="cfg-turns" type="number" min="1" step="1" placeholder="turns" />
-          <label for="cfg-locale" data-i18n="settings.language"></label>
-          <select id="cfg-locale">
-            <option value="zh-CN">中文</option>
-            <option value="en-US">English</option>
-          </select>
-        </div>
-
-        <div class="caps">
-          <div class="row">
-            <button type="button" id="btn-test" data-i18n="settings.llm.test"></button>
-            <button type="button" id="btn-test-list" data-i18n="settings.llm.listOnly"></button>
-          </div>
-          <pre id="probe-log" class="probe-log"></pre>
-          <p class="note" data-i18n="settings.llm.capabilitySource"></p>
-        </div>
-
-        <div class="settings-actions">
-          <button type="button" id="btn-settings-cancel" data-i18n="settings.cancel"></button>
-          <button type="button" id="btn-settings-save" data-i18n="settings.apply"></button>
-        </div>
-      </div>
-    </dialog>
-
+    <!-- 界面整个由 React 渲染（见 renderer/main.tsx）。这里只剩一个挂载点。 -->
+    <div id="root"></div>
     <script src="main.js"></script>
   </body>
 </html>

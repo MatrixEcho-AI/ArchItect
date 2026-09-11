@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -50,7 +50,24 @@ const DEV_SINKS = [
   // 主进程拿它决定回落到软件光栅器，并把原话写进终端的诊断行——到不了用户眼前
   'error: ',
   'detail: ',
+  // 诊断开关（`--camera-test` 之类）把自查结论贴进提示条，好让抓图能读到。
+  // **它只在诊断跑里出现**，正常启动永远不会写这一行；同一批诊断行的中文本来
+  // 就写在主进程里（`[gui-smoke]` 那些 `lines.push`），性质一样。
+  // 判据是"这个出口只有开发者会看到"，不是"这句中文看起来重不重要"。
+  'banner.textContent =',
 ]
+
+/**
+ * **语言名不进 i18n 表**（endonym：每种语言用它自己的写法）。
+ *
+ * 语言选择器里那一项在哪个 locale 下都该写"中文"而不是 "Chinese"——用户找自己的
+ * 语言时，认的是自己语言的字形，翻过去反而找不到。所以这一类是**判据的例外**，
+ * 而不是"漏翻"；写成例外并说明理由，比往资源表里塞一个中英两边都一样的键更诚实。
+ *
+ * 只放语言名，不放别的：这个集合一旦开始装"看起来也说得过去"的短语，
+ * 这条测试就再也拦不住任何东西了。
+ */
+const ENDONYMS = new Set(['中文', 'English'])
 
 /** 往前看几行找出口：模板字符串是跨行的，`${}` 里的中文可能离出口好几行。 */
 const SINK_LOOKBACK = 8
@@ -63,6 +80,7 @@ function offendingLiterals(source: string): string[] {
   for (const match of code.matchAll(LITERAL)) {
     const literal = match[1] ?? match[2] ?? match[3] ?? ''
     if (!CJK.test(literal)) continue
+    if (ENDONYMS.has(literal.trim())) continue
     const line = code.slice(0, match.index).split('\n').length - 1
     const context = lines.slice(Math.max(0, line - SINK_LOOKBACK), line + 1).join('\n')
     if (DEV_SINKS.some((sink) => context.includes(sink))) continue
@@ -87,9 +105,28 @@ describe('桌面端：用户可见的文案必须走 i18n', () => {
     expect(offenders).toEqual([])
   })
 
-  it('**渲染进程里没有硬编码的用户可见中文**（静态文案全走 data-i18n）', () => {
-    const source = readFileSync(join(desktopRoot, 'src/renderer/main.ts'), 'utf8')
-    expect(offendingLiterals(source)).toEqual([])
+  it('**渲染进程里没有硬编码的用户可见中文**（文案一律走 `t()`）', () => {
+    // 旧版这条查的是 `data-i18n` 标记：结构在手写 HTML 里，文案靠标记在运行时填。
+    // 换成 React 之后结构化成了 JSX，文案直接是 `t('...')`——**判据反而更强了**，
+    // 因为 `t()` 的键是编译期校验的点分路径，写错键编译不过，而 `data-i18n` 写错
+    // 只会在界面上留下一个裸键。所以这里只保留"有没有硬编码中文"这一半，
+    // 扫描范围从单个 `main.ts` 扩到整个 renderer（含 components/）。
+    const files: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(join(desktopRoot, dir))) {
+        const rel = `${dir}/${entry}`
+        if (statSync(join(desktopRoot, rel)).isDirectory()) walk(rel)
+        else if (entry.endsWith('.ts') || entry.endsWith('.tsx')) files.push(rel)
+      }
+    }
+    walk('src/renderer')
+
+    const offenders: string[] = []
+    for (const file of files) {
+      const source = readFileSync(join(desktopRoot, file), 'utf8')
+      for (const literal of offendingLiterals(source)) offenders.push(`${file}: ${literal.slice(0, 90)}`)
+    }
+    expect(offenders).toEqual([])
   })
 
   it('关键提示在英文下是英文、在中文下是中文', () => {

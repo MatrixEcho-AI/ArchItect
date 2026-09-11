@@ -43,6 +43,17 @@ import {
 import type { CameraSpec, OverlayOptions, TextureAtlas } from '@architect/render/browser'
 import * as THREE from 'three'
 
+/**
+ * 视口清屏色。
+ *
+ * **必须与 `viewport-shell.ts` 的 `VIEWPORT_CLEAR` 是同一个数**，这里刻意再写一遍
+ * 而不是 import：那两个文件本来就互相引用（shell 用 `Viewport`），`Viewport` 要是
+ * 反过来 import shell 就成了循环，而循环在这里会踩 TDZ——模块求值到一半常量还没
+ * 初始化。一个数字换掉一条循环依赖，值当；`grep VIEWPORT_CLEAR` 能把两处一起找出来。
+ */
+const VIEWPORT_CLEAR = 0xf5f6f8
+
+
 export interface ScenePayload {
   revision: number
   positions: Float32Array
@@ -186,9 +197,9 @@ export class Viewport implements SceneViewport {
     if (ctx === null) throw new Error('拿不到 2D 上下文')
     this.overlayCtx = ctx
     this.renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: false })
-    this.renderer.setClearColor(0x1a1c22, 1)
+    this.renderer.setClearColor(VIEWPORT_CLEAR, 1)
     this.overlay = new OverlayCanvas(1, 1)
-    this.scene.background = new THREE.Color(0x1a1c22)
+    this.scene.background = new THREE.Color(VIEWPORT_CLEAR)
   }
 
   /** 尺寸跟着容器走（含设备像素比），返回 CSS 像素尺寸。 */

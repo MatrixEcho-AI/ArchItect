@@ -121,7 +121,10 @@ export const zhCN = {
     stop: '停止',
     clear: '清空',
     thinking: '思考中…',
-    thinkingLive: '思考中… 已经想了 {{count}} 字',
+    thinkingLatest: '思考中：{{text}}',
+    thinkingDone: '已思考 {{count}} 字',
+    showMore: '展开',
+    showLess: '收起',
     toolCall: '调用工具',
     toolResult: '结果',
     attached: '附带 {{count}} 张截图',
@@ -203,6 +206,12 @@ export const zhCN = {
     tokens: '{{in}} 入 / {{out}} 出',
     cached: '缓存命中 {{count}}（占输入 {{percent}}%）',
     noPrice: '未配置单价，只显示 token 数',
+    /** 顶栏那一行短读数。数字已经压过（`12k` / `1.2M`），所以这里只留单位字。 */
+    compactTokens: '{{in}} 入 / {{out}} 出',
+    compactTurns: '{{turns}} 轮',
+    compactShots: '{{shots}} 图',
+    /** 缓存**只给百分比**：绝对数在顶栏那个宽度里没有决策价值。 */
+    compactCache: '缓存 {{percent}}%',
   },
   dialog: {
 

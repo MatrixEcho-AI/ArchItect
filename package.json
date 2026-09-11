@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/mcai/tsconfig.json --noEmit && tsc -p packages/render/tsconfig.json --noEmit && tsc -p packages/tools/tsconfig.json --noEmit && tsc -p packages/interop/tsconfig.json --noEmit && tsc -p packages/agent/tsconfig.json --noEmit && tsc -p packages/cli/tsconfig.json --noEmit && tsc -p apps/desktop/tsconfig.json --noEmit",
+    "typecheck": "tsc -p packages/core/tsconfig.json --noEmit && tsc -p packages/mcai/tsconfig.json --noEmit && tsc -p packages/render/tsconfig.json --noEmit && tsc -p packages/tools/tsconfig.json --noEmit && tsc -p packages/interop/tsconfig.json --noEmit && tsc -p packages/agent/tsconfig.json --noEmit && tsc -p packages/i18n/tsconfig.json --noEmit && tsc -p packages/cli/tsconfig.json --noEmit && tsc -p apps/desktop/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "architect": "tsx packages/cli/src/index.ts",
@@ -16,9 +16,9 @@
     "bench": "tsx packages/cli/src/index.ts bench",
     "desktop": "pnpm --filter @architect/desktop start",
     "desktop:smoke": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --smoke",
-    "desktop:shot": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --capture /tmp/architect-gui.png",
+    "desktop:shot": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --capture ../../.cache/architect-gui.png",
     "providers": "tsx packages/cli/src/index.ts providers",
-    "desktop:settings-shot": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --open-settings --capture /tmp/architect-settings.png",
+    "desktop:settings-shot": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --open-settings --capture ../../.cache/architect-settings.png",
     "desktop:gui-smoke": "pnpm --filter @architect/desktop build && cd apps/desktop && npx --no-install electron . --demo --gui-smoke",
     "docs:gen": "tsx scripts/gen-docs.ts",
     "docs:check": "tsx scripts/gen-docs.ts --check",

@@ -99,6 +99,7 @@ examples/    示例工程
 | `pnpm test` | 全部测试（含全量枚举、文档一致性、**真实 HTTP 的端到端**） |
 | `pnpm typecheck` | 八个项目一起过类型 |
 | `pnpm docs:gen` | 重新生成工具参考（过期时 `pnpm test` 会失败）。脚本名带 `:gen` 是有原因的：单独一个 `docs` 会被 pnpm 的内建命令抢走，变成打开包的文档页 |
+| `ARCHITECT_UPDATE_GOLDEN=1 pnpm test packages/render/test/golden.test.ts` | 重新签软件光栅器的 golden 基线（改过渲染之后；**签之前先看一眼新图**） |
 | `pnpm bake:gen` / `pnpm bake:check` | 从 `minecraft-assets` 烘出渲染元数据（方块状态表、模型表、方块→纹理反查表、纹理平均色 → `packages/render/data/<版本>/*.json`）；`--check` 在过期时失败 |
 | `pnpm demo:v0` | 不需要 API key 的完整闭环演示 |
 | `pnpm providers` | 探测模型端点：列模型、选模型、实测能力 |

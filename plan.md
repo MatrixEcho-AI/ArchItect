@@ -1458,7 +1458,8 @@ ArchItect/
 │   │   └── src/{reader,writer,manifest,migrate,wal}.ts
 │   ├── render/                     # CameraSpec、网格化、纹理来源、软件光栅器
 │   │   ├── src/{camera,atlas,texturepack,assets,baked,bake,mesher,isometric,pick}.ts
-│   │   └── data/<版本>/{render,blockmap}.json   # bake:gen 烘出来的元数据（可复现）
+│   │   ├── data/<版本>/{render,blockmap}.json   # bake:gen 烘出来的元数据（可复现）
+│   │   └── test/golden/*.png                    # 软件光栅器的逐字节基线（4 张）
 │   ├── tools/                      # 工具定义 + JSON Schema + 执行器 + 校验
 │   │   └── src/{registry,executors/*,schema/*}.ts
 │   ├── agent/                      # Agent 循环、上下文管理、prompts、DesignNotes、Provider 配置与发现
@@ -1601,7 +1602,7 @@ secrets.bin
 | **协议级端到端** | 起一个按 DeepSeek/OpenAI 兼容协议回话的假端点，用真的 `architect build` 跑完整条链路，然后断言**服务器真正收到的字节**：鉴权头、`stream:false`、工具 schema、图像 part、思维链回传，以及 `max_tokens` 被 400 顶回后自动改用 `max_completion_tokens` |
 | **示例工程夹具** | `examples/forest-hut.mcai` 每次跑测试都真的打开一次，核对方块数、对话条数、截图字节。单元测试是拆开验的，它把链路串起来 |
 | 格式测试 | `.mcai` 往返读写 hash 相等；确定性打包；版本迁移（构造旧版 fixture 打开）；WAL 崩溃恢复（杀进程模拟） |
-| 渲染测试 | 软件等轴测后端 golden PNG 像素比对；WebGL 后端只做"非空白 + 尺寸正确"的弱断言 |
+| 渲染测试 | 软件等轴测后端 **golden PNG 逐字节比对**（`packages/render/test/golden/`，4 张：纯色等轴测+叠加层 / 正视 / 俯视 / 纹理路径逐像素采样）；WebGL 后端只做“非空白 + 尺寸正确”的弱断言。基线只吃**确定性输入**（哈希配色或烘好的平均色），所以不依赖 `minecraft-assets`、CI 上逐字节一致；重新签：`ARCHITECT_UPDATE_GOLDEN=1 pnpm test packages/render/test/golden.test.ts` |
 | 工具测试 | 每个工具的正常/越界/非法方块/空区域/超大区域用例 |
 | Agent 测试 | **录制回放（VCR）**：把真实 LLM 交互录成 fixture，CI 不联网重跑，断言工具调用序列与最终 worldHash |
 | E2E | Playwright 驱动 Electron：新建项目 → 输入需求 → mock LLM → 截图 → 保存 → 重开验证 |
@@ -1660,7 +1661,7 @@ secrets.bin
 | **M0 脚手架** | pnpm 工作区、TS strict、eslint/prettier、vitest、electron-vite 骨架 | `pnpm test` 与 `pnpm dev` 都能跑通空壳 |
 | **M1 体素内核** | palette、稀疏 chunk、BuildVolume、EditOp、几何算法（box/line/plane/extrude/symmetrize）、UndoStack | 单元+属性测试全绿；能脚本化搭出一座房子 |
 | **M2 .mcai 格式** | zip 读写、manifest、edits.jsonl、replay、checkpoint、WAL、迁移框架、CLI `architect info/replay` | 往返 hash 相等；replay 任意 rev 与增量结果一致；杀进程后能恢复 |
-| **M3 渲染管线** | CameraSpec、预设机位、叠加层（标尺/坐标轴/高亮）、隐藏窗口截图、内容寻址缓存、软件等轴测后端、CLI `architect shoot` | CLI 能出六视图 contact sheet；重复请求命中缓存；iso 后端 golden 测试通过 |
+| **M3 渲染管线** | CameraSpec、预设机位、叠加层（标尺/坐标轴/高亮）、隐藏窗口截图、内容寻址缓存、软件等轴测后端、CLI `architect shoot` | CLI 能出六视图 contact sheet；重复请求命中缓存；**iso 后端 golden 测试通过**（4 张签名图，改渲染就重新签，见 §14） |
 | **M4 工具层 + Agent 循环** | 全部 v0 工具的 JSON Schema 与执行器、工具返回规范、Provider 适配、上下文管理、CLI `architect build "需求"` | **给定文字需求，CLI 能自主产出 `.mcai`，其中有一座可辨认的建筑**；黄金任务 1、2 通过 |
 
 > **M4 的验收分两半，它们需要的东西不一样：**
@@ -1813,6 +1814,7 @@ secrets.bin
 | D-69 | **纹理默认内置，来源可换成用户自己的** | `TexturePack` 抽象四种来源（内置资源包 / 用户资源包或客户端 jar / `.minecraft` 自动探测 / 烘好的平均色），桌面端默认注入内置资源包；CLI 用 `--textures` 换 | 一开始按“不内置素材”做的（省体积、避开素材授权），结果是**这台机器上没装 Minecraft 就直接没有纹理**——用户明确不接受：装完就该看到真实纹理。于是默认改回内置，把“换自己的包”降级成一个选项。代价是包里多背 66.7 MB，这是**有意买下来的**取舍 |
 | D-70 | **往后退逐条反向，不清空重建** | `ReplaySession.seek(rev)` 在 `target < 当前` 时循环 `store.applyPatch(log.at(cur-1).patch.inverted())` 并让游标减一；向前仍然是逐条 `applyPatch` | 早先往后退是 `store.clear()` + 从头重放，它默认了“rev 0 = 空世界”。但导入的工程 rev 0 就是导进来的内容（D-58），于是用户撤销到最开始会把整栋建筑删掉——那是数据丢失，不是撤销。这个 bug 是写“导入后继续编辑”的闭环测试时撞出来的 |
 | D-71 | **设计笔记写在 manifest 里，而且必须替换式** | `update_notes`（`ctx.notes` 句柄）→ `AgentSession.designNotes` → `buildSystem()` 的 `[DESIGN NOTES]` 段；保存时进 `manifest.designNotes`，打开时交回新会话。**写入只影响下一轮**（本轮的系统提示已经发出去了，改它就是把前缀缓存打掉） | 笔记要活过 Regime B 的裁剪，所以它必须进**稳定前缀**而不是某条会被丢掉的工具结果；而替换式（而不是追加）是因为它进的是**每个请求**的前缀——追加会越滚越长，等于每轮多付一遍钱。上限 1200 字符、超了直接拒绝并报出当前长度，让模型自己删 |
+| D-72 | **golden 基线只签确定性输入** | `packages/render/test/golden/` 四张基线全部用 `plain` 哈希配色或**烘好的平均色**资源包渲染；纹理路径也走 `bakedColorTexturePack`，绝不引 `minecraft-assets` | 签名图的价值全在“人看过一眼、知道它为什么长这样”。如果输入依赖某个 npm 包的资源版本，那它一变基线就要重签，而“为什么这次签变了”会变成一件说不清的事——还不如让纹理那部分交给“逐位素采样是否真的在采样”这类性质断言去管 |
 
 ### 17.2 待定
 
@@ -1836,8 +1838,9 @@ secrets.bin
 从一句注释变成一条**打包期规则**，将来要开第二个版本时会静默缺文件——
 要做就得连“版本白名单”一起设计，不能只裁文件。
 
-**软件光栅器的 golden 基线**：渲染测试目前只对软件后端做"非空白 + 尺寸正确"的弱断言，
-没有签名图基线。要加就得接受"改一点渲染就得重新签"，收益还没算清。
+**软件光栅器的 golden 基线**：✅ 已落地（4 张，见 §14）。接受"改渲染就要重新签"这个代价，
+因为换来的是"砖缝糊了 / AO 丢了 / z-buffer 失效"这类**看得见的 diff**——
+以前那些弱断言（非空白 + 尺寸对）对这三种退化一律放行。
 
 ---
 

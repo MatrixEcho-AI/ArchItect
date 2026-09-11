@@ -1,5 +1,6 @@
 import { t } from '@architect/i18n'
 
+import { scrubSecrets } from '../redact.js'
 import { LlmError } from '../types.js'
 import type { LlmDelta, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from '../types.js'
 
@@ -500,7 +501,10 @@ function isUsageOptionRejection(error: unknown): boolean {
 }
 
 export function classifyHttpError(status: number, body: string): LlmError {
-  const detail = body.slice(0, 400)
+  // 正文来自服务端，未必可信。**先脱敏再进消息**：这条消息会进界面、进日志，
+  // 还会随 `retry` 事件进 `.mcai` 的对话档案，而 `.mcai` 是要分享的。
+  // 会回显整个请求（含 `Authorization`）的中转站是现实存在的。
+  const detail = scrubSecrets(body.slice(0, 400))
   if (status === 401 || status === 403) {
     return new LlmError(t('agent.openai.authFailed', { status, detail }), 'AUTH', false)
   }

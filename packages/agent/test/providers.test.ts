@@ -23,6 +23,7 @@ import {
   redactSecret,
   resolveApiKey,
   safeKeyRef,
+  scrubSecrets,
   serializeSettings,
   settingsFromEnv,
   upsertProvider,
@@ -283,6 +284,19 @@ describe('配置校验', () => {
   it('redactSecret 不泄露任何前缀', () => {
     expect(redactSecret('sk-1234567890')).toBe('***')
     expect(redactSecret(undefined)).toBe('(未设置)')
+  })
+
+  it('scrubSecrets 从一整段文本里抹掉密钥（错误正文会进 .mcai 档案）', () => {
+    // 把整个请求（含 `Authorization`）回显在 4xx 正文里的中转站是现实存在的，
+    // 而 `classifyHttpError` 会把正文截 400 字塞进错误消息——那条消息会进界面、
+    // 进日志，还会随 retry 事件进 `.mcai` 的对话档案，而 `.mcai` 是要分享的。
+    const echo = 'Invalid Authorization: Bearer sk-abc123def456ghi789 eyJhbGciOiJIUzI1NiJ9'
+    const scrubbed = scrubSecrets(echo)
+    expect(scrubbed, '密钥还留在文本里').not.toMatch(/sk-[A-Za-z0-9]{8,}/)
+    expect(scrubbed, 'JWT 还留在文本里').not.toMatch(/eyJ[A-Za-z0-9]/)
+    expect(scrubbed).toContain('Bearer ***')
+    // 无关文本不该被动：过度清洗会让错误消息没法排查
+    expect(scrubSecrets('model not found: mock-v4.1-flash')).toBe('model not found: mock-v4.1-flash')
   })
 })
 

@@ -214,8 +214,6 @@ export const enUS = {
     cached: '{{count}} cached ({{percent}}% of input)',
     noPrice: 'No unit prices configured — token counts only',
     compactTokens: '{{in}} in / {{out}} out',
-    compactTurns: '{{turns}} turns',
-    compactShots: '{{shots}} shots',
     compactCache: '{{percent}}% cached',
   },
   dialog: {

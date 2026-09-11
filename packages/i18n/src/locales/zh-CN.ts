@@ -206,10 +206,13 @@ export const zhCN = {
     tokens: '{{in}} 入 / {{out}} 出',
     cached: '缓存命中 {{count}}（占输入 {{percent}}%）',
     noPrice: '未配置单价，只显示 token 数',
-    /** 顶栏那一行短读数。数字已经压过（`12k` / `1.2M`），所以这里只留单位字。 */
+    /**
+     * 顶栏那一行短读数。数字已经压过（`12k` / `1.2M`），所以这里只留单位字。
+     *
+     * 刻意**没有**轮数与截图数：它们在那一行里最长、又没有决策价值（见
+     * `cost.ts` 的 `usageText`）。数据仍在 `UsageTotals` 里，只是不显示在这儿。
+     */
     compactTokens: '{{in}} 入 / {{out}} 出',
-    compactTurns: '{{turns}} 轮',
-    compactShots: '{{shots}} 图',
     /** 缓存**只给百分比**：绝对数在顶栏那个宽度里没有决策价值。 */
     compactCache: '缓存 {{percent}}%',
   },

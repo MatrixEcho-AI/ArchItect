@@ -64,8 +64,12 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
       <div className="chat-head">
         <h2 style={{ margin: 0, fontSize: 12, letterSpacing: 0.4 }}>{t('chat.title')}</h2>
         {/* 用量读数**挪到标题右边**：原来它长在输入框下面、占满一整行，而这一行是常驻的。
-            数字已经压过（`12k` / `1.2M`），缓存只给百分比——见 `cost.ts` 的 `usageText`。 */}
-        <span id="chat-usage" className="chat-usage">
+            数字已经压过（`12k` / `1.2M`），缓存只给百分比——见 `cost.ts` 的 `usageText`。
+
+            它不短：跑久了一行放不下（实测用户那串只比可用宽度多 9px），末尾会被省略号
+            收掉，所以带一个原生 `title`——悬停能看到省略的那部分。反过来，标题那头是用
+            `flex: none` 钉住的（见 `styles.css` 的 `.chat-head h2`）：要挤就挤这行。 */}
+        <span id="chat-usage" className="chat-usage" title={usageText(chat)}>
           {usageText(chat)}
         </span>
       </div>

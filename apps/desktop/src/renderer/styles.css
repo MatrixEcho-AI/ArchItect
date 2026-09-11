@@ -549,6 +549,7 @@ body,
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  min-width: 0;
 }
 
 .chat-head {
@@ -557,6 +558,21 @@ body,
   gap: 6px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--ant-color-border-secondary);
+}
+
+/*
+ * 标题**不许被压**。
+ *
+ * 这一行里 `对话` 和右边那串读数抢宽度，而读数更长。flex 默认让两边一起收缩，
+ * 于是标题被压到两个字的宽度以下，`对` / `话` 各占一行——截图里那个竖排的怪东西
+ * 就是这么来的（`h2` 的 `margin: 0` 解决不了、也看不出来）。
+ *
+ * `flex: none` + `nowrap` 是这里的正解：标题是这一行里唯一**没有替代品**的内容，
+ * 要挤就该挤读数（它的完整内容有 `title` 可以悬停看）。
+ */
+.chat-head h2 {
+  flex: none;
+  white-space: nowrap;
 }
 
 .chat-form {
@@ -572,14 +588,25 @@ body,
   margin-top: 6px;
 }
 
-/* 标题行右边的那一小串读数（token / 轮数 / 截图 / 缓存%）。
-   它**必须短**：`usageText` 已经把数字压成 k/M、缓存只留百分比（见 cost.ts）。
-   `tabular-nums` 是为了数字变化时不左右抖动。 */
+/*
+ * 标题行右边的那一小串读数（token / 轮数 / 截图 / 缓存%）。
+ *
+ * 它**必须短**：`usageText` 已经把数字压成 k/M、缓存只留百分比（见 cost.ts）。
+ * `tabular-nums` 是为了数字变化时不左右抖动。
+ *
+ * 但它再短也短不过这一行剩下的宽度，所以它得**能缩、缩了会自己加省略号**：
+ * `flex: 1 1 auto` + `min-width: 0` 是一对，缺了 `min-width: 0` 这个 flex 项的
+ * 下限就是它内容的宽度，于是它既不缩、也不触发省略号，而是画到栏外去。
+ * 实测长读数（用户那串 627.8k…）下它只比可用宽度多 9px，省略号正好接得住；
+ * 真正被压坏的是左边的标题（见上面的 `.chat-head h2`），所以这里让出宽度是对的。
+ */
 .chat-usage {
-  margin-left: auto;
+  flex: 1 1 auto;
+  min-width: 0;
   color: var(--ant-color-text-secondary);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

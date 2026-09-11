@@ -726,6 +726,31 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     const cost = document.querySelector('#cost');
     check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
 
+    /**
+     * **对话标题必须是一行**（用户报的："你看看这个顶部你不觉得丑吗"）。
+     *
+     * 判据是量出来的高度，不是"看起来对不对"：那一行里标题和右边那串用量读数抢宽度，
+     * 读数更长，而标题原来没有 flex: none——于是它被压到比"对话"两个字还窄，
+     * 两个字各占一行，标题变成一竖条。这种布局事故截图上很显眼，但它既不会报错，
+     * 也不会让任何数据变错，所以只有量高度才拦得住。
+     *
+     * 阈值来自真机实测（960 与 1360 两种窗宽、用户那串长读数）：
+     * 一行 h=19（antd 的行高），两行 h=39。取 28 是两者中间。
+     *
+     * ⚠️ 别改用 getClientRects().length 判行数：块级元素换行之后**仍然只返回 1 个
+     * rect**（实测两行时也是 1），那样写会得到一个永远为真的断言。
+     * （这段脚本整个是 TS 模板字符串：注释里不能出现反引号。）
+     */
+    const chatTitle = document.querySelector('.chat-head h2');
+    const titleHeight = chatTitle === null ? 0 : chatTitle.getBoundingClientRect().height;
+    check(
+      'chat-head-one-line',
+      chatTitle !== null && titleHeight > 0 && titleHeight < 28,
+      chatTitle === null
+        ? '没有 .chat-head h2'
+        : '高 ' + Math.round(titleHeight) + 'px / 文字 "' + chatTitle.textContent + '"',
+    );
+
     // **设置入口在右上角、而且是齿轮**（用户报过一次"设置按钮没了，配不了模型 API"）。
     // 四条一起断言：存在、没带 hidden、antd 图标真的渲染出了 svg、以及它贴着顶栏右缘。
     // 最后一条才是"右上角"——只看可见性的话，它缩在左边那堆按钮中间也算过。

@@ -511,27 +511,6 @@ let camPushTimer: number | undefined
  */
 const CAMERA_PROBE_DISTANCE = 64
 
-/**
- * 会话相机 → 一行给人看的文字。
- *
- * 和 `shotCameraLabel` 的口径一致（那一个进的是对话档案，这一个进的是面板），
- * 所以用户在这一行看到的标签，就是事后在档案里能对上的那一个。
- */
-function describeModelCamera(camera: StudioState['camera']): string {
-  if (camera === undefined) return t('panel.info.cameraDefault')
-  const parts: string[] = []
-  if (camera.eye !== undefined && camera.lookAt !== undefined) {
-    parts.push(`eye(${camera.eye.map((v) => Math.round(v)).join(',')})→(${camera.lookAt.map((v) => Math.round(v)).join(',')})`)
-  } else {
-    if (camera.azimuth !== undefined) parts.push(`az${Math.round(camera.azimuth)}`)
-    if (camera.elevation !== undefined) parts.push(`el${Math.round(camera.elevation)}`)
-    if (camera.lookAt !== undefined) parts.push(`→(${camera.lookAt.map((v) => Math.round(v)).join(',')})`)
-  }
-  if (camera.roll !== undefined && camera.roll !== 0) parts.push(`rl${Math.round(camera.roll)}`)
-  if (camera.scale !== undefined) parts.push(`z${camera.scale}`)
-  return parts.length > 0 ? parts.join(' ') : t('panel.info.cameraDefault')
-}
-
 /** 预设机位的角度由主进程给（`VIEW_PRESETS` 是唯一真相）。 */
 const presetAngles = new Map<string, { azimuth: number; elevation: number }>()
 /** 当前场景对应的 revision，用来判断要不要重新拉几何。 */
@@ -1274,24 +1253,18 @@ function renderPanel(next: StudioState): void {
   if (next.notice !== undefined) showNotice(next.notice)
   renderRecovery(next.recovery)
 
+  // **只留"这是什么工程、走到第几步、有多少方块"。** 调色板条目数、Minecraft 版本、
+  // 包围盒、模型机位、纹理来源五行按要求**移除**了：它们是诊断信息，不是设计时要看的东西，
+  // 常驻在左栏只是噪音。数据仍在 `StudioState` 上（`paletteSize` / `minecraftVersion` /
+  // `bounds` / `camera` / `texture`），要恢复就是往这个数组里加回一行。
   const rows: Array<[string, string]> = [
     [t('panel.info.name'), next.name],
     [t('panel.info.revision'), `${next.revision} / ${next.totalOps}`],
     [t('panel.info.blocks'), String(next.blocks)],
-    [t('panel.info.palette'), String(next.paletteSize)],
-    [t('panel.info.minecraft'), next.minecraftVersion],
   ]
-  if (next.bounds !== undefined) {
-    const [a, b] = [next.bounds.min, next.bounds.max]
-    rows.push([t('panel.info.bounds'), `${a.join(',')} … ${b.join(',')}`])
-  }
   if (next.projectPath !== undefined) {
     rows.push([t('panel.info.file'), next.projectPath.split('/').pop() ?? ''])
   }
-  // 模型当前会从哪个机位截图。**只读**：自动把用户的视角改到模型那边会很难解释
-  // （"我只是想让模型看看，结果我自己的画面被拽走了"）。
-  rows.push([t('panel.info.camera'), describeModelCamera(next.camera)])
-  rows.push([t('panel.info.textures'), describeTextureSource(next.texture)])
   el('project-info').innerHTML = rows
     .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value)}</dd>`)
     .join('')
@@ -1368,31 +1341,6 @@ function renderPanel(next: StudioState): void {
  * 模板文案本身还在（`docs/prompt-library.md` 与 i18n 的 `chat.templates.*`），
  * 要恢复就把 markup 加回 index.html，再把这里那个函数接回来。
  */
-
-/**
- * 纹理来源说人话。
- *
- * 为什么要在界面上写这一行：没有资源包时渲染**是对的但很平**（每格一块纯色），
- * 用户会以为"渲染坏了"。把来源说出来，"为什么我的石头没有纹理"就不用猜了。
- *
- * `kind` 是协议字段，所以这里用一张固定映射表而不是拼字符串——拼出来的键
- * 绕过了类型检查，写错了只会在运行时看到一个裸键。
- */
-const TEXTURE_KINDS: Record<string, Parameters<typeof t>[0]> = {
-  minecraft: 'panel.textureKind.minecraft',
-  pack: 'panel.textureKind.pack',
-  baked: 'panel.textureKind.baked',
-  none: 'panel.textureKind.none',
-}
-
-function describeTextureSource(info: StudioState['texture']): string {
-  const key = TEXTURE_KINDS[info.kind] ?? 'panel.textureKind.baked'
-  const base = t(key)
-  const detail = info.detail.length > 0 ? ` · ${info.detail.split(/[/\\]/).pop() ?? info.detail}` : ''
-  if (info.fellBackFrom === undefined) return base + detail
-  const from = TEXTURE_KINDS[info.fellBackFrom] ?? 'panel.textureKind.baked'
-  return `${base}${detail}（${t('panel.textureFellBack', { from: t(from) })}）`
-}
 
 function renderRecovery(recovery: StudioState['recovery']): void {
   const banner = el('recovery')

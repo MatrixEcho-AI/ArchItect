@@ -187,7 +187,12 @@ body = zlib( for each column:
 
 ```jsonc
 [{ "id":"s1", "title":"设计一座海边灯塔", "createdAt":"…",
-   "model":"deepseek-v4.1-flash", "providerId":"DeepSeek" }]
+   "model":"deepseek-v4.1-flash", "providerId":"DeepSeek",
+   // 这一场会话的用量计数。**存下来**是因为打开工程时界面要把"几轮 / 几次工具 /
+   // 几张截图"原样显示出来，而按消息数反推是错的（assistant 消息数 ≠ 轮数：
+   // 一轮里可能既有正文又有多次工具调用）。老工程没有这一项，读方按"估一个下界"处理。
+   "totals": { "in":1970000, "out":61721, "cachedIn":1931000,
+               "turns":13, "toolCalls":18, "screenshots":3 } }]
 ```
 
 `chat/messages.jsonl`，一行一条：

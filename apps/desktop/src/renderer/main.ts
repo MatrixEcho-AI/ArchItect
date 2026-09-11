@@ -1,6 +1,7 @@
 import { initI18n, onLocaleChange, setLocale, t } from '@architect/i18n'
 import { eyeFromOrientation, orientationFromEye } from '@architect/render/browser'
 
+import { cacheShare } from './format.js'
 import { SoftwareViewport, Viewport } from './viewport.js'
 import type { FrameSink, SceneViewport, SoftwareFrame } from './viewport.js'
 import type { MessageKey } from '@architect/i18n'
@@ -1455,17 +1456,28 @@ function renderChat(next: ChatView): void {
   // 整列重建：消息是几十条量级，diff 不值得（也更不容易出错）
   messagesEl.replaceChildren(...next.messages.map(renderMessage))
 
+  // 用量与花费。缓存命中那一项**只在 provider 报了的时候才显示**（见 format.ts）：
+  // 98% 命中是这个 harness 成本结构里最重要的一个数字（§9.2 Regime A 就是为它选的），
+  // 藏在 token 数里等于没显示
+  const cache = cacheShare(next.usage)
   const parts = [
     t('cost.tokens', { in: next.usage.in, out: next.usage.out }),
     `${next.usage.turns} turns · ${next.usage.toolCalls} tools · ${next.usage.screenshots} shots`,
   ]
+  if (cache !== undefined) {
+    parts.push(t('cost.cached', { count: cache.count, percent: cache.percent }))
+  }
   usageEl.textContent = parts.join('   ')
-  costEl.textContent =
+  const usd =
     next.costUsd !== undefined
       ? t('cost.usd', { amount: next.costUsd.toFixed(4) })
       : next.usage.in > 0
         ? t('cost.noPrice')
         : ''
+  costEl.textContent =
+    cache === undefined || usd.length === 0
+      ? usd
+      : `${usd} · ${t('cost.cachedShare', { percent: cache.percent })}`
   if (next.running) setStatus(t('chat.thinking'))
   else if (next.budgetStop !== undefined) setStatus(next.budgetStop)
   else if (next.stopReason !== undefined) setStatus(t('chat.turnDone', { reason: next.stopReason }))

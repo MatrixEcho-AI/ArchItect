@@ -211,6 +211,7 @@ export const enUS = {
     AUTH: 'Authentication failed — check the API key',
   },
   cost: {
+    cachedShare: '{{percent}}% cached',
     usd: '${{amount}}',
     tokens: '{{in}} in / {{out}} out',
     cached: '{{count}} cached ({{percent}}% of input)',

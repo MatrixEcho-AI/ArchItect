@@ -318,3 +318,87 @@ describe('.mcai 真的存下了对话记录与截图（用户要求的"含对话
     expect(project.snapshot.columns.length).toBeGreaterThan(0)
   })
 })
+
+describe('seed：接着一份已有档案继续录', () => {
+  it('**消息与截图都接上，且新消息不会撞 id**', () => {
+    const first = new TranscriptRecorder({ title: '第一段', now: () => '2026-01-01T00:00:00.000Z' })
+    first.add('user', '造一座塔')
+    first.onEvent({ type: 'assistant', turn: 1, text: '先量一下' })
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4])
+    first.onEvent({ type: 'tool_call', turn: 1, id: 'c1', name: 'shoot', args: {} })
+    first.onEvent({
+      type: 'tool_result',
+      turn: 1,
+      id: 'c1',
+      name: 'shoot',
+      result: { ok: true, summary: '一张图', image: { png, width: 4, height: 4, camera: 'iso_ne', revision: 2 } },
+    })
+    const before = first.recording
+    const beforeCount = before.transcript.messages.length
+    expect(before.captures.refs.length).toBe(1)
+
+    const second = new TranscriptRecorder({ title: '第二段', now: () => '2026-01-02T00:00:00.000Z' })
+    second.seed(before.transcript, before.captures)
+    const added = second.add('user', '再加一层')
+    expect(added.id).toBeGreaterThan(Math.max(...before.transcript.messages.map((m) => m.id)))
+
+    const after = second.recording
+    expect(after.transcript.messages).toHaveLength(beforeCount + 1)
+    expect(after.captures.refs.length).toBe(1)
+    expect(after.captures.files.get(after.captures.refs[0]!.id)).toEqual(png)
+    // 会话信息也接上了（不是"未命名会话"）
+    expect(after.transcript.sessions[0]!.title).toBe('第一段')
+  })
+
+  it('截图文件缺失时如实跳过（不塞一张空图）', () => {
+    const recorder = new TranscriptRecorder()
+    recorder.seed(
+      { sessions: [], messages: [] },
+      {
+        refs: [
+          { id: 'ghost', revision: 1, camera: 'iso_ne', width: 4, height: 4, bytes: 4, sha256: 'x', file: 'captures/ghost.png' },
+        ],
+        files: new Map(),
+      },
+    )
+    expect(recorder.captureCount).toBe(0)
+  })
+})
+
+describe('档案自带的用量计数（打开工程时界面不能靠猜）', () => {
+  it('**轮数 / 工具次数 / 截图数都原样存下来**', () => {
+    const recorder = new TranscriptRecorder({ title: '灯塔', now: () => '2026-01-01T00:00:00.000Z' })
+    // 两轮：第一轮一次工具调用 + 一张截图，第二轮一次工具调用
+    recorder.onEvent({ type: 'turn', turn: 1 })
+    recorder.onEvent({ type: 'assistant', turn: 1, text: '先看看' })
+    recorder.onEvent({ type: 'tool_call', turn: 1, id: 'c1', name: 'shoot', args: {} })
+    recorder.onEvent({ type: 'images', turn: 1, count: 1, bytes: 100 })
+    recorder.onEvent({
+      type: 'tool_result',
+      turn: 1,
+      id: 'c1',
+      name: 'shoot',
+      result: { ok: true, summary: '一张图' },
+    })
+    recorder.onEvent({ type: 'turn', turn: 2 })
+    recorder.onEvent({ type: 'tool_call', turn: 2, id: 'c2', name: 'measure', args: {} })
+    recorder.attachUsage({ in: 1000, out: 20, cachedIn: 900 }, 'deepseek-flash')
+
+    const totals = recorder.recording.transcript.sessions[0]!.totals!
+    expect(totals).toEqual({ in: 1000, out: 20, cachedIn: 900, turns: 2, toolCalls: 2, screenshots: 1 })
+
+    // seed 之后计数接着走（否则"打开旧工程 → 再跑一轮"会把轮数抹成 1）
+    const second = new TranscriptRecorder()
+    second.seed(recorder.recording.transcript, recorder.recording.captures)
+    second.onEvent({ type: 'turn', turn: 3 })
+    expect(second.recording.transcript.sessions[0]!.totals!.turns).toBe(3)
+    expect(second.recording.transcript.sessions[0]!.totals!.in).toBe(1000)
+  })
+
+  it('没有用量时计数仍然在（in/out 为 0）', () => {
+    const recorder = new TranscriptRecorder()
+    recorder.onEvent({ type: 'turn', turn: 1 })
+    const totals = recorder.recording.transcript.sessions[0]!.totals!
+    expect(totals).toMatchObject({ in: 0, out: 0, turns: 1, toolCalls: 0, screenshots: 0 })
+  })
+})

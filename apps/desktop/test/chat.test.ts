@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { ScriptedProvider, scriptFromCalls } from '@architect/agent'
 import type { AgentEvent, ProviderConfig, ProviderSettings, ScriptedStep } from '@architect/agent'
@@ -597,5 +598,37 @@ describe('桌面端的花费上限必须真的刹车（不能只记账）', () =
     )
     expect(state.stopReason).toBe('budget')
     expect(state.error).toContain('花费上限')
+  })
+})
+
+describe('打开工程：把存下来的对话接回界面', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+  const examplePath = join(root, 'examples', 'forest-hut.mcai')
+
+  it('**打开示例工程：消息、截图一起回来**（对话记录是 .mcai 的一半，存了就要看得到）', async () => {
+    const studio = new StudioService({ plain: true })
+    await studio.open(examplePath)
+    const view = studio.chatView()
+
+    expect(view.messages.length).toBeGreaterThan(0)
+    // 带截图的那条：id 能反查到字节（`captures/` 真的接回来了）
+    const withImage = view.messages.find((message) => message.imageId !== undefined)
+    expect(withImage).toBeDefined()
+    expect(studio.chatImage(withImage!.imageId!)?.length).toBeGreaterThan(0)
+    // 工具参数也回来了（挂在 assistant 的 toolCalls 上，要按 toolCallId 找回来）
+    expect(view.messages.some((message) => message.args !== undefined)).toBe(true)
+    // 用量形状：数字都在（示例是脚本化跑出来的，绝对值不可能是负的）
+    expect(view.usage.in).toBeGreaterThanOrEqual(0)
+    expect(view.usage.turns).toBeGreaterThanOrEqual(0)
+  })
+
+  it('**打开之后接着录，档案不会被抹掉**（否则"打开→再问一轮→保存"会丢掉历史）', async () => {
+    const studio = new StudioService({ plain: true })
+    await studio.open(examplePath)
+    const view = studio.chatView()
+    // 录制器被 seed 成了同一份档案：保存时两段都写进去
+    const recording = studio.chat.recording()
+    expect(recording.transcript.messages).toHaveLength(view.messages.length)
+    expect(recording.captures.refs.length).toBeGreaterThan(0)
   })
 })

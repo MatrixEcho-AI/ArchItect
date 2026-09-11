@@ -597,6 +597,8 @@ export class StudioService {
     target.setRevision(project.manifest.revision)
     this.projectPath = path
     this.projectName = project.manifest.name
+    // 对话记录是工程文件的一半：打开时把它接回界面（消息、截图、用量）
+    this.chat.load(project.chat, project.captures)
     return this.state()
   }
 

@@ -61,6 +61,23 @@ export interface ChatMessageRecord {
   note?: 'gate' | 'retry' | 'budget' | 'truncated' | 'context'
 }
 
+/**
+ * 这一场会话的用量计数。
+ *
+ * 为什么要存：打开工程时界面要把"几轮、几次工具、几张截图"原样显示出来。
+ * 不存的话只能靠数消息反推——而 assistant 消息数 **不等于** 轮数
+ * （一轮里可能既有正文又有多次工具调用），反推出来的数字一定是错的
+ * （实测：13 轮的会话被显示成 "1 turns"）。
+ */
+export interface ChatSessionTotals {
+  in: number
+  out: number
+  cachedIn?: number
+  turns: number
+  toolCalls: number
+  screenshots: number
+}
+
 export interface ChatSessionRecord {
   id: string
   title: string
@@ -69,6 +86,8 @@ export interface ChatSessionRecord {
   model?: string
   /** 模型的配置实例名。**只存名字，不存任何密钥引用**（D-13）。 */
   providerId?: string
+  /** 用量计数（老工程没有这一项，界面会退回"按消息数估"并如实标注）。 */
+  totals?: ChatSessionTotals
 }
 
 export interface ChatTranscript {

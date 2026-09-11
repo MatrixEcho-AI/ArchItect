@@ -204,6 +204,7 @@ export const zhCN = {
     AUTH: '鉴权失败，检查 API Key',
   },
   cost: {
+    cachedShare: '缓存命中 {{percent}}%',
     usd: '${{amount}}',
     tokens: '{{in}} 入 / {{out}} 出',
     cached: '缓存命中 {{count}}（占输入 {{percent}}%）',

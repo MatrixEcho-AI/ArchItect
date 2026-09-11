@@ -74,6 +74,11 @@ export class TranscriptRecorder {
   private readonly messages: ChatMessageRecord[] = []
   private readonly captureEntries: Array<{ ref: CaptureRef; png: Uint8Array }> = []
   private readonly session: ChatSessionRecord
+  /** 用量计数：事件流里数出来，随档案一起存（界面打开工程时要原样显示）。 */
+  private turns = 0
+  private toolCalls = 0
+  private screenshots = 0
+  private usage: { in: number; out: number; cachedIn?: number } | undefined
   private readonly now: () => string
   private readonly model: string | undefined
   private nextId = 1
@@ -87,6 +92,38 @@ export class TranscriptRecorder {
       createdAt: this.now(),
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
+    }
+  }
+
+  /**
+   * **接着一份已有的档案继续录**（打开工程之后用户又问了几句，保存时两段都要在）。
+   *
+   * 不做这件事的话，"打开 → 再问一轮 → 保存"会把文件里原来那几十条消息**抹掉**——
+   * 而档案是这个格式的一半价值（§5）。`nextId` 接着最大的那个往下发，
+   * 新消息不会和老消息撞 id（界面用 id 引用截图，撞了就会指错图）。
+   */
+  seed(transcript: ChatTranscript, captures: CaptureBundle): void {
+    this.messages.length = 0
+    this.captureEntries.length = 0
+    for (const message of transcript.messages) this.messages.push({ ...message })
+    let maxId = 0
+    for (const message of this.messages) maxId = Math.max(maxId, message.id)
+    this.nextId = maxId + 1
+    for (const ref of captures.refs) {
+      const png = captures.files.get(ref.id)
+      if (png === undefined) continue
+      this.captureEntries.push({ ref: { ...ref }, png })
+    }
+    const session = transcript.sessions[transcript.sessions.length - 1]
+    if (session !== undefined) {
+      Object.assign(this.session, session)
+      this.turns = session.totals?.turns ?? 0
+      this.toolCalls = session.totals?.toolCalls ?? 0
+      this.screenshots = session.totals?.screenshots ?? 0
+      if (session.totals !== undefined) {
+        const { in: input, out, cachedIn } = session.totals
+        this.usage = { in: input, out, ...(cachedIn !== undefined ? { cachedIn } : {}) }
+      }
     }
   }
 
@@ -105,6 +142,7 @@ export class TranscriptRecorder {
    */
   attachUsage(usage: { in: number; out: number; cachedIn?: number }, model?: string): void {
     const resolved = model ?? this.model
+    this.usage = { ...usage }
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const message = this.messages[i]!
       if (message.role !== 'assistant' || message.usage !== undefined) continue
@@ -119,6 +157,10 @@ export class TranscriptRecorder {
   }
 
   onEvent(event: TranscriptEvent): void {
+    // 计数先做：这几条与"界面里长什么样"无关，但打开工程时要用
+    if (event.type === 'turn') this.turns = Math.max(this.turns, event.turn)
+    if (event.type === 'tool_call') this.toolCalls++
+    if (event.type === 'images') this.screenshots += event.count
     switch (event.type) {
       case 'assistant':
         if (event.text.trim().length === 0) return
@@ -248,8 +290,19 @@ export class TranscriptRecorder {
   }
 
   get recording(): TranscriptRecording {
+    const totals = {
+      in: this.usage?.in ?? 0,
+      out: this.usage?.out ?? 0,
+      ...(this.usage?.cachedIn !== undefined ? { cachedIn: this.usage.cachedIn } : {}),
+      turns: this.turns,
+      toolCalls: this.toolCalls,
+      screenshots: this.screenshots,
+    }
     return {
-      transcript: { sessions: [this.session], messages: this.messages.map((message) => ({ ...message })) },
+      transcript: {
+        sessions: [{ ...this.session, totals }],
+        messages: this.messages.map((message) => ({ ...message })),
+      },
       captures: buildCaptureBundle(this.captureEntries),
     }
   }

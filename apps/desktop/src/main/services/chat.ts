@@ -24,7 +24,7 @@ import type {
 } from '@architect/agent'
 import { t } from '@architect/i18n'
 import { TranscriptRecorder } from '@architect/mcai'
-import type { TranscriptRecording } from '@architect/mcai'
+import type { CaptureBundle, ChatTranscript, TranscriptRecording } from '@architect/mcai'
 import type { ToolResult } from '@architect/tools'
 
 import type { SecretStore } from './settings.js'
@@ -376,6 +376,84 @@ export class ChatController {
       )
     }
     return out
+  }
+
+  /**
+   * **把工程里存的对话接回界面**（打开 `.mcai` 时用）。
+   *
+   * 为什么必须有：对话记录是这个格式的一半（§5），存了却看不到等于没存。
+   * 之前打开工程只恢复世界，面板一片空白——用户会以为"我的对话丢了"。
+   *
+   * 三样东西一起恢复：消息、截图（`captures/`）、用量（成本表盘与缓存命中率）。
+   * 用量从每条 assistant 消息上挂的 `usage` 重新累加，所以**成本表盘在打开旧工程后
+   * 也是对的**；采到的花费按**当前**价格表重算（价格表可能改过），而不是照抄存下来的数。
+   */
+  load(transcript: ChatTranscript, captures: CaptureBundle): ChatView {
+    // 工具参数挂在 assistant 的 `toolCalls` 上，而工具消息只带 `toolCallId`——
+    // 先建一张 id → 参数的表，才能把"这一步传了什么"还原出来
+    const argsById = new Map<string, unknown>()
+    for (const record of transcript.messages) {
+      for (const call of record.toolCalls ?? []) argsById.set(call.id, call.args)
+    }
+    const refById = new Map(captures.refs.map((ref) => [ref.id, ref]))
+
+    this.messages = transcript.messages.map((record) => {
+      const message: ChatMessageView = { id: record.id, role: record.role, text: record.text, ts: record.ts }
+      if (record.toolName !== undefined) message.toolName = record.toolName
+      if (record.ok !== undefined) message.toolOk = record.ok
+      const args = record.toolCallId !== undefined ? argsById.get(record.toolCallId) : undefined
+      if (args !== undefined) message.args = compactJson(args)
+      const imageId = record.imageIds?.[0]
+      if (imageId !== undefined) {
+        message.imageId = imageId
+        const ref = refById.get(imageId)
+        if (ref !== undefined) {
+          message.imageRevision = ref.revision
+          message.imageView = ref.camera
+        }
+      }
+      if (record.note !== undefined) message.gate = true
+      return message
+    })
+
+    this.captures = new Map()
+    for (const ref of captures.refs) {
+      const png = captures.files.get(ref.id)
+      if (png !== undefined) this.captures.set(ref.id, { png, revision: ref.revision, view: ref.camera })
+    }
+
+    // 用量：优先读档案自带的计数（`ChatSessionTotals`），没有才按消息数估。
+    // **不能一律按消息数估**：assistant 消息数不等于轮数（一轮里可能既有正文
+    // 又有多次工具调用），实测会把 13 轮显示成 "1 turns"。
+    this.meter.reset()
+    const totals = transcript.sessions[transcript.sessions.length - 1]?.totals
+    if (totals !== undefined) {
+      this.meter.add({ in: totals.in, out: totals.out, ...(totals.cachedIn !== undefined ? { cachedIn: totals.cachedIn } : {}) })
+      for (let i = 0; i < totals.turns; i++) this.meter.turn()
+      for (let i = 0; i < totals.toolCalls; i++) this.meter.toolCall()
+      for (let i = 0; i < totals.screenshots; i++) this.meter.screenshot()
+    } else {
+      // 老档案（这一版之前存的）没有 totals：如实估一个下界，别假装精确
+      for (const record of transcript.messages) {
+        if (record.role === 'assistant' && record.usage !== undefined) {
+          this.meter.add(record.usage)
+          this.meter.turn()
+        }
+        if (record.role === 'tool') this.meter.toolCall()
+        if (record.imageIds !== undefined) this.meter.screenshot()
+      }
+    }
+
+    this.nextId = this.messages.reduce((max, message) => Math.max(max, message.id), 0) + 1
+    this.stopReason = undefined
+    this.error = undefined
+    this.budgetStop = undefined
+    // 录制器接着这份档案往下录：否则"打开旧工程 → 再问一轮 → 保存"会把档案抹掉
+    this.recorder = new TranscriptRecorder({ title: this.recorderTitle() })
+    this.recorder.seed(transcript, captures)
+    const view = this.chatView()
+    this.emit({ type: 'chat', view })
+    return view
   }
 
   clear(): ChatView {

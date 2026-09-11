@@ -107,6 +107,7 @@ examples/    示例工程
 | `pnpm architect <命令>` | CLI：`info` / `ops` / `measure` / `slice` / `replay` / `shoot` / `build` / `export` / `import` |
 | `pnpm desktop` | 打开桌面端 |
 | `pnpm example` | 重新生成 `examples/forest-hut.mcai`（时间戳钉死，所以输出可复现） |
+| `pnpm icon` | 重新生成应用图标（代码画的等轴测方块，1024×1024 PNG） |
 | `pnpm --filter @architect/desktop package:dir` | 打一个不打签名、不做安装包的目录版（验打包用） |
 
 桌面端的几个诊断开关（都要先 `pnpm --filter @architect/desktop build`）。
@@ -149,7 +150,28 @@ npx --no-install electron . --demo --paint-test            # 合成一次"人手
 ```bash
 pnpm --filter @architect/desktop package          # dmg / nsis / AppImage
 pnpm --filter @architect/desktop package:dir      # 只出 .app/.exe 目录，验打包用
+pnpm icon                                         # 重新生成图标（apps/desktop/build/icon.png）
 ```
+
+**这台 arm64 Mac 上实测出来的东西**（同一个 `package` 命令，三个平台差别很大）：
+
+| 目标 | 结果 | 产物 |
+|------|------|------|
+| macOS `dmg` + `zip` | ✅ 出来了 | `ArchItect-0.1.0-arm64.dmg`（136 MB）/ `-mac.zip`（132 MB） |
+| Linux `dir`（可运行的目录版） | ✅ 出来了 | `release/linux-arm64-unpacked/`（796 MB 未压缩） |
+| Linux `AppImage` | ⛔ 卡在工具链 | `mksquashfs: bad CPU type in executable` |
+| Windows `nsis` / `zip` | ⛔ 卡在工具链 | `wine64: bad CPU type in executable` |
+
+后两条**不是项目配置的问题**：electron-builder 给 macOS 下的 `mksquashfs` 与 `wine64`
+都是 **x86_64** 二进制，而这台机器没装 Rosetta（`arch -x86_64 /usr/bin/true` 直接报
+`Bad CPU type`）。要出这两个包，任选一条：
+
+1. `softwareupdate --install-rosetta --agree-to-license`（需要管理员口令）；
+2. 用 Docker：`electronuserland/builder` 镜像里跑同一条命令；
+3. 交给 CI（Linux runner 出 AppImage、Windows runner 出 nsis）。
+
+图标是**代码画的**（`scripts/make-icon.ts`，用渲染包自己的 Canvas，等轴测方块 + 界面同色），
+不往仓库里塞二进制：electron-builder 从这一张 1024×1024 PNG 自己转 icns/ico。
 
 已验证：`--dir` 打出来的 `.app` 直接跑 `--smoke`（从世界、截图、崩溃恢复一路到导出/导入）
 都通过——即被标成 external 的 `minecraft-data` / `minecraft-assets` / `prismarine-*`

@@ -24,7 +24,8 @@
     "docs:check": "tsx scripts/gen-docs.ts --check",
     "bake:gen": "tsx scripts/bake-render-data.ts",
     "bake:check": "tsx scripts/bake-render-data.ts --check",
-    "example": "tsx scripts/make-example.ts"
+    "example": "tsx scripts/make-example.ts",
+    "icon": "tsx scripts/make-icon.ts"
   },
   "devDependencies": {
     "@architect/agent": "workspace:*",

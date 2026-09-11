@@ -1683,6 +1683,7 @@ secrets.bin
 | **M6 高级编辑** | copy/rotate/mirror（含 state 重映射）、fix_states、analyze_structure linter、run_batch 优化 | linter 能抓出测试 fixture 里预埋的 5 类**结构**问题（实现里另加 2 类 info，共 7 个 id） |
 | **M7 互操作与导出** | `.schem` / `.litematic` 往返、`.obj` 导出（附录 E.4：碰撞盒几何还原不了状态，所以**故意不做导入**）、导入侧版本迁移、纹理来源（内置资源包 / 用户资源包或客户端 jar / `.minecraft` 自动探测 / 平均色兜底，见 D-69） | 导出的 `.schem` **逐格正确还原**（换一个世界导入后 `contentHash` 对拍）；能导入外部 `.schem` 继续编辑 |
 | **M8 打磨** | 安装包、自动保存、崩溃恢复、i18n 补全、文档、prompt 库、示例项目 | 三平台能打包安装；新用户 5 分钟内能产出第一座建筑 |
+| | | **打包实测（arm64 Mac）**：macOS `dmg`+`zip` ✅ 出包（136/132 MB，图标已进包）；Linux `dir` ✅ 出目录；`AppImage` 与 Windows `nsis` ⛔ 卡在 electron-builder 自带的 **x86_64** 工具（`mksquashfs` / `wine64`），这台机器没装 Rosetta。出这两个包需要 Rosetta、Docker 或对应平台的 CI——**是工具链架构问题，不是项目配置问题** |
 
 > **打包已实测可用，但体积 837 MB 而不是预估的 220 MB**——差在 `minecraft-assets`
 > 把整个资源包装了进去（65 275 个文件）。见 §10.3：这是成本问题不是可用性问题，

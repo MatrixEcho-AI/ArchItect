@@ -82,6 +82,7 @@
         "from": "../../packages/render/data",
         "to": "data"
       }
-    ]
+    ],
+    "icon": "build/icon.png"
   }
 }

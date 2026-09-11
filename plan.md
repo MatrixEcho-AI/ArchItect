@@ -878,7 +878,7 @@ slice(axis=y, index=3)  range x[0..15] z[0..15]   legend:
 | **滑动窗口** | 只保留最近 K 轮（默认 K=6） |
 | **图像剪枝** | 最多保留最近 M 张图（默认 M=3） |
 | **优先文本** | prompt 明确指示"精确定位用 slice/measure/raycast，不要为了看清某一格去截图" |
-| **工具结果压缩** | `find_blocks` 返回聚类摘要而非 400 个坐标 |
+| **工具结果压缩** | `find_blocks` 返回聚类摘要而非 400 个坐标；实现成了“按 regime 的字符上限 + 明说截断了多少”（见 §9.2 状态表） |
 
 由 `ProviderConfig.capabilities` 里的 `promptCache: "auto" | "explicit" | "none"` 与 `contextWindow` 决定走哪个 regime。**两套都要实现，但不能同时开。**
 
@@ -902,7 +902,7 @@ slice(axis=y, index=3)  range x[0..15] z[0..15]   legend:
 | 图像剪枝（M=3 张，从**最新往回**数） | ✅ 同上；被剪的那条消息留一句 `(N screenshot(s) omitted)‵，位置与轮次关系不变 |
 | 丢掉哪几轮的说明 | ✅ 一句机械生成的 `[CONTEXT]` 占位（头之后、保留轮之前）。**不额外花一次 LLM 调用** |
 | 阶段摘要（让 LLM 写 `DesignNotes`） | ❌ 还没有：那需要一个更新笔记的工具。现在靠上面那句占位 + 模型自己重新 `slice`/`measure` |
-| 工具结果压缩 | ❌ 还没有：`find_blocks` 之类还没有按工具设结果上限 |
+| 工具结果压缩 | ✅ `formatToolResult` 在进对话前按**策略里的上限**截断：A 12 000 字符、B 4 000 字符（约 3K / 1K token）。截断标记写明少了几百字符、切在行边界上——模型必须知道“这不是全部”，否则会在缺数据的基础上接着下结论。事件与档案发的是**同一份被压过的文本**（否则“模型为什么漏看后半截”在档案里查不出来） |
 | "优先文本"的 prompt 指示 | ✅ 现有 prompt 已经有（"精确坐标用 slice，截图只用来看观感"） |
 
 ### 9.3 System Prompt 骨架（**英文**，D-11）

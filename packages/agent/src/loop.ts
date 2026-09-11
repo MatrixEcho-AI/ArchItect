@@ -5,7 +5,7 @@ import type { ToolContext, ToolRegistry, ToolResult } from '@architect/tools'
 
 import { LlmError } from './types.js'
 import type { LlmImage, LlmMessage, LlmProvider, LlmUsage } from './types.js'
-import { contextPolicyFor, windowMessages } from './context.js'
+import { contextPolicyFor, DEFAULT_TOOL_RESULT_CHARS, windowMessages } from './context.js'
 import type { ContextPolicy } from './context.js'
 import { checkBudget, costOf } from './usage.js'
 import type { Budget } from './usage.js'
@@ -367,7 +367,17 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
       emit({ type: 'tool_call', turn: state.turn, id: call.id, name: call.name, args: call.args })
 
       const result = await registry.call(ctx, call.name, call.args)
-      emit({ type: 'tool_result', turn: state.turn, id: call.id, name: call.name, result })
+      // 进对话的那段文本**先算出来**，事件里也发同一份：档案与界面看到的应当就是
+      // 模型看到的那份。否则"模型为什么漏看了后半截"在档案里查不出来——
+      // 截断标记只出现在发出去的请求里，而归档的是没截断的原文（D-67 同一个道理）。
+      const content = formatToolResult(result, policy.toolResultChars)
+      emit({
+        type: 'tool_result',
+        turn: state.turn,
+        id: call.id,
+        name: call.name,
+        result: content === result.summary ? result : { ...result, summary: content },
+      })
 
       // 闸门记账：修改类工具让"待验证"累加；一次**成功的结构化读回**清零。
       //
@@ -377,7 +387,7 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
       if (registry.get(call.name)?.mutating === true && result.ok) pendingMutations++
       if (result.ok && result.data?.['readback'] === true) pendingMutations = 0
 
-      messages.push({ role: 'tool', toolCallId: call.id, content: formatToolResult(result) })
+      messages.push({ role: 'tool', toolCallId: call.id, content })
 
       if (result.image !== undefined) {
         const id = hashPng(result.image.png)
@@ -433,11 +443,34 @@ async function chatWithRetry(
 }
 
 /** 工具结果转成回灌给 LLM 的文本。**失败也要带足自纠信息**。 */
-export function formatToolResult(result: ToolResult): string {
-  if (result.ok) return result.summary
-  const code = result.error?.code ?? 'ERROR'
-  const hint = result.error?.hint
-  return `ERROR [${code}] ${result.summary}${hint !== undefined ? `\nHINT: ${hint}` : ''}`
+export function formatToolResult(result: ToolResult, maxChars = DEFAULT_TOOL_RESULT_CHARS): string {
+  const text = result.ok
+    ? result.summary
+    : `ERROR [${result.error?.code ?? 'ERROR'}] ${result.summary}` +
+      `${result.error?.hint !== undefined ? `\nHINT: ${result.error.hint}` : ''}`
+  return capToolResult(text, maxChars)
+}
+
+/**
+ * 工具结果的**硬上限**：超了就截断，并**明说截断了多少**。
+ *
+ * 为什么要有这一层（而不是只靠每个工具自己设 limit）：
+ *
+ * - 有的参数是**模型给的**（`search_blocks` 的 `limit`、`slice` 的 `maxCells`），
+ *   模型完全可能填一个把结果撑到几十 KB 的数；
+ * - 以后新加的工具不会自动记得这件事，而"一条结果吃掉整个上下文"在 Regime B
+ *   （8K 窗口）上是致命的——那一轮剩下的空间连工具描述都放不下。
+ *
+ * 截断标记必须写清楚"少了多少"，否则模型会以为那就是全部内容，然后在缺数据的基础上
+ * 下结论——那比直接报错更糟。切在**行边界**上：半行 JSON/表格比少几行更难读。
+ */
+function capToolResult(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const clipped = text.slice(0, maxChars)
+  const boundary = clipped.lastIndexOf('\n')
+  const kept = boundary > maxChars * 0.5 ? clipped.slice(0, boundary) : clipped
+  const dropped = text.length - kept.length
+  return `${kept}\n[... truncated ${dropped} characters; narrow the query or ask for a smaller region]`
 }
 
 function hashPng(png: Uint8Array): string {

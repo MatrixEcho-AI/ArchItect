@@ -31,9 +31,22 @@ export interface ContextPolicy {
   keepTurns: number
   /** `windowed`：最多保留最近几张图。 */
   keepImages: number
+  /**
+   * 一条工具结果进对话前的字符上限（见 `formatToolResult`）。
+   *
+   * 两套 regime 给的数**不一样**，这正是它属于策略而不是常量的原因：
+   * A 有大窗口与缓存，一条 1 万字的 `slice` 只是钱的问题；B 的窗口可能只有 8K token，
+   * 一条结果就能把整轮挤掉。所以 B 卡得更紧，宁可让模型"缩小范围再问一次"。
+   */
+  toolResultChars: number
   /** 为什么这么选。界面与日志都拿它解释行为，不要只说"策略生效了"。 */
   reason: string
 }
+
+/** 一条工具结果的默认上限（Regime A）。约 3K token。 */
+export const DEFAULT_TOOL_RESULT_CHARS = 12_000
+/** Regime B 的上限：小窗口下一条结果不能吃掉整轮。约 1K token。 */
+export const WINDOWED_TOOL_RESULT_CHARS = 4_000
 
 /** 判定"上下文小"的门槛。低于它放不下几十轮对话 + 几十张图。 */
 const SMALL_CONTEXT_WINDOW = 100_000
@@ -46,7 +59,13 @@ const DEFAULT_KEEP_IMAGES = 3
 export function appendPolicy(
   reason = 'provider 有前缀缓存，裁剪会以全价重算它后面的 token',
 ): ContextPolicy {
-  return { regime: 'append', keepTurns: Number.POSITIVE_INFINITY, keepImages: Number.POSITIVE_INFINITY, reason }
+  return {
+    regime: 'append',
+    keepTurns: Number.POSITIVE_INFINITY,
+    keepImages: Number.POSITIVE_INFINITY,
+    toolResultChars: DEFAULT_TOOL_RESULT_CHARS,
+    reason,
+  }
 }
 
 /**
@@ -65,6 +84,7 @@ export function contextPolicyFor(
       regime: 'windowed',
       keepTurns: overrides.keepTurns ?? DEFAULT_KEEP_TURNS,
       keepImages: overrides.keepImages ?? DEFAULT_KEEP_IMAGES,
+      toolResultChars: WINDOWED_TOOL_RESULT_CHARS,
       reason: 'provider 没有前缀缓存，旧 token 每个请求都要全价重付',
     }
   }
@@ -74,6 +94,7 @@ export function contextPolicyFor(
       regime: 'windowed',
       keepTurns: overrides.keepTurns ?? DEFAULT_KEEP_TURNS,
       keepImages: overrides.keepImages ?? DEFAULT_KEEP_IMAGES,
+      toolResultChars: WINDOWED_TOOL_RESULT_CHARS,
       reason: `上下文窗口只有 ${window} token，不裁剪会直接放不下`,
     }
   }

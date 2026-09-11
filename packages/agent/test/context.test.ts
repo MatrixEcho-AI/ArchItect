@@ -13,9 +13,16 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { appendPolicy, contextPolicyFor, splitTurns, windowMessages } from '../src/context.js'
+import {
+  appendPolicy,
+  contextPolicyFor,
+  DEFAULT_TOOL_RESULT_CHARS,
+  splitTurns,
+  WINDOWED_TOOL_RESULT_CHARS,
+  windowMessages,
+} from '../src/context.js'
 import type { ContextPolicy } from '../src/context.js'
-import { runAgent } from '../src/loop.js'
+import { formatToolResult, runAgent } from '../src/loop.js'
 import type { AgentEvent } from '../src/loop.js'
 import { ScriptedProvider } from '../src/providers/scripted.js'
 import { AgentSession } from '../src/session.js'
@@ -27,6 +34,7 @@ const policy = (overrides: Partial<ContextPolicy> = {}): ContextPolicy => ({
   regime: 'windowed',
   keepTurns: 2,
   keepImages: 1,
+  toolResultChars: 4_000,
   reason: 'test',
   ...overrides,
 })
@@ -231,5 +239,75 @@ describe('上下文窗口：接到循环上', () => {
     expect(last.filter((message) => message.role === 'assistant')).toHaveLength(6)
     expect(last.some((message) => message.content.includes('[CONTEXT]'))).toBe(false)
     expect(events.filter((event) => event.type === 'context')).toHaveLength(0)
+  })
+})
+
+describe('工具结果压缩：一条结果不能吃掉整个上下文（§9.2 Regime B）', () => {
+  const huge = (lines: number, width = 40): string =>
+    Array.from({ length: lines }, (_, i) => `line ${i} ${'x'.repeat(width)}`).join('\n')
+
+  it('**超上限就截断，并明说截掉了多少**（切在行边界上）', () => {
+    const text = formatToolResult({ ok: true, summary: huge(200) }, 500)
+    expect(text.length).toBeLessThan(600)
+    expect(text).toContain('[... truncated')
+    expect(text).toContain('characters')
+    // 切在行边界：最后一行完整
+    const body = text.slice(0, text.indexOf('\n[... truncated'))
+    expect(body.endsWith('x')).toBe(true)
+    expect(body.split('\n').every((line) => line.startsWith('line ') || line.length === 0)).toBe(true)
+  })
+
+  it('不超上限时一个字都不动（截断不该是常态）', () => {
+    const summary = 'matched 3 types: minecraft:stone, minecraft:dirt, minecraft:sand'
+    expect(formatToolResult({ ok: true, summary })).toBe(summary)
+  })
+
+  it('失败信息也一样被压（错误也可能很长）', () => {
+    const text = formatToolResult(
+      { ok: false, summary: huge(100), error: { code: 'TOO_LARGE', message: 'too large' } },
+      300,
+    )
+    expect(text.startsWith('ERROR [TOO_LARGE]')).toBe(true)
+    expect(text).toContain('[... truncated')
+  })
+
+  it('**两套 regime 的上限不一样**：B（小窗口）卡得更紧', () => {
+    const append = contextPolicyFor({ promptCache: 'auto', contextWindow: 1_000_000 })
+    const windowed = contextPolicyFor({ promptCache: 'none' })
+    expect(append.regime).toBe('append')
+    expect(windowed.regime).toBe('windowed')
+    expect(windowed.toolResultChars).toBeLessThan(append.toolResultChars)
+    expect(append.toolResultChars).toBe(DEFAULT_TOOL_RESULT_CHARS)
+  })
+
+  it('**发出去的请求里那条工具消息真的被压过**（不是只在单元层面压）', async () => {
+    const session = new AgentSession({ volume: VOLUME, plain: true })
+    const seen: LlmMessage[][] = []
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: 'search_blocks', args: { query: 'oak', limit: 999 } }] },
+      { text: 'done' },
+    ])
+    const spy: LlmProvider = {
+      id: provider.id,
+      model: provider.model,
+      supportsImages: false,
+      chat: async (request) => {
+        seen.push(request.messages.map((message) => ({ ...message })))
+        return provider.chat(request)
+      },
+    }
+    await runAgent(
+      {
+        provider: spy,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        capabilities: { promptCache: 'none' },
+      },
+      '找一下橡木方块，越多越好',
+    )
+    const toolMessage = seen[1]?.find((message) => message.role === 'tool')
+    expect(toolMessage).toBeDefined()
+    expect(String(toolMessage!.content).length).toBeLessThanOrEqual(WINDOWED_TOOL_RESULT_CHARS + 200)
   })
 })

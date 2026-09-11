@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { rename, readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
@@ -685,7 +685,15 @@ export class StudioService {
         ? { designNotes: this.session.currentDesignNotes }
         : {}),
     })
-    await writeFile(target, bytes)
+    // **原子写**：先写同目录的临时文件，再 rename 覆盖。
+    // 直接 `writeFile(target, …)` 会先以 `w` 截断旧文件，写到一半掉电/崩溃/磁盘满，
+    // 留下的就是一份被截断的 .mcai——而上一份完好的已经没了，WAL 也救不回来
+    // （它记的是相对这份基准的差分，基准坏了 `applyRecovery` 直接拒绝恢复）。
+    // `rename` 在 Windows 上走 MoveFileEx(MOVEFILE_REPLACE_EXISTING)，能覆盖已存在的
+    // 目标。`services/settings.ts` 用的就是这个模式，这里照抄。
+    const temp = `${target}.tmp`
+    await writeFile(temp, bytes)
+    await rename(temp, target)
     this.projectPath = target
     // 保存成功 = 基准推进：WAL 里这一段已经进了工程文件，不必再留着
     this.commitAutosave()

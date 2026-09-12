@@ -391,11 +391,25 @@ export class ChatController {
     }
     const providers = this.settings.providers.filter((p) => p.id !== target.id)
     providers.push(target)
-    this.settings = { ...this.settings, providers, activeId: target.id }
+    /**
+     * **保存一份配置不该把你正在用的模型换掉。**
+     *
+     * 以前这里无条件 `activeId: target.id`，在"只能编辑当前那一个"的旧对话框里看不出来；
+     * 改成列表之后就成了事故：改一下另一个 provider 的密钥、点保存，对话就悄悄发到
+     * 那个模型上了——而"用哪个模型说话"由输入框里那个选择器决定（用户的要求）。
+     * 只在原来那个 id 已经不在了（第一次配、或被删过）时才落到刚保存的这个。
+     */
+    const keepActive =
+      this.settings.activeId.length > 0 && providers.some((p) => p.id === this.settings.activeId)
+    this.settings = {
+      ...this.settings,
+      providers,
+      activeId: keepActive ? this.settings.activeId : target.id,
+    }
     // 模型/能力变了，之前那轮对话的失败原因就不适用了
     this.error = undefined
     const view = this.settingsView()
-    this.emit({ type: 'settings', view })
+    this.emitSettings(view)
     return view
   }
 
@@ -410,7 +424,7 @@ export class ChatController {
         : (providers[0]?.id ?? ''),
     }
     const view = this.settingsView()
-    this.emit({ type: 'settings', view })
+    this.emitSettings(view)
     return view
   }
 
@@ -419,28 +433,28 @@ export class ChatController {
     const config = addPreset(this.settings, key)
     this.settings = { ...this.settings, activeId: config.id }
     const view = this.settingsView()
-    this.emit({ type: 'settings', view })
+    this.emitSettings(view)
     return view
   }
 
   setActive(id: string): SettingsView {
     this.settings = { ...this.settings, activeId: id }
     const view = this.settingsView()
-    this.emit({ type: 'settings', view })
+    this.emitSettings(view)
     return view
   }
 
   setLocale(locale: 'zh-CN' | 'en-US'): SettingsView {
     this.settings = { ...this.settings, locale }
     const view = this.settingsView()
-    this.emit({ type: 'settings', view })
+    this.emitSettings(view)
     return view
   }
 
   setUi(patch: { view?: string; requireVerification?: boolean }): SettingsView {
     this.settings = { ...this.settings, ui: { ...this.settings.ui, ...patch } }
     const view = this.settingsView()
-    this.emit({ type: 'settings', view })
+    this.emitSettings(view)
     return view
   }
 
@@ -505,7 +519,7 @@ export class ChatController {
           p.id === base.id ? { ...p, model: probed.model, capabilities: probed.capabilities } : p,
         ),
       }
-      this.emit({ type: 'settings', view: this.settingsView() })
+      this.emitSettings(this.settingsView())
     }
     return result
   }
@@ -806,6 +820,22 @@ export class ChatController {
 
   private emitView(): void {
     this.emit({ type: 'chat', view: this.chatView() })
+  }
+
+  /**
+   * 设置变了 → **两件事一起推**：设置本身，以及对话视图。
+   *
+   * 为什么对话视图也要推：标题行右上角那个花费读数是**从设置算出来的**
+   * （价格表 + 币种），它挂在 `ChatView` 上（`costAmount` / `costCurrency`）。
+   * 只推 settings 的话，改完币种那行读数还拿着上一次推的旧值——用户看到的是
+   * "我明明把货币改成人民币了，右上角还是 USD"（这正是他报的）。
+   *
+   * 判据很简单：任何影响金额的设置改动（价格表、币种、当前 provider）都必须
+   * 让这条读数重算，而它是对话视图的一部分。
+   */
+  private emitSettings(view: SettingsView): void {
+    this.emit({ type: 'settings', view })
+    this.emitView()
   }
 
   /**

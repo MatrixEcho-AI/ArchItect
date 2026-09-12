@@ -250,12 +250,23 @@ export function normalizeProviderCosts(config: ProviderConfig): ProviderConfig {
   const perModel = config.costs
   delete config.cost
   delete config.costs
-  if (perModel !== undefined) {
-    config.costs = perModel
-    if (flat !== undefined) config.cost = flat
+  /**
+   * **以 `cost` 为准**，`costs` 只当兜底。
+   *
+   * 为什么是这个方向：调用方（界面、测试、IPC）送来的 `cost` 是**用户刚编辑的那一份**，
+   * 而 `costs` 往往只是视图里的回声——视图是从内存配置展开的，两个字段会同时出现。
+   * 反过来（信 `costs`）就会让"改完币种点保存"变成一次空操作：新值被旧回声盖掉，
+   * 用户看到的是"我明明改了，它没变"（这条在真机上量到过）。
+   */
+  if (flat !== undefined) {
+    applyCostShape(config, flat)
+    // `cost` 解析不出任何表（半个表 / 空对象）时不要把 `costs` 也一起丢掉
+    if (config.costs === undefined && config.cost === undefined && perModel !== undefined) {
+      config.costs = perModel
+    }
     return config
   }
-  applyCostShape(config, flat)
+  if (perModel !== undefined) config.costs = perModel
   return config
 }
 

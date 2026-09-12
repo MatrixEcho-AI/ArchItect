@@ -456,7 +456,7 @@ describe('ChatController：设置的增删改', () => {
     expect(secrets.has('DeepSeek')).toBe(false)
   })
 
-  it('每一条设置变更都会推事件给界面', () => {
+  it('每一条设置变更都推事件，**而且连带推一次对话视图**', () => {
     const controller = new ChatController({ settings: deepseekWithKey(), secrets: createMemorySecretStore() }, async () => ({
       stopReason: 'completed',
       usage: { in: 0, out: 0 },
@@ -465,8 +465,43 @@ describe('ChatController：设置的增删改', () => {
     controller.onEvent((event) => seen.push(event.type))
     controller.setLocale('en-US')
     controller.setUi({ view: 'front' })
-    expect(seen).toEqual(['settings', 'settings'])
+    /**
+     * **每个设置改动推两条**，这是刻意的：标题行右上角那个花费读数挂在对话视图上
+     * （`costAmount` / `costCurrency`），而它是从设置（价格表 + 币种）算出来的。
+     * 只推 settings 的话，改完币种那行读数还拿着旧值——用户报的就是这个
+     * （"我改了货币，右上角还是 USD"）。
+     */
+    expect(seen).toEqual(['settings', 'chat', 'settings', 'chat'])
     expect(controller.settingsValue.locale).toBe('en-US')
+  })
+
+  it('**保存一份配置不会把你正在用的模型换掉**', () => {
+    const secrets = createMemorySecretStore()
+    const settings = deepseekWithKey()
+    settings.providers.push({
+      id: '别的',
+      preset: 'custom',
+      kind: 'openai-compatible',
+      baseURL: 'https://other.example/v1',
+      apiKeyRef: 'env:OTHER_KEY',
+      model: 'other-model',
+      capabilities: { vision: false, toolCalling: 'native', promptCache: 'none', source: 'preset' },
+    })
+    const controller = new ChatController({ settings, secrets }, async () => ({
+      stopReason: 'completed',
+      usage: { in: 0, out: 0 },
+    }))
+    // 改另一个 provider 的地址并保存：当前模型必须还是 DeepSeek
+    const other = settings.providers.find((p) => p.id === '别的')!
+    controller.saveProvider({ ...other, baseURL: 'https://other.example/v2' })
+    expect(controller.settingsValue.activeId).toBe('DeepSeek')
+    // 但原来那个 id 不在了（第一次配 / 被删过）→ 落到刚保存的这个
+    const fresh = new ChatController({ settings: { ...settings, activeId: '不存在' }, secrets }, async () => ({
+      stopReason: 'completed',
+      usage: { in: 0, out: 0 },
+    }))
+    fresh.saveProvider({ ...other, baseURL: 'https://other.example/v3' })
+    expect(fresh.settingsValue.activeId).toBe('别的')
   })
 })
 

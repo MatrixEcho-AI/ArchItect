@@ -985,6 +985,33 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
 
     /**
+     * **标题行那串读数里的币种必须与当前价格表一致**（用户报的："我改了货币，
+     * 右上角还是 USD"）。
+     *
+     * 只读不改：拿设置里当前 provider 的价格表币种，去比 #chat-usage 里那串字。
+     * 价格表没配的 provider（表盘只显示 token 数）直接放行——那时候没有币种可对。
+     *
+     * 它**拦不住"改完设置、读数没刷新"那一类**（那是事件推送的问题，启动时读数总是
+     * 新算的），那条由 chat.test.ts 的"每个设置改动推两条"钉住。
+     */
+    const liveForCost = await window.architect.settings();
+    const activeForCost = liveForCost.providers.find((p) => p.id === liveForCost.activeId);
+    const tableForCost =
+      activeForCost === undefined
+        ? undefined
+        : (activeForCost.costs?.[activeForCost.model] ?? activeForCost.cost);
+    const wantCurrency = tableForCost === undefined ? undefined : (tableForCost.currency ?? 'USD');
+    const usageLine = document.querySelector('#chat-usage');
+    check(
+      'cost-currency-matches-table',
+      wantCurrency === undefined ||
+        (usageLine !== null && (usageLine.textContent ?? '').includes(wantCurrency)),
+      wantCurrency === undefined
+        ? '当前 provider 没配价格表（表盘只报 token 数）'
+        : '价格表币种 ' + wantCurrency + ' / 读数 "' + (usageLine === null ? '' : usageLine.textContent) + '"',
+    );
+
+    /**
      * **对话标题必须是一行**（用户报的："你看看这个顶部你不觉得丑吗"）。
      *
      * 判据是量出来的高度，不是"看起来对不对"：那一行里标题和右边那串用量读数抢宽度，

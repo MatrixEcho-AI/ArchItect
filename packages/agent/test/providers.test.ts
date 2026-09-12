@@ -934,6 +934,23 @@ describe('设置文件读写（D-13 两条红线）', () => {
     // 已经归一过的再归一一次不炸、也不丢
     const twice = normalizeProviderCosts(normalizeProviderCosts(configFromPreset('custom', { id: 'gw3', model: 'm3' })))
     expect(twice.costs).toBeUndefined()
+
+    /**
+     * **两个字段同时出现时以 `cost` 为准**：视图里 `cost` 是刚编辑的那份、
+     * `costs` 只是回声。信错方向会让"改完币种点保存"变成空操作。
+     */
+    const both = configFromPreset('custom', { id: 'gw4', model: 'm4' })
+    both.costs = { m4: { inPerMTok: 1, outPerMTok: 2 } }
+    both.cost = { m4: { currency: 'CNY', inPerMTok: 9, outPerMTok: 9 } } as unknown as ProviderConfig['cost']
+    expect(normalizeProviderCosts(both).costs).toEqual({
+      m4: { currency: 'CNY', inPerMTok: 9, outPerMTok: 9 },
+    })
+
+    // `cost` 是半个表 → 保留原来的 `costs`，别把能用的价格一起丢掉
+    const half = configFromPreset('custom', { id: 'gw5', model: 'm5' })
+    half.costs = { m5: { inPerMTok: 3, outPerMTok: 4 } }
+    half.cost = { inPerMTok: 1 } as unknown as ProviderConfig['cost']
+    expect(normalizeProviderCosts(half).costs).toEqual({ m5: { inPerMTok: 3, outPerMTok: 4 } })
   })
 
   it('半个价格表整张丢掉：缺输入或输出价会让"花了多少"变成编的数', () => {

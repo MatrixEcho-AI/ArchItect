@@ -1,4 +1,5 @@
 import { applyOp, EditLog, loadRegistry, Palette, WorldStore } from '@architect/core'
+import type { PlacedBlockEntity, PlacedEntity } from '@architect/core'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 
 import {
@@ -23,6 +24,7 @@ import {
 import type { Manifest, ProjectSettings } from './manifest.js'
 import { decodeSnapshot, encodeSnapshot } from './snapshot.js'
 import type { Snapshot } from './snapshot.js'
+import { decodeBlockEntities, decodeEntities, encodeBlockEntities, encodeEntities } from './sparse.js'
 
 /** 一个已解包的 `.mcai` 工程。 */
 export interface McaiProject {
@@ -32,6 +34,15 @@ export interface McaiProject {
   palette: Palette
   /** `world/base.mcvox`，对应 `manifest.baseRevision`。 */
   snapshot: Snapshot
+  /**
+   * `world/entities.jsonl`：实体层的**基快照**，对应 `manifest.baseRevision`。
+   *
+   * 老工程没有这个条目——那时候世界上根本没有这一层，所以缺了就是空数组，
+   * 与"对话与截图缺了不算损坏"同一个态度（D-26）。
+   */
+  entities: PlacedEntity[]
+  /** `world/block-entities.jsonl`：方块实体层的基快照。同上，缺了就是空。 */
+  blockEntities: PlacedBlockEntity[]
   /** `history/edits.jsonl`。其中 `rev <= baseRevision` 的部分已包含在 snapshot 里。 */
   log: EditLog
   /** `chat/sessions.json` + `chat/messages.jsonl`。**对话记录是工程文件的一半**，不是附属品。 */
@@ -40,7 +51,12 @@ export interface McaiProject {
   captures: CaptureBundle
   /** 打开工程时发现的截图问题（索引与文件对不上之类）。不阻断打开，但要如实报告。 */
   captureProblems: string[]
-  /** 原始 zip 条目，便于无损转发未识别的部分。 */
+  /**
+   * 原始 zip 条目，便于无损转发未识别的部分。
+   *
+   * **要让这条承诺成立，打包时必须把它写回去**（`PackInput.extra`）——只收不写的话，
+   * "新版本加了条目 → 旧版本打开 → 保存"会把那些条目悄悄丢掉。
+   */
   extra: Map<string, Uint8Array>
 }
 
@@ -57,6 +73,14 @@ export interface PackInput {
   captures?: CaptureBundle
   /** 模型写的设计笔记（省略表示没有）。 */
   designNotes?: string
+  /**
+   * **打开时收下的、本版本不认识的条目，原样写回去**（`McaiProject.extra`）。
+   *
+   * 不传就等于"这次保存会把不认识的条目丢掉"——对一份新工程的第一次保存来说
+   * 那没问题（本来就没有），但"打开 → 改 → 保存"必须把它带上，否则格式一加东西，
+   * 用户手里的旧版本就会把新版本写的数据吃掉，而且是安静地吃。
+   */
+  extra?: ReadonlyMap<string, Uint8Array>
   appVersion?: string
   now?: string
 }
@@ -130,6 +154,9 @@ export function packProject(input: PackInput): Uint8Array {
         {
           blocks: store.stats().blocks,
           columns: store.allocatedColumns,
+          /** 世界另外两层的规模。`meta/stats.json` 是给人看的诊断，多这两行省一次开工程。 */
+          entities: store.entities.size,
+          blockEntities: store.blockEntities.size,
           messages: chat.messages.length,
           captures: captures.refs.length,
         },
@@ -139,24 +166,50 @@ export function packProject(input: PackInput): Uint8Array {
     ),
     [PATHS.log]: strToU8(`打包于 ${manifest.modifiedAt}，版本 ${manifest.revision}\n`),
   }
+  /**
+   * 两层稀疏数据的基快照。**空集合不写条目**——与"打开时缺了就当空"对称，
+   * 也让没用到这两层的工程字节和以前一模一样。
+   */
+  const entities = encodeEntities(store.entities.toJSON())
+  const blockEntities = encodeBlockEntities(store.blockEntities.toJSON())
+  if (entities.length > 0) files[PATHS.entities] = strToU8(entities)
+  if (blockEntities.length > 0) files[PATHS.blockEntities] = strToU8(blockEntities)
+
   // 截图条目名是动态的，单独加进来
   for (const id of [...captures.files.keys()].sort()) {
     files[capturePathOf(id)] = captures.files.get(id)!
   }
 
-  // 按固定顺序重排，保证确定性：先按 ENTRY_ORDER，动态条目（截图）按名字排序接在后面。
-  // 截图不参与 ENTRY_ORDER 是因为它的数量与名字取决于内容，写不进一张静态表。
+  /**
+   * **不认识的条目原样写回**（关闭 `McaiProject.extra` 那个承诺）。
+   *
+   * `unpackProject` 一直老老实实把未知条目收进 `extra`，但从来没人写回来——
+   * 于是"新版本加了一个条目、旧版本打开再保存"就等于把那个条目删了。
+   * 加条目这件事本来是向后兼容的（旧读方忽略未知条目照常打开），
+   * 坏就坏在**保存**这一步，所以修复点也在这里。
+   *
+   * 已知条目以我们写的为准；`captures/` 有自己那条通路，不当未知条目转发。
+   */
+  const extraPaths = new Set<string>()
+  for (const [path, data] of input.extra ?? []) {
+    if (files[path] !== undefined) continue
+    if (path.startsWith('captures/')) continue
+    files[path] = data
+    extraPaths.add(path)
+  }
+
+  // 按固定顺序重排，保证确定性：先按 ENTRY_ORDER，动态条目（截图）按名字排序接在后面，
+  // 最后是不认识的条目（同样按名字排序）。截图不参与 ENTRY_ORDER 是因为它的数量与
+  // 名字取决于内容，写不进一张静态表；未知条目同理。
   const ordered: Record<string, [Uint8Array, { mtime: Date; level: 6 }]> = {}
-  for (const path of ENTRY_ORDER) {
+  const push = (path: string): void => {
     const data = files[path]
-    if (data === undefined) continue
+    if (data === undefined) return
     ordered[path] = [data, { mtime: FIXED_MTIME, level: 6 }]
   }
-  for (const path of captureEntryPaths(captures)) {
-    const data = files[path]
-    if (data === undefined) continue
-    ordered[path] = [data, { mtime: FIXED_MTIME, level: 6 }]
-  }
+  for (const path of ENTRY_ORDER) push(path)
+  for (const path of captureEntryPaths(captures)) push(path)
+  for (const path of [...extraPaths].sort()) push(path)
 
   return zipSync(ordered, { mtime: FIXED_MTIME })
 }
@@ -243,6 +296,15 @@ export function unpackProject(bytes: Uint8Array): McaiProject {
   const editsBytes = entries[PATHS.edits]
   const { log } = EditLog.fromJSONL(editsBytes === undefined ? '' : strFromU8(editsBytes))
 
+  // 两层稀疏数据的基快照：**缺了就是空**。老工程根本没有这两个条目，
+  // 而那时候世界上也没有这两层，所以"缺"与"空"在这里本来就是同一件事——
+  // 不给它加一条"必需"，老工程才不会因为一次格式演进就打不开。
+  const entitiesBytes = entries[PATHS.entities]
+  const entities = entitiesBytes === undefined ? [] : decodeEntities(strFromU8(entitiesBytes))
+  const blockEntitiesBytes = entries[PATHS.blockEntities]
+  const blockEntities =
+    blockEntitiesBytes === undefined ? [] : decodeBlockEntities(strFromU8(blockEntitiesBytes))
+
   // 对话与截图：**缺了不算损坏**。老工程、或者用脚本裁出来的最小工程都可能是空的，
   // 而方块数据仍然完全可用——不该因为"没有对话"就打不开。
   const sessionsBytes = entries[PATHS.sessions]
@@ -262,7 +324,19 @@ export function unpackProject(bytes: Uint8Array): McaiProject {
     extra.set(path, data)
   }
 
-  return { manifest, settings, palette, snapshot, log, chat, captures, captureProblems, extra }
+  return {
+    manifest,
+    settings,
+    palette,
+    snapshot,
+    entities,
+    blockEntities,
+    log,
+    chat,
+    captures,
+    captureProblems,
+    extra,
+  }
 }
 
 const capturePathOf = (id: string): string => `captures/${id}.png`
@@ -299,6 +373,14 @@ export function openProject(bytes: Uint8Array): { project: McaiProject; store: W
     worldHeight: project.manifest.worldHeight,
   })
   store.restoreColumns(project.snapshot.columns, project.manifest.baseRevision)
+  /**
+   * 两层稀疏数据的基快照，**必须排在 `restoreColumns` 之后**：
+   * 那个方法内部会 `clear()`，而 `clear()` 是三层一起清的
+   * （plan §18.2 那条"三层必须一起发生"的唯一实现点）。顺序反了就是
+   * "打开工程之后实体全没了"，而且方块数据看上去完好无损。
+   */
+  store.entities.fromJSON(project.entities)
+  store.blockEntities.fromJSON(project.blockEntities)
   // 快照已包含 rev <= baseRevision 的全部变更，只重放其后的部分。
   // （重复重放虽然幂等，但既白做功，又会掩盖 baseRevision 的语义错误。）
   //

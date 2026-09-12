@@ -246,6 +246,66 @@ describe('崩溃恢复：走完整条链路（真的是"保存 + 重放 op"）',
   })
 })
 
+describe('保存 → 打开：世界的三层都要回来', () => {
+  it('实体与方块实体随工程往返（打开时要装在 restoreColumns 之后）', async () => {
+    const path = join(dir, 'three-layers.mcai')
+    const before = makeStudio(2)
+    const store = before.agentSession.store
+    const log = before.agentSession.log
+
+    // 一笔方块实体的主动写入（方块 + 工具自己写的附加数据）
+    const barrelWrite = store.write((emit) => emit(5, 0, 0), store.palette.indexOf('minecraft:barrel'), {
+      confirm: true,
+    })
+    const contents = store.blockEntities.set({
+      x: 5,
+      y: 0,
+      z: 0,
+      kind: 'barrel',
+      data: { items: [{ slot: 0, id: 'minecraft:coal', count: 2 }] },
+    })!
+    log.record(
+      barrelWrite,
+      { tool: 'edit_block_entity', args: {}, worldRevision: store.revision },
+      { blockEntities: [contents] },
+    )
+
+    // 一笔"只放实体"的写入
+    const boatId = store.entities.allocateId(store.revision + 1)
+    const boat = store.entities.set({
+      id: boatId,
+      type: 'minecraft:oak_boat',
+      x: 8.5,
+      y: 1,
+      z: 8.5,
+      yaw: 4,
+    })!
+    log.record(
+      undefined,
+      { tool: 'place_entity', args: {}, worldRevision: store.commitEntities([boat]) },
+      { entities: [boat] },
+    )
+
+    const expected = store.contentHash()
+    expect(store.entities.size).toBe(1)
+    expect(store.blockEntities.size).toBe(1)
+    await before.save(path)
+
+    const after = new StudioService({ plain: true })
+    await after.open(path)
+    expect(after.agentSession.store.entities.get(boatId)?.type).toBe('minecraft:oak_boat')
+    expect(after.agentSession.store.blockEntities.at({ x: 5, y: 0, z: 0 })).toEqual({
+      x: 5,
+      y: 0,
+      z: 0,
+      kind: 'barrel',
+      data: { items: [{ slot: 0, id: 'minecraft:coal', count: 2 }] },
+    })
+    // 哈希对拍才是重点：少掉这两层的话方块计数完全看不出来
+    expect(after.agentSession.store.contentHash()).toBe(expected)
+  })
+})
+
 describe('StudioService 的接线', () => {
   it('autosaveNow 在一轮结束与定时器上都会被调，且是增量的', () => {
     const studio = makeStudio(2)

@@ -30,7 +30,9 @@ project.mcai
 ├── project.json            # 用户设置：工区、允许调色板、provider 引用
 ├── world/
 │   ├── palette.json        # 有序方块状态表（磁盘层）
-│   └── base.mcvox          # 基准体素快照（二进制）
+│   ├── base.mcvox          # 基准体素快照（二进制）
+│   ├── entities.jsonl      # 实体基快照（空则不写这个条目）
+│   └── block-entities.jsonl # 方块实体基快照（空则不写这个条目）
 ├── history/
 │   ├── edits.jsonl         # 追加式 EditOp 事件日志
 │   └── checkpoints.json    # 命名检查点（预留，当前写 []）
@@ -59,14 +61,16 @@ project.mcai
 | 2 | `project.json` | — | 用默认工区（`0,minY,0` .. `15,minY+15,15`） |
 | 3 | `world/palette.json` | ✅ | 报错：无法解释方块数据 |
 | 4 | `world/base.mcvox` | ✅ | 报错：工程没有方块数据 |
-| 5 | `history/edits.jsonl` | — | 空的编辑日志（世界等于快照） |
-| 6 | `history/checkpoints.json` | — | 无检查点 |
-| 7 | `chat/sessions.json` | — | 无会话记录 |
-| 8 | `chat/messages.jsonl` | — | 无对话记录 |
-| 9 | `captures/index.json` | — | 无截图索引 |
-| 10 | `meta/stats.json` | — | 不提供统计 |
-| 11 | `meta/log.txt` | — | 无日志 |
-| 12… | `captures/<id>.png` | — | 见 §5.2 |
+| 5 | `world/entities.jsonl` | — | 没有实体（空） |
+| 6 | `world/block-entities.jsonl` | — | 没有方块实体（空） |
+| 7 | `history/edits.jsonl` | — | 空的编辑日志（世界等于快照） |
+| 8 | `history/checkpoints.json` | — | 无检查点 |
+| 9 | `chat/sessions.json` | — | 无会话记录 |
+| 10 | `chat/messages.jsonl` | — | 无对话记录 |
+| 11 | `captures/index.json` | — | 无截图索引 |
+| 12 | `meta/stats.json` | — | 不提供统计 |
+| 13 | `meta/log.txt` | — | 无日志 |
+| 14… | `captures/<id>.png` | — | 见 §5.2 |
 
 ---
 
@@ -162,22 +166,68 @@ body = zlib( for each column:
   文件大小由建筑决定，而不是由工区决定。
 - `paletteSize` 必须等于 `palette.json` 的 `entries.length`，否则判为文件损坏。
 
-### 4.4 `history/edits.jsonl`
+### 4.4 `world/entities.jsonl`
 
-一行一个 `EditOp`：
+一行一个实体。**空集合不写这个条目**——与"读方缺了就当空"对称，
+也让没用到这一层的工程字节和以前一模一样。
 
 ```jsonc
-{"id":"op_000001","parent":null,"tool":"extrude","args":{…},"ts":"…",
- "correlationId":"turn-1","source":"llm",
- "result":{"changed":1024,"clipped":0,"truncated":false,"revision":1},
- "patch":{"bounds":[[0,4,0],[15,19,15]],"runs":[…]}}
+{"id":"e_3_1","type":"minecraft:oak_boat","x":3.5,"y":1,"z":4.5,"yaw":8,
+ "data":{"passengers":[{"type":"minecraft:pig"}]}}
 ```
 
-- **追加式**：一行一条，追加写入不需要重写整个文件，坏了一行也只丢那一行。
-- `revision` = 从 1 开始的序号；`baseRevision` 之前的 op **已经包含在快照里**，
+- `type` 是**规范类型串**，版本无关——和 `palette.json` 存状态字符串而不是 stateId
+  同一个理由（§4.2）。
+- `x` / `y` / `z` 是**精确 double**：工具层把入参量化到 1/16 格，容器这一层不量化，
+  所以从别的格式导入进来的位置不会被悄悄改动。`yaw` 是 0..15（每步 22.5°）。
+- `id` 形如 `e_<op 序号>_<第几个>`，由**写入方**分配并写进 `edits.jsonl` 的差分里。
+  这样重放是纯机械应用，读方不需要持久化一个"下一个号是多少"的计数器。
+- `data` 是按类型封闭 schema 的附加数据，本规范不管它的内容，但读方必须原样保留。
+- **`rev <= baseRevision` 的部分在这里**；其后的变更在 `edits.jsonl` 的 `entityChanges` 里。
+
+### 4.5 `world/block-entities.jsonl`
+
+一行一个方块实体。键是**位置**（一格最多一个），空集合同样不写条目。
+
+```jsonc
+{"x":2,"y":1,"z":2,"kind":"chest","data":{"items":[{"slot":0,"id":"minecraft:diamond","count":3}]}}
+```
+
+- 与实体层最大的差别是它**寄生**于方块：方块被换成不带方块实体的类型，它就随之消失。
+  这个"消失"记在 `edits.jsonl` 的 `blockEntityChanges` 里，而且**由写方自己产出**——
+  只有它同时知道"哪个格子被改了"和"这个格子上原本挂着什么"。
+- 两份文件的行序都是**确定的**（实体按 id 排、方块实体按 y→z→x 排），所以同样的世界
+  必然打出同样的字节（§1 的确定性要求）。
+
+### 4.6 `history/edits.jsonl`
+
+一行一个 `EditOp`。`patch` 是 `ChangeSet` 的 base64，另外两个可选字段是纯 JSON 的稀疏层差分：
+
+```jsonc
+{"id":"op_000001","rev":1,"ts":"2026-01-01T00:00:00.000Z","source":"llm","actor":"assistant",
+ "tool":"extrude","args":{…},"correlationId":"turn_1",
+ "result":{"changed":1024,"overwrittenNonAir":0,"clipped":0},
+ "patch":"AAAAAA…"}
+```
+
+- **追加式**：一行一条，追加写入不需要重写整个文件。只有**最后一行**的不完整被容忍
+  （写到一半掉电），中间坏行判为日志损坏。
+- `patch` **恒在，可以是空集**：一条只改稀疏层的 op 也带一个长度为 0 的 `patch`。
+  读方不能把"空"当成省略——**缺这个字段是坏文件**（老读方会直接抛错，整份工程打不开）。
+- `rev` 是从 1 开始的序号；`baseRevision` 之前的 op **已经包含在快照里**，
   打开时只重放其后的部分。重复重放虽然幂等，但既白做功，又会掩盖 `baseRevision` 的语义错误。
 - `correlationId` 让"同一次 LLM 响应里的多个 op"能一起回滚。
-- `source` 是 `llm` / `user` / `system`——回放时能区分"模型改的"和"人改的"。
+- `source` 是 `llm` / `user` / `import` / `system`——回放时能区分"模型改的"和"人改的"。
+- 两个可选字段承载世界的另外两层，形状都是 `{key, before, after}` 的数组：`after`
+  缺席表示删除、`before` 缺席表示新增，反演 = 交换两者**并把顺序倒过来**（同一个键
+  可以在一组里出现两次，比如同一格"先剪除旧的、再写入新的"）：
+
+```jsonc
+"blockEntityChanges":[{"key":"2,1,2","before":{"x":2,"y":1,"z":2,"kind":"chest","data":{…}}}],
+"entityChanges":[{"key":"e_3_1","after":{"id":"e_3_1","type":"minecraft:oak_boat",…}}]
+```
+
+- **老 op 没有这两个字段**，读回来是 `undefined`，语义等同于空数组——这不是坏文件。
 
 ---
 
@@ -257,6 +307,9 @@ body = zlib( for each column:
    方块数据必须完好。"没有对话"不是一个错误状态。
 2. **未知条目原样保留。** 不在上表里的条目（未来版本加的、或者别的工具塞的）读进
    `extra`，重新打包时原样写回——**不要丢**，否则一次打开+保存就会毁掉别人的数据。
+   （这一条曾经只是承诺：`unpackProject` 老老实实收了 `extra`，但 `packProject`
+   从来不写回来，于是"新版本加了条目 → 旧版本打开 → 保存"就等于把条目删了。
+   现在写方通过 `PackInput.extra` 把它写回去。这也是"格式演进只加条目"能成立的前提。）
 3. **索引与内容对不上就报告，不要抛错。** 抛错会让用户丢掉整份工程，
    而他能接受的结果是"图没了，方块还在"。
 

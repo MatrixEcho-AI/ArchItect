@@ -14,6 +14,15 @@ export const PATHS = {
   project: 'project.json',
   palette: 'world/palette.json',
   base: 'world/base.mcvox',
+  /**
+   * 实体层的**基快照**（JSONL，一行一个 `PlacedEntity`）。
+   *
+   * 与 `palette.json` 一样属于"版本无关层"：存的是规范类型串 `minecraft:oak_boat`
+   * 而不是某个版本的数字 id。空的时候**不写这个条目**——与"打开时缺了就当空"对称。
+   */
+  entities: 'world/entities.jsonl',
+  /** 方块实体层的基快照（JSONL，一行一个 `PlacedBlockEntity`）。同上，空则不写。 */
+  blockEntities: 'world/block-entities.jsonl',
   edits: 'history/edits.jsonl',
   checkpoints: 'history/checkpoints.json',
   sessions: 'chat/sessions.json',
@@ -29,6 +38,8 @@ export const ENTRY_ORDER: readonly string[] = [
   PATHS.project,
   PATHS.palette,
   PATHS.base,
+  PATHS.entities,
+  PATHS.blockEntities,
   PATHS.edits,
   PATHS.checkpoints,
   PATHS.sessions,

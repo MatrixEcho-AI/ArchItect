@@ -1,5 +1,6 @@
 export * from './manifest.js'
 export * from './snapshot.js'
+export * from './sparse.js'
 export * from './project.js'
 export * from './chat.js'
 export * from './transcript.js'

@@ -298,6 +298,13 @@ export class StudioService {
   private meshCache?: { revision: number; geometry: WorldGeometry }
   private projectPath?: string
   /**
+   * 打开工程时收下的、**本版本不认识的 zip 条目**（`McaiProject.extra`）。
+   *
+   * 存着它、保存时写回去，是"格式只会加条目"这个前提成立的条件：新版本加的条目
+   * 对旧读方是未知的，而未知条目一旦在保存时被丢掉，用户的文件就被**悄悄降级**了。
+   */
+  private projectExtra: ReadonlyMap<string, Uint8Array> = new Map()
+  /**
    * 上一次推给界面的 op 条数（`revision` 事件用）。
    *
    * `undefined` = 这一轮还没推过：那时**不比较**，直接把当下当基准。见 `onToolResult`。
@@ -692,6 +699,7 @@ export class StudioService {
       volume: volume ?? this.session.store.volume,
     })
     this.projectPath = undefined
+    this.projectExtra = new Map()
     this.projectName = t('desktop.untitledProject')
     /**
      * **新工程 = 新对话。**
@@ -736,8 +744,13 @@ export class StudioService {
     // 把打开的世界装进 session（复用它的日志与工具上下文）
     const target = this.session.store
     target.restoreColumns(store.dumpColumns(), project.manifest.baseRevision)
+    // 两层稀疏数据的基快照，**必须排在 `restoreColumns` 之后**：它会 `clear()` 三层
+    target.entities.fromJSON(store.entities.toJSON())
+    target.blockEntities.fromJSON(store.blockEntities.toJSON())
     for (const op of project.log.all()) this.session.log.append(op)
     target.setRevision(project.manifest.revision)
+    // 不认识的条目原样带在身上，下次保存写回去——丢掉它们等于把新版本写的东西删了
+    this.projectExtra = project.extra
     this.projectPath = path
     this.projectName = project.manifest.name
     // 对话记录是工程文件的一半：打开时把它接回界面（消息、截图、用量）
@@ -781,6 +794,8 @@ export class StudioService {
       settings: { volume: this.session.store.volume },
       chat: recording.transcript,
       captures: recording.captures,
+      // 不认识的条目原样写回，别把新版本写的东西丢了
+      extra: this.projectExtra,
       ...(this.session.currentDesignNotes !== undefined
         ? { designNotes: this.session.currentDesignNotes }
         : {}),
@@ -1467,6 +1482,7 @@ export class StudioService {
 
     this.session = session
     this.projectPath = undefined
+    this.projectExtra = new Map()
     this.projectName =
       // 用本文件已有的 `baseNameOf`：它按 `[/\\]` 切，Windows 路径也对。原来这里
       // 单独写了一遍 `split('/')`，在 Windows 上切不开反斜杠，工程名会变成完整路径

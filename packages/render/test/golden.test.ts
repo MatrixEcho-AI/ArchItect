@@ -89,6 +89,8 @@ interface Case {
   view: 'iso_ne' | 'front' | 'top'
   overlays: boolean
   highlightLast: boolean
+  /** 在场景里摆四条朝向不同的船（实体层 golden）。 */
+  entities?: boolean
 }
 
 const CASES: Case[] = [
@@ -101,10 +103,28 @@ const CASES: Case[] = [
   // 纹理路径：真实方块模型（台阶/栅栏/玻璃/门）+ 逐像素采样 + AO + z-buffer。
   // 用烘好的平均色当"纹理"，所以完全不依赖 minecraft-assets，CI 上逐字节一致
   { name: 'iso-baked-uv', width: 320, height: 240, coloring: 'baked', view: 'iso_ne', overlays: false, highlightLast: false },
+  // 实体层：四条船、四个朝向，摆在空地上。这一张同时锁住三件事——船的形状、
+  // `yaw` 的符号（写反了四条船会整体反向）、以及"实体图集与方块图集不是同一张"
+  // 这件事（材质位查错表的话，船的透明判据会变成随机，图里看得出来）。
+  // 贴图来自 `bakedColorTexturePack` 画的那张棋盘，所以**完全不依赖 minecraft-assets**
+  { name: 'iso-baked-entities', width: 320, height: 240, coloring: 'baked', view: 'iso_ne', overlays: false, highlightLast: false, entities: true },
 ]
 
 function renderCase(testCase: Case): Uint8Array {
   const store = fixture()
+  if (testCase.entities === true) {
+    // 四个朝向各一条，摆在地板上（y=1）。间距 3 格，免得互相遮住看不清朝向
+    for (const [i, yaw] of [0, 4, 8, 12].entries()) {
+      store.entities.set({
+        id: `e_golden_${i}`,
+        type: 'minecraft:oak_boat',
+        x: 5.5 + (i % 2) * 3,
+        y: 1,
+        z: 5.5 + Math.floor(i / 2) * 3,
+        yaw,
+      })
+    }
+  }
   const bounds = measure(store).bounds ?? VOLUME
   const camera = cameraForShot(bounds, {
     view: testCase.view,

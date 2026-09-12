@@ -97,7 +97,7 @@ describe('agent i18n（D-01 / plan §10.4-2）', () => {
   it('validateProviderConfig 的问题说明真的跟随语言', () => {
     initI18n({ locale: 'zh-CN' })
     const zh = validateProviderConfig(configFromPreset('deepseek', { apiKeyRef: 'sk-abcdefghijklmnop' }))
-    expect(zh[0]?.message).toContain('不要直接粘密钥')
+    expect(zh[0]?.message).toContain('不能直接填密钥')
 
     initI18n({ locale: 'en-US' })
     const en = validateProviderConfig(configFromPreset('deepseek', { apiKeyRef: 'sk-abcdefghijklmnop' }))

@@ -614,7 +614,7 @@ describe('StudioService：人手接管（点哪儿改哪儿）', () => {
     studio.demo()
     const empty: [number, number, number] = [2, 2, 2]
     expect(studio.agentSession.store.isAir({ x: 2, y: 2, z: 2 })).toBe(true)
-    expect(() => studio.editBlock({ pos: empty, mode: 'break' })).toThrow(/本来就是空/)
+    expect(() => studio.editBlock({ pos: empty, mode: 'break' })).toThrow(/这一格是空的/)
     expect(() => studio.editBlock({ pos: [2, 2, 2], block: 'minecraft:not_a_block', mode: 'place' })).toThrow(
       /认不出/,
     )

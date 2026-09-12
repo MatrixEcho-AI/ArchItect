@@ -256,7 +256,7 @@ describe('配置校验', () => {
     const config = configFromPreset('deepseek', { apiKeyRef: 'sk-abcdefghijklmnop' })
     const problems = validateProviderConfig(config)
     expect(problems.some((p) => p.field === 'apiKeyRef')).toBe(true)
-    expect(problems.find((p) => p.field === 'apiKeyRef')?.message).toContain('不要直接粘密钥')
+    expect(problems.find((p) => p.field === 'apiKeyRef')?.message).toContain('不能直接填密钥')
   })
 
   it('接受 env: 与 safe: 两种引用', () => {

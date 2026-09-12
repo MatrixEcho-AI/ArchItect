@@ -203,7 +203,7 @@ const SHOT_TIMEOUT_MS = 8000
 async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefined> {
   const win = mainWindow
   if (!rendererReady || win === undefined || win.isDestroyed()) {
-    throw new Error('渲染进程还没就绪，这一枪由软件光栅器画')
+    throw new Error('The renderer is not ready yet, so the software rasterizer takes this shot')
   }
   let answer: unknown
   try {
@@ -212,10 +212,10 @@ async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefin
       new Promise((resolve) => setTimeout(() => resolve('timeout'), SHOT_TIMEOUT_MS)),
     ])
   } catch (error) {
-    process.stderr.write(`GPU 截图通道失败：${error instanceof Error ? error.message : String(error)}\n`)
-    throw new Error('与渲染进程的截图通道断了，这一枪由软件光栅器画')
+    process.stderr.write(`GPU capture channel failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    throw new Error('The capture channel to the renderer is gone, so the software rasterizer takes this shot')
   }
-  if (answer === 'timeout') throw new Error(`渲染进程 ${SHOT_TIMEOUT_MS}ms 没回话，这一枪由软件光栅器画`)
+  if (answer === 'timeout') throw new Error(`The renderer did not answer within ${SHOT_TIMEOUT_MS}ms, so the software rasterizer takes this shot`)
   if (typeof answer === 'object' && answer !== null) {
     if ('error' in answer) {
       // 渲染进程明确说了"我画不了"，并给了原因（没有 WebGL、场景版本对不上……）
@@ -224,11 +224,11 @@ async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefin
     if ('dataUrl' in answer) {
       const dataUrl = String((answer as { dataUrl: unknown }).dataUrl)
       const comma = dataUrl.indexOf(',')
-      if (comma < 0) throw new Error('渲染进程回来的不是 PNG')
+      if (comma < 0) throw new Error('The renderer did not return a PNG')
       return new Uint8Array(Buffer.from(dataUrl.slice(comma + 1), 'base64'))
     }
   }
-  throw new Error('渲染进程没有返回截图')
+  throw new Error('The renderer returned no capture')
 }
 
 function persistSettings(): void {
@@ -1588,7 +1588,7 @@ async function loadExampleOrDemo(): Promise<void> {
     }
   }
   studio.demo()
-  process.stdout.write('[demo] 没找到示例工程，改为脚本化生成小屋\n')
+  process.stdout.write('[demo] no example project found; building the hut from the script instead\n')
 }
 
 /**
@@ -1602,23 +1602,23 @@ function seedMarkdownSample(): void {
   // 逐行 push：中文写在 `lines.push(` 的参数位置上，i18n 那条测试按"离开发者出口
   // 几行内"判归属，这样它才认得出来这是诊断夹具而不是界面文案
   const lines: string[] = []
-  lines.push('## 设计说明')
+  lines.push('## Design notes')
   lines.push('')
-  lines.push('我打算这样处理这座**林间小屋**：')
+  lines.push('This is how I will approach the **forest hut**:')
   lines.push('')
-  lines.push('1. 先铺地基，用 `minecraft:cobblestone`')
-  lines.push('2. 再起墙，主体是 `minecraft:spruce_planks`')
-  lines.push('3. 最后搭斜坡屋顶，屋檐外扩一格')
+  lines.push('1. Lay the foundation with `minecraft:cobblestone`')
+  lines.push('2. Raise the walls, mostly `minecraft:spruce_planks`')
+  lines.push('3. Finish with a pitched roof, eaves overhanging by one block')
   lines.push('')
-  lines.push('| 部件 | 材质 | 尺寸 |')
+  lines.push('| Part | Material | Size |')
   lines.push('|------|------|------|')
-  lines.push('| 地基 | 圆石 | 9×9 |')
-  lines.push('| 墙 | 云杉木板 | 高 4 |')
-  lines.push('| 屋顶 | 深色橡木 | 外扩 1 |')
+  lines.push('| Foundation | Cobblestone | 9×9 |')
+  lines.push('| Walls | Spruce planks | 4 high |')
+  lines.push('| Roof | Dark oak | 1 overhang |')
   lines.push('')
-  lines.push('> 注意：门洞净高必须 ≥ 2 格，否则 `analyze_structure` 会报 `doorway`。')
+  lines.push('> The doorway needs at least 2 blocks of clearance, or `analyze_structure` reports `doorway`.')
   lines.push('')
-  lines.push('一个很长的方块 id 用来试窄栏溢出：')
+  lines.push('A long block id, to test overflow in a narrow column:')
   lines.push('`minecraft:spruce_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]`')
   lines.push('')
   lines.push('```json')

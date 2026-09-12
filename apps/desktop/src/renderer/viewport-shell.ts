@@ -180,7 +180,7 @@ export class ViewportShell {
         gpu = new Viewport(options.canvas, options.overlay)
       } catch (error) {
         // three 的构造函数抛了也要能继续：兜底那条路就是为这种情况准备的
-        console.warn('WebGL 初始化失败，改用软件视口：', error)
+        console.warn('WebGL init failed, falling back to the software viewport:', error)
       }
     }
     this.software = gpu === undefined
@@ -693,11 +693,11 @@ export class ViewportShell {
    */
   async capture(request: CaptureShotRequest): Promise<CaptureAnswer> {
     // three.js 这条路只有纹理渲染，没有"平均色快路径"，所以纯色会话直接拒收
-    if (!request.textured) return { error: '这一枪要的是纯色路径，只有软件光栅器有' }
+    if (!request.textured) return { error: 'This shot asks for the flat-colour path, which only the software rasterizer has' }
     // 软件视口给不出比主进程更好的东西——**主进程自己就是软件光栅器**。
     // 绕这一圈只会白花一次 IPC，所以直接拒收，让它自己画。
     if (this.viewport.capture === undefined) {
-      return { error: '这台机器上没有可用的 WebGL，截图由主进程的软件光栅器完成' }
+      return { error: 'This machine has no usable WebGL, so the main process rasterizes the capture' }
     }
     if (this.sceneRevision !== request.revision) {
       const payload: ScenePayload = await window.architect.scene()

@@ -245,7 +245,7 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
       studioRef.current?.reportReady({
         ok: true,
         detail: shell.software
-          ? '软件视口（没有 WebGL）'
+          ? 'software viewport (no WebGL)'
           : `canvas ${canvas?.width ?? 0}x${canvas?.height ?? 0}`,
       })
     })()

@@ -216,7 +216,7 @@ describe('StudioService：GPU 截图通道', () => {
     const shot = await studio.shoot({ view: 'iso_ne', width: 240, height: 180 })
     expect([...shot.png.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
     expect(shot.png.length).toBeGreaterThan(500)
-    expect(studio.renderFallback).toBe('外部渲染后端拒绝了这一枪')
+    expect(studio.renderFallback).toBe('The external render backend rejected this shot')
   })
 
   it('通道抛错也不会把截图整体带走', async () => {

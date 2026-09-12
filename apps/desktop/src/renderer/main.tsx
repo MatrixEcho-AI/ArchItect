@@ -43,5 +43,5 @@ function Root(): React.JSX.Element {
 }
 
 const container = document.getElementById('root')
-if (container === null) throw new Error('缺少 #root：index.html 被改坏了')
+if (container === null) throw new Error('No #root: index.html has been changed')
 createRoot(container).render(<Root />)

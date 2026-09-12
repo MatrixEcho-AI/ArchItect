@@ -63,8 +63,8 @@ export function renderMarkdown(text: string): string {
    */
   if (typeof DOMPurify.sanitize !== 'function') {
     throw new Error(
-      'renderMarkdown 需要一个 DOM：dompurify 在没有 window 的环境里不提供 sanitize。' +
-        '服务端渲染这类场景请自行先建 DOM（jsdom），不要在未清洗的情况下渲染模型输出。',
+      'renderMarkdown needs a DOM: dompurify does not provide sanitize without a window. ' +
+        'Build one first (jsdom) for server rendering; never render model output unsanitised.',
     )
   }
   return DOMPurify.sanitize(raw, {

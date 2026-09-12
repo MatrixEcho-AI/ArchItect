@@ -39,7 +39,7 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     get name(): string {
       return t('agent.bench.task.hut')
     },
-    goal: '设计一座 10x10 的小屋：木地板，石砖墙，南面开一扇门，东西两面各开一扇窗，加一个坡屋顶和一个烟囱。',
+    goal: 'Design a 10x10 hut: wooden floor, stone brick walls, a door on the south side, one window each on the east and west sides, a pitched roof and a chimney.',
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } },
     // name / checks 用 getter：标签要跟随当前语言，而不是 import 时刻的语言
     get checks(): TaskCheck[] {
@@ -59,7 +59,7 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     get name(): string {
       return t('agent.bench.task.tower')
     },
-    goal: '设计一座圆形石塔：半径 6，高 24，顶部有一圈雉堞。',
+    goal: 'Design a round stone tower: radius 6, height 24, with battlements around the top.',
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } },
     get checks(): TaskCheck[] {
       return [
@@ -77,7 +77,7 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     get name(): string {
       return t('agent.bench.task.courtyard')
     },
-    goal: '设计一个 15x15 的对称庭院：四面回廊，中央有一座喷泉。',
+    goal: 'Design a symmetric 15x15 courtyard: cloisters on all four sides, with a fountain in the middle.',
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } },
     get checks(): TaskCheck[] {
       return [
@@ -95,7 +95,7 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     get name(): string {
       return t('agent.bench.task.bridge')
     },
-    goal: '设计一座跨 30 格的中世纪石桥：有桥墩和拱，桥面可以通行。',
+    goal: 'Design a medieval stone bridge spanning 30 blocks: piers and arches, with a walkable deck.',
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 40, y: 24, z: 24 } },
     get checks(): TaskCheck[] {
       return [
@@ -111,7 +111,7 @@ export const GOLDEN_TASKS: readonly GoldenTask[] = [
     get name(): string {
       return t('agent.bench.task.lighthouse')
     },
-    goal: '设计一座海边灯塔：塔身向上收分，顶部有玻璃灯室。',
+    goal: 'Design a seaside lighthouse: a tapering tower with a glazed lantern room on top.',
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 40, z: 31 } },
     get checks(): TaskCheck[] {
       return [

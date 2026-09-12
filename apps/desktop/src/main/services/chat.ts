@@ -1147,7 +1147,7 @@ function fullResult(result: ToolResult): string {
       parts.push(JSON.stringify(result.data, null, 2))
     } catch {
       // 循环引用之类：`data` 是我们自己造的，理论上不会有，但没必要为了一个折叠块抛
-      parts.push('(data 无法序列化)')
+      parts.push('(data could not be serialised)')
     }
   }
   return parts.join('\n\n')

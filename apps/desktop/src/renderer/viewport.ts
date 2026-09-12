@@ -203,7 +203,7 @@ export class Viewport implements SceneViewport {
 
   constructor(glCanvas: HTMLCanvasElement, private readonly overlayCanvas: HTMLCanvasElement) {
     const ctx = overlayCanvas.getContext('2d')
-    if (ctx === null) throw new Error('拿不到 2D 上下文')
+    if (ctx === null) throw new Error('Could not get a 2D context')
     this.overlayCtx = ctx
     this.renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, alpha: false })
     this.renderer.setClearColor(VIEWPORT_CLEAR, 1)
@@ -411,7 +411,7 @@ export class Viewport implements SceneViewport {
     hi.width = hiW
     hi.height = hiH
     const hiCtx = hi.getContext('2d')
-    if (hiCtx === null) throw new Error('拿不到 2D 上下文')
+    if (hiCtx === null) throw new Error('Could not get a 2D context')
     const image = hiCtx.createImageData(hiW, hiH)
     for (let y = 0; y < hiH; y++) {
       const from = (hiH - 1 - y) * rowBytes
@@ -423,7 +423,7 @@ export class Viewport implements SceneViewport {
     out.width = width
     out.height = height
     const ctx = out.getContext('2d')
-    if (ctx === null) throw new Error('拿不到 2D 上下文')
+    if (ctx === null) throw new Error('Could not get a 2D context')
     ctx.imageSmoothingEnabled = true
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(hi, 0, 0, width, height)
@@ -443,7 +443,7 @@ export class Viewport implements SceneViewport {
     layer.width = width
     layer.height = height
     const layerCtx = layer.getContext('2d')
-    if (layerCtx === null) throw new Error('拿不到 2D 上下文')
+    if (layerCtx === null) throw new Error('Could not get a 2D context')
     layerCtx.putImageData(new ImageData(new Uint8ClampedArray(overlay.data), width, height), 0, 0)
     ctx.drawImage(layer, 0, 0)
 

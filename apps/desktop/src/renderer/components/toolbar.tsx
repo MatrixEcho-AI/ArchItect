@@ -60,17 +60,18 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
   const busy = state === undefined
   return (
     /**
-     * `align="stretch"` 而不是 `align="center"`：这一行里那个 `flex: 1` 的撑开块
-     * 只有在本容器**比内容宽**时才起作用，而 `align="center"` 会让 antd 输出
-     * `align-items: center`，于是 `.ant-flex` 收缩成 335px（内容宽度）、撑开块
-     * 宽度为 0——设置齿轮就落在 `btn-import` 右边 4px 处，根本不是右上角。
+     * `align="center"`：**纵向居中只能靠它**——`align="stretch"`（本来的写法）会让
+     * 24px 的小按钮被拉满整条 38px，图标贴到顶栏上沿（实测 `topGap=0 / botGap=14`）。
      *
-     * 这条踩过：`settings-visible` 那条冒烟断言（量齿轮与 header 右缘的距离）
-     * 一直在报 1015px，而肉眼看截图觉得"齿轮在最右边啊"——因为顶栏其余部分是
-     * 浅色背景，335px 处的齿轮看着就像那一行的末端。**别用眼睛代替测量。**
-     * 纵向居中改由每个按钮自己的高度与 `align-items` 以外的因素决定（都一样高）。
+     * 曾经写成 `stretch` 的理由是"要让那个 `flex: 1` 的撑开块起作用"，而那个理由是错的：
+     * 撑开块撑的是**横轴**（靠 `width: 100%` 与父级那一层 `width: 100%` 的 flex），
+     * 与纵向的 `align-items` 毫无关系。`width: 100%` 不能省——去掉它、或去掉父级那一层，
+     * 本容器就只按内容宽度收缩，齿轮会落回左边按钮堆里。
+     *
+     * 注意 `settings-visible`（量齿轮与顶栏右缘的距离）在两种写法下都报 10px，
+     * **它拦不住纵向跑偏**——所以另外钉了一条 `toolbar-centered`。
      */
-    <Flex align="stretch" gap={4} style={{ height: '100%', width: '100%' }}>
+    <Flex align="center" gap={4} style={{ height: '100%', width: '100%' }}>
       <span
         style={{
           fontWeight: 700,

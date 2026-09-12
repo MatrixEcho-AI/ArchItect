@@ -944,6 +944,44 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
           ' / 距顶栏右缘 ' + (Number.isFinite(gapRight) ? gapRight + 'px' : '读不到顶栏'),
     );
 
+    // **顶栏里的按钮必须纵向居中**（用户报的："工具按钮为什么靠到顶了"）。
+    //
+    // 判据是"上下的留白一不一样"，不是"按钮有没有在顶栏里"——后者在跑偏 14px 时
+    // 照样为真。量的是**头尾两个图标按钮**（最左的 #btn-new、最右的 #btn-settings），
+    // 因为跑偏只可能来自容器的 align-items，而它一次会影响整行；取两个是为了
+    // 顺带钉住"行内所有元素同高同位"，万一以后有人给某一个元素单独加 align-self。
+    //
+    // 为什么会跑偏（留给下一个改这儿的人）：写成 align="stretch" 时，antd 输出
+    // align-items: stretch，24px 的小按钮被拉满整条 38px，图标于是贴上沿——
+    // 实测 topGap=0 / botGap=14。而 settings-visible（量右缘距离）两种写法都过，
+    // 所以这条断言是**唯一**拦得住它的东西。
+    const centeredIds = ['btn-new', 'btn-settings'];
+    const centering = centeredIds
+      .map((id) => document.querySelector('#' + id))
+      .filter((el) => el !== null)
+      .map((el) => {
+        const box = el.getBoundingClientRect();
+        const bar = header === null ? null : header.getBoundingClientRect();
+        return {
+          top: Math.round(box.top - (bar === null ? 0 : bar.top)),
+          bottom: Math.round((bar === null ? 0 : bar.bottom) - box.bottom),
+        };
+      });
+    const centered =
+      centering.length === centeredIds.length &&
+      centering.every(
+        (box) => box.top > 0 && box.bottom > 0 && Math.abs(box.top - box.bottom) <= 1,
+      );
+    check(
+      'toolbar-centered',
+      centered,
+      centering.length === 0
+        ? '一个图标按钮都没读到'
+        : centering
+            .map((box, at) => centeredIds[at] + ' 上留 ' + box.top + 'px / 下留 ' + box.bottom + 'px')
+            .join('，'),
+    );
+
     // 挡住发送的时候，必须有一条**能直接解决问题的路**（不然新用户第一屏就卡住）
     const blocking = document.querySelector('#blocking');
     const blocked = blocking !== null && !blocking.classList.contains('hidden');

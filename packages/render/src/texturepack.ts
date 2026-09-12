@@ -31,6 +31,11 @@ import { Canvas, encodePng } from './canvas.js'
 const BLOCK_DIRS = ['block', 'blocks'] as const
 /** 物品纹理目录，颜色解析时偶而会用到（`pink_petals` 这类）。 */
 const ITEM_DIRS = ['item', 'items'] as const
+/**
+ * 实体纹理目录。与方块不同，它**带子目录**（`entity/boat/oak`、`entity/cow/cow`），
+ * 所以读侧要能走嵌套路径，目录来源也要递归。
+ */
+const ENTITY_DIR = 'entity'
 /** 图集只用方块纹理。 */
 const TILE_SIZE = 16
 
@@ -122,8 +127,8 @@ export function directoryTexturePack(root: string): TexturePack {
   const dirs = textureRoots(root)
   const entries = new Map<string, () => Uint8Array>()
   for (const [dir, kind] of dirs) {
-    for (const file of readdirSync(dir)) {
-      if (!file.endsWith('.png')) continue
+    // 实体纹理**带子目录**（`entity/boat/oak`），其余是平铺的
+    for (const file of walkPng(dir, kind === ENTITY_DIR)) {
       const name = file.slice(0, -'.png'.length)
       const relative = `${kind}/${name}`
       if (!entries.has(relative)) {
@@ -135,6 +140,10 @@ export function directoryTexturePack(root: string): TexturePack {
   return new MapTexturePack(`dir:${root}`, 'pack', root, entries, blockTilesOf(entries.keys()))
 }/** `assets/minecraft/textures/block/stone.png` → `block/stone`；不是纹理就 `undefined`。 */
 function packRelativePath(name: string): string | undefined {
+  // 先试实体：它允许嵌套（`textures/entity/boat/oak.png` → `entity/boat/oak`）
+  const entity = /(?:^|\/)textures\/entity\/(.+)\.png$/.exec(name)
+  if (entity !== null) return `${ENTITY_DIR}/${entity[1]!}`
+
   const match = /(?:^|\/)textures\/([^/]+)\/([^/]+)\.png$/.exec(name)
   if (match === null) return undefined
   const folder = match[1]!
@@ -145,8 +154,8 @@ function packRelativePath(name: string): string | undefined {
 }
 
 /** 目录来源里，找到所有装着纹理的目录，并标注它们属于哪一类。 */
-function textureRoots(root: string): Array<[string, 'block' | 'item']> {
-  const found: Array<[string, 'block' | 'item']> = []
+function textureRoots(root: string): Array<[string, 'block' | 'item' | 'entity']> {
+  const found: Array<[string, 'block' | 'item' | 'entity']> = []
   for (const [dirs, kind] of [
     [BLOCK_DIRS, 'block'],
     [ITEM_DIRS, 'item'],
@@ -163,9 +172,32 @@ function textureRoots(root: string): Array<[string, 'block' | 'item']> {
       }
     }
   }
+  // 实体纹理目录（递归遍历交给收集器，这里只报目录）
+  const entityDir = join(root, 'assets', 'minecraft', 'textures', ENTITY_DIR)
+  if (isDirectory(entityDir)) found.push([entityDir, ENTITY_DIR])
   // 最后兜底：目录本身就是一堆 PNG
   if (found.length === 0 && isDirectory(root) && hasPng(root)) found.push([root, 'block'])
   return found
+}
+
+/** 目录下的 PNG 文件名（`recursive` 时给出相对子路径，如 `boat/oak.png`），升序。 */
+function walkPng(dir: string, recursive = false): string[] {
+  const out: string[] = []
+  const visit = (current: string, prefix: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (recursive) visit(join(current, entry.name), `${prefix}${entry.name}/`)
+        continue
+      }
+      if (entry.name.endsWith('.png')) out.push(`${prefix}${entry.name}`)
+    }
+  }
+  try {
+    visit(dir, '')
+  } catch {
+    return []
+  }
+  return out.sort()
 }
 
 function isDirectory(path: string): boolean {

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { zipSync } from 'fflate'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -37,6 +37,9 @@ function solidPng(r: number, g: number, b: number, a = 255): Uint8Array {
   return encodePng(canvas)
 }
 
+/** 实体纹理的路径（相对 `textures/entity/`，**带子目录**）。 */
+const ENTITY_TEXTURES = ['boat/oak', 'cow/cow']
+
 const TILES: Record<string, [number, number, number, number]> = {
   stone: [120, 120, 120, 255],
   oak_planks: [160, 130, 80, 255],
@@ -50,6 +53,12 @@ function makePackDir(root: string): string {
   for (const [name, [r, g, b, a]] of Object.entries(TILES)) {
     writeFileSync(join(blockDir, `${name}.png`), solidPng(r, g, b, a))
   }
+  // 实体纹理**带子目录**，而且尺寸与方块不同（真实资源包里船是 128×64）
+  for (const relative of ENTITY_TEXTURES) {
+    const file = join(root, 'assets', 'minecraft', 'textures', 'entity', `${relative}.png`)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, solidPng(150, 110, 60))
+  }
   return root
 }
 
@@ -62,6 +71,9 @@ function makePackZip(path: string): string {
   // 顺带塞点"不该被解出来"的东西：客户端 jar 里 90% 是这个
   files['net/minecraft/client/Minecraft.class'] = new Uint8Array([0xca, 0xfe, 0xba, 0xbe])
   files['assets/minecraft/textures/item/stick.png'] = solidPng(1, 2, 3)
+  for (const relative of ENTITY_TEXTURES) {
+    files[`assets/minecraft/textures/entity/${relative}.png`] = solidPng(150, 110, 60)
+  }
   writeFileSync(path, zipSync(files))
   return path
 }
@@ -187,5 +199,29 @@ describe('解析设置 → 真正用的资源包（永远给得出一个）', ()
     const dev = assetsTexturePack(VERSION).blockTiles()
     const baked = bakedColorTexturePack(VERSION).blockTiles()
     expect([...baked]).toEqual([...dev])
+  })
+})
+
+describe('实体纹理：带子目录，两种来源都要读得到', () => {
+  it('目录来源：递归收集 `entity/` 下面的子目录', () => {
+    const pack = directoryTexturePack(makePackDir(dir))
+    expect(pack.read('entity/boat/oak')).toBeDefined()
+    expect(pack.read('entity/cow/cow')).toBeDefined()
+    // 方块那一侧不受影响
+    expect(pack.read('block/stone')).toBeDefined()
+    // 不存在的如实返回 undefined，而不是编一张出来
+    expect(pack.read('entity/boat/spruce')).toBeUndefined()
+  })
+
+  it('zip 来源：嵌套路径也要给出来', () => {
+    const pack = zipTexturePack(makePackZip(join(dir, 'pack.zip')))
+    expect(pack.read('entity/boat/oak')).toBeDefined()
+    expect(pack.read('entity/cow/cow')).toBeDefined()
+  })
+
+  it('**方块清单里不混进实体纹理**（图集只按方块清单建）', () => {
+    const pack = directoryTexturePack(makePackDir(dir))
+    expect(pack.blockTiles()).not.toContain('boat/oak')
+    expect([...pack.blockTiles()].sort()).toEqual(Object.keys(TILES).sort())
   })
 })

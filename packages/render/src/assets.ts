@@ -39,6 +39,7 @@ export function assetsTexturePack(minecraftVersion: string): TexturePack {
     throw new Error(`minecraft-assets 没有版本 "${minecraftVersion}" 的资源包目录`)
   }
   const blockDir = join(directory, 'blocks')
+  const entityDir = join(directory, 'entity')
   // 与 `buildTextureAtlas` 一样要排序：文件系统给的顺序不同会让 UV 索引漂移
   const tiles = readdirSync(blockDir)
     .filter((file) => file.endsWith('.png'))
@@ -51,10 +52,15 @@ export function assetsTexturePack(minecraftVersion: string): TexturePack {
     detail: directory,
     blockTiles: () => tiles,
     read(path: string): Uint8Array | undefined {
-      // 只认 `block/`：这个来源里没有物品纹理，而颜色解析走的正是方块纹理
-      if (!path.startsWith('block/')) return undefined
+      // 方块纹理在 `blocks/`，实体纹理在 `entity/`（**可以带子目录**：`entity/boat/oak`）。
+      // 这个来源里没有物品纹理，而颜色解析走的正是方块纹理，所以只认这两个前缀。
+      const file = path.startsWith('block/')
+        ? join(blockDir, `${path.slice('block/'.length)}.png`)
+        : path.startsWith('entity/')
+          ? join(entityDir, `${path.slice('entity/'.length)}.png`)
+          : undefined
+      if (file === undefined) return undefined
       // 懒读：一次渲染通常只用几十张纹理，1000 多张全读一遍要几百毫秒
-      const file = join(blockDir, `${path.slice('block/'.length)}.png`)
       try {
         return existsSync(file) ? readFileSync(file) : undefined
       } catch {

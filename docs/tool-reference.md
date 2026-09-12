@@ -433,7 +433,7 @@ Returns the kind and the stored payload, or says there is none. Block entities o
 ## `analyze_structure`
 
 ```
-Building linter (read-only, does not change the world). Runs seven structural checks over the whole build or an optional region, and returns a score plus one entry per problem:
+Building linter (read-only, does not change the world). Runs twelve checks over the whole build or an optional region, and returns a score plus one entry per problem:
 1. floating (error): a block with nothing supporting it anywhere below in its own column; blocks with no collision shape (torches, flowers, signs) are ignored because they are legitimately airborne.
 2. cantilever (warn): a block whose nearest support one level below is more than maxOverhang blocks away horizontally.
 3. doorway (warn): an opening at floor level in a wall that is less than minDoorClearance blocks high (it may be an intended window, so this is a warning, not an error), or a *_door lower half with no matching upper half above it (an incomplete door). A normal door with wall above it is correct and NOT reported.
@@ -441,7 +441,12 @@ Building linter (read-only, does not change the world). Runs seven structural ch
 5. leaky (warn): interior air that connects to the outside across the content bounding box (intended doors and windows count as connections).
 6. palette (info): how many distinct block types are used, and which types appear in fewer than 3 cells.
 7. symmetry (info): how well the build mirrors across a plane (score 0..1).
-Severity matters: only `floating` is an error, and errors are what block completion — warnings and info are advice. A passing analyze_structure (no errors) satisfies the completion gate. score is 0..100 and is 100 when there are no errors and no warnings. Sample coordinates are capped at 8 per finding, so the output stays cheap. Run it at the end of a build stage, and always before claiming the build is complete.
+8. blockentity_orphan (error): a chest/sign/banner payload sitting on a block that cannot carry it (its block was replaced, or the cell is air) — the contents are unreachable and will not survive export.
+9. blockentity_empty (info): a block entity whose payload is entirely default; dropping it would be equivalent.
+10. entity_embedded (warn): an entity inside a block that has a collision shape. Boats in water are fine (fluids have no shape); the usual cause is placing at the floor's own y instead of one above it.
+11. entity_duplicate (warn): more than one entity of the **same type** in one cell — the same placement done twice.
+12. entity_outside (info): entities outside the analysed region (the region defaults to block content bounds).
+Severity matters: `floating` and `blockentity_orphan` are errors, and errors are what block completion — warnings and info are advice. A passing analyze_structure (no errors) satisfies the completion gate. score is 0..100 and is 100 when there are no errors and no warnings. Sample coordinates are capped at 8 per finding, so the output stays cheap. Run it at the end of a build stage, and always before claiming the build is complete.
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |

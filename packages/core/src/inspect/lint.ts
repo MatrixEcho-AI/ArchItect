@@ -1,3 +1,5 @@
+import { blockEntityKindOf } from '../entity/kinds.js'
+import { cellKey, cellOf } from '../entity/types.js'
 import { normalizeBounds } from '../geometry/box.js'
 import { AIR_STATE_ID } from '../palette.js'
 import { stateIdToProperties } from '../state.js'
@@ -34,6 +36,14 @@ export const LINT_NOISY_PALETTE_TYPES = 24
 export const LINT_RARE_BLOCK_CELLS = 3
 /** 每条 finding 最多回带多少个样本坐标（LLM 结果的成本上限）。 */
 export const LINT_MAX_SAMPLES = 8
+/**
+ * 同一格子里**同一种实体**超过这个数量就算重复放置。
+ *
+ * 1 是判据本身而不是"可调参数"：同格同类型出现两次，只可能是同一件事被做了两遍
+ * （模型循环里重复调用、或者复制粘贴叠了一次）。不同**类型**叠在同一格是合法的
+ * （船上的盔甲架），所以判据必须带上类型。
+ */
+export const LINT_ENTITY_DUPLICATE_LIMIT = 1
 /** 悬挑搜索在 `maxOverhang` 之外再多探这么多圈，用于给出「最坏离支撑多远」。 */
 const OVERHANG_SEARCH_EXTRA = 4
 /** 漏水洪泛的包围盒格数上限，超过就跳过（避免为一个空包围盒分配几百 MB）。 */
@@ -50,6 +60,13 @@ export type LintFindingId =
   | 'leaky'
   | 'palette'
   | 'symmetry'
+  // 稀疏层的两类（plan §18.9）。它们的判据与方块那七类**没有关系**：
+  // 实体是浮点对象、方块实体寄生于方块，都套不进"每列 y 列表"那套推导。
+  | 'entity_embedded'
+  | 'entity_duplicate'
+  | 'entity_outside'
+  | 'blockentity_orphan'
+  | 'blockentity_empty'
 
 export interface LintOptions {
   /** 分析范围；默认取内容包围盒，内容为空时取工区。 */
@@ -454,6 +471,8 @@ export function lintStructure(store: WorldStore, options: LintOptions = {}): Lin
   }
   if (paletteFinding !== undefined) findings.push(paletteFinding)
   if (symmetryFinding !== undefined) findings.push(symmetryFinding)
+  // 稀疏层（实体与方块实体）：与方块那七类相互独立，各自成条
+  findings.push(...lintSparseLayers(store, region))
 
   findings.sort(compareFindings)
 
@@ -728,6 +747,164 @@ function analyzeLeak(
   return { count, samples: samples.list(), skipped: false, boxVolume }
 }
 
+// ── 稀疏层（实体与方块实体，plan §18.9） ─────────────────────────────
+
+/**
+ * 另外两层的体检。
+ *
+ * 与方块那七类的分工是**毫不相关**：那七类全从"每列 y 列表"推出来，而实体是浮点对象、
+ * 方块实体寄生于方块，套不进那套推导。所以这里是独立的一段，读的是两个稀疏 store。
+ *
+ * 判据全部**写死**（附录 D 的教训：判据含糊的检查会在两个方向上都出错，
+ * 而错法的表现是"该报的不报"或"报一堆不是问题的东西"）。每一条都有明确的正例与
+ * 反例，见 `lint.test.ts`：
+ *
+ * | id | 判据 | 严重度 |
+ * |---|---|---|
+ * | `blockentity_orphan` | 那一格的方块推出的 kind ≠ 存下来的 kind（包括那格已经是空气） | error |
+ * | `blockentity_empty` | `data` 一个键都没有 | info |
+ * | `entity_embedded` | 实体**所在格**是一块有碰撞盒的方块（水、火把、花不算） | warn |
+ * | `entity_duplicate` | 同一格里同一种实体超过 `LINT_ENTITY_DUPLICATE_LIMIT` 个 | warn |
+ * | `entity_outside` | 实体所在格在分析范围之外 | info |
+ *
+ * **刻意不报"悬空"**：方块那一类悬空是 error，因为一块砖没有支撑就是错的；
+ * 而实体悬空是**常态**——箭、展示框、拴绳结、掉落的方块都在空中，
+ * 豁免名单会随版本漂移，而漂移的表现是"把正常的东西报成错误"。
+ * `entity_embedded` 抓的是另一个方向、也明确得多的错误：东西被砌进墙里了。
+ */
+function lintSparseLayers(store: WorldStore, region: Bounds): LintFinding[] {
+  const findings: LintFinding[] = []
+  const probe: Pos = { x: 0, y: 0, z: 0 }
+  const inRegion = (x: number, y: number, z: number): boolean =>
+    x >= region.min.x && x <= region.max.x &&
+    y >= region.min.y && y <= region.max.y &&
+    z >= region.min.z && z <= region.max.z
+
+  // ── 方块实体 ────────────────────────────────────────────────────
+  const orphans = new SampleSet(LINT_MAX_SAMPLES, compareYThenXZ)
+  let orphanCount = 0
+  const empties = new SampleSet(LINT_MAX_SAMPLES, compareYThenXZ)
+  let emptyCount = 0
+
+  for (const entry of store.blockEntities.list()) {
+    if (!inRegion(entry.x, entry.y, entry.z)) continue
+    probe.x = entry.x
+    probe.y = entry.y
+    probe.z = entry.z
+    const block = store.registry.blockByStateId(store.getBlockStateId(probe))
+    // 按**种类**比而不是按方块名：`oak_sign` 与 `oak_wall_sign` 是两种方块、
+    // 同一个 kind，而"把立牌换成墙牌"是合法的改动，不该报成孤儿。
+    const expected = block === undefined ? undefined : blockEntityKindOf(block.name)
+    if (expected !== entry.kind) {
+      orphanCount++
+      orphans.push({ x: entry.x, y: entry.y, z: entry.z })
+    }
+    if (Object.keys(entry.data).length === 0) {
+      emptyCount++
+      empties.push({ x: entry.x, y: entry.y, z: entry.z })
+    }
+  }
+
+  if (orphanCount > 0) {
+    findings.push({
+      id: 'blockentity_orphan',
+      severity: 'error',
+      count: orphanCount,
+      summary:
+        `${orphanCount} block entit(ies) sit on a block that cannot carry them ` +
+        `(the block's kind does not match, or the cell is no longer that block at all). ` +
+        `This is unreachable data: the contents will not survive a re-export.`,
+      samples: orphans.list(),
+    })
+  }
+  if (emptyCount > 0) {
+    findings.push({
+      id: 'blockentity_empty',
+      severity: 'info',
+      count: emptyCount,
+      summary:
+        `${emptyCount} block entit(ies) carry an empty payload — every field is at its default value. ` +
+        `Such an entry is not worth storing: dropping the block entity entirely gives the same result in game.`,
+      samples: empties.list(),
+    })
+  }
+
+  // ── 实体 ────────────────────────────────────────────────────────
+  const embedded = new SampleSet(LINT_MAX_SAMPLES, compareYThenXZ)
+  let embeddedCount = 0
+  const duplicates = new SampleSet(LINT_MAX_SAMPLES, compareYThenXZ)
+  let duplicateCount = 0
+  const outside = new SampleSet(LINT_MAX_SAMPLES, compareYThenXZ)
+  let outsideCount = 0
+  /** 格 + 类型 → 数量。用来判"同一件事被做了两遍"。 */
+  const seen = new Map<string, number>()
+
+  for (const entity of store.entities.list()) {
+    const cell = cellOf(entity)
+    if (!inRegion(cell.x, cell.y, cell.z)) {
+      outsideCount++
+      outside.push(cell)
+      continue
+    }
+    const key = `${cellKey(cell.x, cell.y, cell.z)}|${entity.type}`
+    const count = (seen.get(key) ?? 0) + 1
+    seen.set(key, count)
+    if (count === LINT_ENTITY_DUPLICATE_LIMIT + 1) {
+      duplicateCount++
+      duplicates.push(cell)
+    }
+    probe.x = cell.x
+    probe.y = cell.y
+    probe.z = cell.z
+    const stateId = store.getBlockStateId(probe)
+    // 只有**有碰撞盒**的方块才算"砌进墙里"：水、火把、花、告示牌都没有碰撞盒，
+    // 而船停在水中、展示框挂在墙上正是它们该在的地方。
+    if (stateId !== AIR_STATE_ID && store.registry.shapesOf(stateId).length > 0) {
+      embeddedCount++
+      embedded.push(cell)
+    }
+  }
+
+  if (embeddedCount > 0) {
+    findings.push({
+      id: 'entity_embedded',
+      severity: 'warn',
+      count: embeddedCount,
+      summary:
+        `${embeddedCount} entit(ies) sit inside a block that has a collision shape ` +
+        `(fluids, torches, flowers and signs have none, so boats on water are not counted). ` +
+        `The usual cause is placing at the floor's own y instead of one above it.`,
+      samples: embedded.list(),
+    })
+  }
+  if (duplicateCount > 0) {
+    findings.push({
+      id: 'entity_duplicate',
+      severity: 'warn',
+      count: duplicateCount,
+      summary:
+        `${duplicateCount} cell(s) hold more than ${LINT_ENTITY_DUPLICATE_LIMIT} entit(ies) of the **same type** — ` +
+        `almost certainly the same placement done twice (a repeated tool call, or a paste onto itself). ` +
+        `Different types in one cell are fine and are not counted.`,
+      samples: duplicates.list(),
+    })
+  }
+  if (outsideCount > 0) {
+    findings.push({
+      id: 'entity_outside',
+      severity: 'info',
+      count: outsideCount,
+      summary:
+        `${outsideCount} entit(ies) are outside the analysed region ` +
+        `(${region.min.x},${region.min.y},${region.min.z})..(${region.max.x},${region.max.y},${region.max.z}). ` +
+        `The region defaults to the **block** content bounds, so an entity placed past the edge of the build lands here.`,
+      samples: outside.list(),
+    })
+  }
+
+  return findings
+}
+
 // ── 小工具 ──────────────────────────────────────────────────────────
 
 /**
@@ -773,6 +950,11 @@ const FINDING_RANK: Record<LintFindingId, number> = {
   leaky: 4,
   palette: 5,
   symmetry: 6,
+  blockentity_orphan: 7,
+  blockentity_empty: 8,
+  entity_embedded: 9,
+  entity_duplicate: 10,
+  entity_outside: 11,
 }
 
 function compareFindings(a: LintFinding, b: LintFinding): number {

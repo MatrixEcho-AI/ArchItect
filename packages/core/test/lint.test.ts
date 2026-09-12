@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { forEachBox } from '../src/geometry/box.js'
 import { lintStructure } from '../src/inspect/lint.js'
 import type { LintFinding, LintFindingId, LintReport } from '../src/inspect/lint.js'
+import type { PlacedBlockEntity, PlacedEntity } from '../src/entity/types.js'
 import type { Bounds, Pos } from '../src/types.js'
 import { WorldStore } from '../src/world/store.js'
 
@@ -348,5 +349,118 @@ describe('悬空判据：地面是工区底板，不是分析范围的底（回�
 
     const report = lintStructure(store, { region: { min: { x: 0, y: 0, z: 0 }, max: { x: 8, y: 8, z: 8 } } })
     expect(finding(report, 'floating')).toBeUndefined()
+  })
+})
+
+/**
+ * 稀疏层（实体与方块实体）的五条判据（plan §18.9）。
+ *
+ * 每条都配**正例与反例**：附录 D 的教训是"判据含糊的检查会在两个方向上都出错"，
+ * 只测正例的话，一条永远返回真的检查也能通过。
+ */
+describe('lint：实体与方块实体（另外两层）', () => {
+  const boat = (id: string, x: number, y: number, z: number): PlacedEntity => ({
+    id,
+    type: 'minecraft:oak_boat',
+    x,
+    y,
+    z,
+    yaw: 0,
+  })
+
+  const put = (store: WorldStore, entity: PlacedEntity): void => {
+    const change = store.entities.set(entity)
+    if (change !== undefined) store.commitSparse({ entities: [change] })
+  }
+
+  const putBlockEntity = (store: WorldStore, entry: PlacedBlockEntity): void => {
+    const change = store.blockEntities.set(entry)
+    if (change !== undefined) store.commitSparse({ blockEntities: [change] })
+  }
+
+  it('`entity_embedded`：砌进方块里的实体报，站在地板上方的不报', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 7, y: 0, z: 7 }, PLANKS)
+    // 正例：at.y 用了地板自己的那一层 → 实体中心落在地板里
+    put(store, boat('e_1_1', 2.5, 0.5, 2.5))
+    // 反例：站在地板**上方**的那一格
+    put(store, boat('e_1_2', 4.5, 1.5, 4.5))
+
+    // 显式给范围，让两个实体都落在分析范围内——否则上面那条反例会被
+    // 归到 `entity_outside`，这里就变成了"没报出来是因为没看它"
+    const bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 7, y: 2, z: 7 } }
+    const report = lintStructure(store, { region: bounds })
+    expect(finding(report, 'entity_embedded')?.count).toBe(1)
+    expect(finding(report, 'entity_embedded')?.samples).toEqual([{ x: 2, y: 0, z: 2 }])
+  })
+
+  it('`entity_embedded` 的反例：水里的船不算"砌进墙里"（水没有碰撞盒）', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 7, y: 0, z: 7 }, 'minecraft:water')
+    put(store, boat('e_1_1', 2.5, 0.5, 2.5))
+    expect(finding(lintStructure(store), 'entity_embedded')).toBeUndefined()
+  })
+
+  it('`entity_duplicate`：同格同类型两次报，同格不同类型不报', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 7, y: 0, z: 7 }, PLANKS)
+    put(store, boat('e_1_1', 2.5, 0.5, 2.5))
+    put(store, boat('e_1_2', 2.7, 0.5, 2.5)) // 同一格、同一类型 → 重复
+    put(store, { id: 'e_1_3', type: 'minecraft:armor_stand', x: 2.5, y: 0.5, z: 2.5, yaw: 0 })
+    put(store, boat('e_1_4', 4.5, 0.5, 4.5)) // 另一格
+
+    const report = lintStructure(store)
+    expect(finding(report, 'entity_duplicate')?.count).toBe(1)
+  })
+
+  it('`entity_outside`：分析范围之外的实体被如实报出来，且不扣分（info）', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 7, y: 0, z: 7 }, PLANKS)
+    put(store, boat('e_1_1', 20.5, 0.5, 20.5))
+    // 范围默认取**方块**内容包围盒，所以界外的实体落在这一条里
+    const report = lintStructure(store)
+    const found = finding(report, 'entity_outside')
+    expect(found?.count).toBe(1)
+    expect(found?.severity).toBe('info')
+    expect(report.score).toBe(100)
+  })
+
+  it('`blockentity_orphan`：方块换掉之后残留的方块实体是 error', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 7, y: 0, z: 7 }, PLANKS)
+    // 反例：kind 与方块相符
+    putBlockEntity(store, { x: 1, y: 1, z: 1, kind: 'minecraft:chest', data: { Items: [] } })
+    fill(store, { x: 1, y: 1, z: 1 }, { x: 1, y: 1, z: 1 }, 'minecraft:chest')
+    // 正例：直接往一块木板的位置塞一个 sign 的负载（正常路径进不来，只有坏数据会）
+    putBlockEntity(store, { x: 2, y: 0, z: 2, kind: 'minecraft:sign', data: { front_text: {} } })
+
+    const report = lintStructure(store)
+    const found = finding(report, 'blockentity_orphan')
+    expect(found?.severity).toBe('error')
+    expect(found?.count).toBe(1)
+    expect(found?.samples).toEqual([{ x: 2, y: 0, z: 2 }])
+    expect(report.score).toBeLessThan(100)
+  })
+
+  it('`blockentity_empty`：空负载是 info，不扣分', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 7, y: 0, z: 0 }, 'minecraft:chest')
+    putBlockEntity(store, { x: 1, y: 0, z: 0, kind: 'minecraft:chest', data: {} })
+    putBlockEntity(store, { x: 2, y: 0, z: 0, kind: 'minecraft:chest', data: { Items: [] } })
+
+    const report = lintStructure(store)
+    const found = finding(report, 'blockentity_empty')
+    expect(found?.severity).toBe('info')
+    expect(found?.count).toBe(1)
+    expect(report.score).toBe(100)
+  })
+
+  it('两条都**没有被报出来**时报告里没有这两个 id（不是"永远返回 0"）', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 3, y: 3, z: 3 }, BRICKS, 'hollow')
+    const report = lintStructure(store)
+    expect(report.findings.map((entry) => entry.id)).not.toContain('entity_embedded')
+    expect(report.findings.map((entry) => entry.id)).not.toContain('blockentity_empty')
+    expect(report.findings.map((entry) => entry.id)).not.toContain('entity_duplicate')
   })
 })

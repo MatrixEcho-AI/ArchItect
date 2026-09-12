@@ -25,7 +25,7 @@ type AnalyzeArgs = {
 export const analyzeStructureTool = defineTool<AnalyzeArgs>({
   name: 'analyze_structure',
   description:
-    'Building linter (read-only, does not change the world). Runs seven structural checks over the whole ' +
+    'Building linter (read-only, does not change the world). Runs twelve checks over the whole ' +
     'build or an optional region, and returns a score plus one entry per problem:\n' +
     '1. floating (error): a block with nothing supporting it anywhere below in its own column; ' +
     'blocks with no collision shape (torches, flowers, signs) are ignored because they are legitimately airborne.\n' +
@@ -38,7 +38,14 @@ export const analyzeStructureTool = defineTool<AnalyzeArgs>({
     '(intended doors and windows count as connections).\n' +
     '6. palette (info): how many distinct block types are used, and which types appear in fewer than 3 cells.\n' +
     '7. symmetry (info): how well the build mirrors across a plane (score 0..1).\n' +
-    'Severity matters: only `floating` is an error, and errors are what block completion — ' +
+    '8. blockentity_orphan (error): a chest/sign/banner payload sitting on a block that cannot carry it ' +
+    '(its block was replaced, or the cell is air) — the contents are unreachable and will not survive export.\n' +
+    '9. blockentity_empty (info): a block entity whose payload is entirely default; dropping it would be equivalent.\n' +
+    '10. entity_embedded (warn): an entity inside a block that has a collision shape. Boats in water are fine ' +
+    '(fluids have no shape); the usual cause is placing at the floor\'s own y instead of one above it.\n' +
+    '11. entity_duplicate (warn): more than one entity of the **same type** in one cell — the same placement done twice.\n' +
+    '12. entity_outside (info): entities outside the analysed region (the region defaults to block content bounds).\n' +
+    'Severity matters: `floating` and `blockentity_orphan` are errors, and errors are what block completion — ' +
     'warnings and info are advice. A passing analyze_structure (no errors) satisfies the completion gate. ' +
     'score is 0..100 and is 100 when there are no errors and no warnings. ' +
     'Sample coordinates are capped at 8 per finding, so the output stays cheap. ' +

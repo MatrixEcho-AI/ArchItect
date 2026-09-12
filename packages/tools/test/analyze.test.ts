@@ -188,6 +188,41 @@ describe('analyze_structure 工具', () => {
     expect(findings.find((entry) => entry.id === 'headroom')!.count).toBeGreaterThan(0)
   })
 
+  it('另外两层的问题也走同一条输出：实体嵌进方块、箱子负载挂在被换掉的方块上', async () => {
+    const ctx = makeContext()
+    buildCleanHut(ctx.store)
+    // 实体：中心落在小屋地板（y=0）里面
+    const placed = ctx.store.entities.set({
+      id: 'e_1_1',
+      type: 'minecraft:oak_boat',
+      x: 2.5,
+      y: 0.5,
+      z: 2.5,
+      yaw: 0,
+    })
+    ctx.store.commitSparse({ entities: [placed!] })
+    // 方块实体：往一块木板的位置塞一个告示牌的负载（正常路径进不来，只有坏数据会）
+    const orphan = ctx.store.blockEntities.set({
+      x: 1,
+      y: 0,
+      z: 1,
+      kind: 'minecraft:sign',
+      data: { front_text: {} },
+    })
+    ctx.store.commitSparse({ blockEntities: [orphan!] })
+
+    const result = await analyzeStructureTool.execute(ctx, {})
+    expect(result.ok).toBe(true)
+    const findings = result.data?.findings as Array<{ id: string; severity: string; count: number }>
+    expect(findings.map((entry) => entry.id)).toContain('entity_embedded')
+    expect(findings.find((entry) => entry.id === 'blockentity_orphan')?.severity).toBe('error')
+    // 英文摘要 + 进得了完成闸门（error 非零）
+    expect(result.summary).toContain('ERROR blockentity_orphan')
+    expect(result.summary).toContain('WARN entity_embedded')
+    expect(result.summary).not.toMatch(/[\u4e00-\u9fff]/)
+    expect(result.data?.errors as number).toBeGreaterThan(0)
+  })
+
   it('schema 校验复用同一份定义：未知参数会被拒绝并列出合法字段', () => {
     const validated = validateArgs(analyzeStructureTool.parameters, { nope: 1 })
     expect(validated.ok).toBe(false)

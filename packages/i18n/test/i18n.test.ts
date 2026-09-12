@@ -49,6 +49,39 @@ describe('文案资源表', () => {
     }
   })
 
+  /**
+   * **两条文案说的必须是同一件事——至少这一部分能机械查。**
+   *
+   * 只比键、占位符、非空是不够的：中文写"用 fill_line 做收分"而英文漏掉这句，
+   * 前面每一条都照样绿。实测真的出现过一次（中文的灯塔模板漏了这句，英文有）。
+   *
+   * 这份名单只收**下划线式的工具名**：它们不可能是英文散文里的词，所以比对不会
+   * 误报。`screenshot` / `slice` / `verify` / `measure` 这些两边都当普通词用过，
+   * 拿它们来比只会制造噪音。
+   */
+  it('**两条文案提到的工具名一致**', () => {
+    const SNAKE_TOOLS = [
+      'run_batch', 'fill_box', 'fill_line', 'fill_plane', 'copy_region', 'paste_region',
+      'replace_blocks', 'fix_states', 'place_block', 'get_block', 'get_region',
+      'search_blocks', 'analyze_structure', 'set_camera', 'update_notes', 'symmetrize',
+    ]
+    const pick = (table: Messages, path: string): string =>
+      path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)[key], table) as string
+    const mentioned = (text: string): string => SNAKE_TOOLS.filter((name) => text.includes(name)).sort().join(',')
+    for (const path of keyPaths(zhCN)) {
+      expect(mentioned(pick(enUS, path)), `${path} 里提到的工具名与中文不一致`).toBe(mentioned(pick(zhCN, path)))
+    }
+  })
+
+  it('**两条文案提到的 CLI 参数一致**', () => {
+    const pick = (table: Messages, path: string): string =>
+      path.split('.').reduce<unknown>((node, key) => (node as Record<string, unknown>)[key], table) as string
+    const flags = (text: string): string => [...text.matchAll(/--[a-z][a-z-]+/g)].map((m) => m[0]).sort().join(',')
+    for (const path of keyPaths(zhCN)) {
+      expect(flags(pick(enUS, path)), `${path} 里提到的参数与中文不一致`).toBe(flags(pick(zhCN, path)))
+    }
+  })
+
   it('satisfies 契约本身成立（编译期已校验，这里防回归）', () => {
     const contract: Messages = zhCN
     expect(contract.app.name).toBe('ArchItect')

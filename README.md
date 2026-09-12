@@ -82,7 +82,7 @@ pnpm architect build "造一座 9x9 的林间小屋，云杉木板墙、圆石�
 |------|------|
 | [`docs/development.md`](docs/development.md) | 参与开发：工程结构、常用命令、调试开关、打包 |
 | [`docs/mcai-format.md`](docs/mcai-format.md) | `.mcai` 格式规范（字节级） |
-| [`docs/tool-reference.md`](docs/tool-reference.md) | 24 个工具的完整参考——从 JSON Schema 生成，不会过期 |
+| [`docs/tool-reference.zh-CN.md`](docs/tool-reference.zh-CN.md) | 24 个工具的完整参考——从 JSON Schema 生成，不会过期 |
 | [`docs/prompt-library.md`](docs/prompt-library.md) | 建筑风格需求模板：住宅 / 公共建筑 / 结构装饰 / 修问题 |
 | [`examples/README.md`](examples/README.md) | 示例工程怎么看、怎么重新生成 |
 | [`plan.md`](plan.md) | 设计文档：世界模型、格式、渲染、工具语义、Agent 循环、决策记录 |

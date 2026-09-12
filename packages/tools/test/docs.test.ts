@@ -4,11 +4,11 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
-import { createDefaultRegistry } from '../src/index.js'
+import { createDefaultRegistry, DOC_LOCALES, DOC_PATHS } from '../src/index.js'
 import { diffToolReference, renderToolReference } from '../src/docs.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const referencePath = join(root, 'docs', 'tool-reference.md')
+const references = DOC_LOCALES.map((locale) => ({ locale, path: join(root, DOC_PATHS[locale]) }))
 
 /**
  * **工具文档不可能悄悄过期。**
@@ -22,13 +22,15 @@ const referencePath = join(root, 'docs', 'tool-reference.md')
 describe('工具参考文档与 schema 一致', () => {
   const registry = createDefaultRegistry()
 
-  it('**磁盘上的文档与生成结果逐字节一致**', () => {
-    const onDisk = readFileSync(referencePath, 'utf8')
-    const problems = diffToolReference(registry, onDisk)
-    expect(
-      problems,
-      `docs/tool-reference.md 已过期，跑 \`pnpm docs:gen\` 重新生成。\n  ${problems.join('\n  ')}`,
-    ).toEqual([])
+  it('**磁盘上的每一份文档都与生成结果逐字节一致**', () => {
+    for (const reference of references) {
+      const onDisk = readFileSync(reference.path, 'utf8')
+      const problems = diffToolReference(registry, onDisk, reference.locale)
+      expect(
+        problems,
+        `${DOC_PATHS[reference.locale]} 已过期，跑 \`pnpm docs:gen\` 重新生成。\n  ${problems.join('\n  ')}`,
+      ).toEqual([])
+    }
   })
 
   it('**每个工具都在文档里出现**（新增工具忘了生成文档会在这里挂）', () => {

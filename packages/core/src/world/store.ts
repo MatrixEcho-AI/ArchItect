@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto'
 
+import { BlockEntityStore } from '../entity/blockentities.js'
+import { EntityStore } from '../entity/store.js'
+import type { BlockEntityChange, EntityChange } from '../entity/types.js'
 import { normalizeBounds } from '../geometry/box.js'
 import { AIR_STATE_ID, Palette } from '../palette.js'
 import { loadRegistry } from '../registry.js'
@@ -58,6 +61,16 @@ export type WriteResult =
       bounds: Bounds | undefined
       /** 精确的方块变更。工具层据此生成 `EditOp` 记进事件日志。 */
       changeSet: ChangeSet
+      /**
+       * 这次写入**顺手剪掉的方块实体**（plan §18.2）。
+       *
+       * 它是从 `writeBlocks` 里回来的，而不是工具层收集的：方块实体是寄生的，
+       * 只有这里同时知道"哪个格子被改了"和"这个格子上原本挂着什么"。
+       * 放到工具层去收集的话，覆盖一个满箱子再撤销，箱子会回来、里面的东西没了。
+       *
+       * 永远是数组（可能是空的），失败分支里没有这个字段。
+       */
+      blockEntityChanges: BlockEntityChange[]
     }
   | { ok: false; reason: 'NEEDS_CONFIRM' | 'TOO_LARGE'; preview: WritePreview }
 
@@ -102,6 +115,17 @@ export class WorldStore {
   readonly volume: Bounds
   readonly minY: number
   readonly maxY: number
+
+  /**
+   * 世界的另外两层（plan §18.2）。与方块层**并列**，不是从属的：
+   * 这里是稀疏 map，那边是稠密格网 + palette。
+   *
+   * 放在 `WorldStore` 上的理由是三个"必须一起发生"：`contentHash()` 要覆盖三层、
+   * `clear()` / `restoreColumns()` 要清三层、replay 要同时应用三层。
+   * 分成三个对象让调用方自己拼的话，漏掉哪一个都是安静的数据丢失。
+   */
+  readonly blockEntities = new BlockEntityStore()
+  readonly entities = new EntityStore()
 
   private readonly columns = new Map<string, ChunkColumn>()
   /**
@@ -284,6 +308,7 @@ export class WorldStore {
 
     // 空操作不提交、不递增 revision。
     // revision 是截图缓存与 stale 判断的键，无谓地 +1 会让所有缓存失效。
+    const blockEntityChanges = this.pruneBlockEntities(changes)
     if (changes.length > 0) {
       this.applyChangeSet(changes)
       this.undoStack.push(changes)
@@ -299,7 +324,63 @@ export class WorldStore {
       clipped,
       bounds: changes.bounds(),
       changeSet: changes,
+      blockEntityChanges,
     }
+  }
+
+  /**
+   * 提交一笔**只有实体层**的写入：应用差分、把版本号推进一格、返回推进后的版本。
+   *
+   * 为什么需要它：`store.revision` 是"世界对应哪个版本"的**唯一游标**，而
+   * `EditLog.record` 会校验 `rev === worldRevision`（D-58）。方块写入由
+   * `writeBlocks` 在内部 `currentRevision++`，所以那条路自洽；而"只放一条船、
+   * 一个方块都不动"没有任何方块写入，版本号没人推——不补这一下，日志与游标
+   * 当场脱节，`record` 直接抛错。
+   *
+   * **一笔 op 只能推进一次版本。** 所以这个方法是给"只有实体"的写入用的；
+   * 将来若有一个工具同时改方块和实体，正确做法是**先**把实体落进
+   * `store.entities`、再调 `writeBlocks`（让方块那次推进版本），
+   * 然后把实体差分作为第三个参数交给 `EditLog.record` —— 一条 op、一个版本、三层。
+   *
+   * 空差分不推进版本、不产生 op，与 `writeBlocks` 对空操作的态度一致
+   * （revision 是截图缓存与 stale 判断的键，无谓地 +1 会让所有缓存失效）。
+   *
+   * `changes` 通常已经由工具层通过 `entities.set()` / `remove()` 落进去了
+   * （它需要那些方法的返回值来决定"到底有没有变"）。这里再应用一次是**幂等的**
+   * ——`applyChanges` 的语义就是"把世界置为 `after`"——好处是 replay 路径与
+   * 工具路径调的是同一个函数，而不是"一个 apply 一个 apply"。
+   */
+  commitEntities(changes: readonly EntityChange[]): number {
+    if (changes.length === 0) return this.currentRevision
+    this.entities.applyChanges(changes)
+    this.currentRevision++
+    return this.currentRevision
+  }
+
+  /**
+   * 剪掉被改动的格子上的方块实体。
+   *
+   * 规则刻意朴素：**格子被写就剪掉**，不管新方块是不是也带方块实体。
+   * 理由是原版语义——把箱子换成陷阱箱，里面的东西一样会掉出来；而"内容跟着走"
+   * 需要一个按类型判断的兼容表，那张表会随版本漂移，错一次的后果是把一份
+   * 来路不明的内容塞进另一个容器。
+   *
+   * 注意"格子被写"的判据是 `ChangeSet` 里真的有这一格——也就是 `from !== to`。
+   * 把同一个方块重写一遍不算改动，所以"反复 `place_block` 同一个箱子"不会
+   * 把箱子内容清空。
+   *
+   * **快路径不是优化，是不变慢的保证**：世界上没有方块实体时（绝大多数工程、
+   * 以及所有 2024 年以前的工程）直接返回 `[]`，一格都不查。有的话才逐格查索引，
+   * 而 `ChangeSet` 可能是上百万格。
+   */
+  private pruneBlockEntities(changes: ChangeSet): BlockEntityChange[] {
+    if (this.blockEntities.size === 0) return []
+    const out: BlockEntityChange[] = []
+    changes.forEach((x, y, z) => {
+      const change = this.blockEntities.removeAt(x, y, z)
+      if (change !== undefined) out.push(change)
+    })
+    return out
   }
 
   /**
@@ -316,6 +397,10 @@ export class WorldStore {
    *
    * 名字故意写得难听：它是给"写完立刻反悔"这类**局部**场景（脚本、测试、
    * 一次性试算）用的，不该出现在设计流程里。
+   *
+   * 它**只回退方块层**：方块实体与实体不进这个栈（那两层走 op 差分，
+   * 撤销是 `ReplaySession` 的事）。所以在一笔实体写入之后调它，回退的是
+   * 上一次**方块**写入——这正是"两个撤销不能混用"的又一个理由。
    */
   revertLastWrite(): number {
     const changeSet = this.undoStack.pop()
@@ -362,22 +447,30 @@ export class WorldStore {
     this.currentRevision = value
   }
 
-  /** 清空世界与历史。 */
+  /** 清空世界与历史。**三层一起清**——留一层下来，重放就会从一份脏基准开始。 */
   clear(): void {
     this.columns.clear()
     // 段记录必须一起清：留着的话"清空之后又建东西"会连旧段一起网格化，
     // 而 `restoreColumns` 正好是先 `clear()` 再整列写
     this.populatedSections.clear()
+    this.blockEntities.clear()
+    this.entities.clear()
     this.undoStack = []
     this.redoStack = []
     this.currentRevision = 0
   }
 
   /**
-   * 世界内容的确定性哈希（sha256）。
+   * 世界内容的确定性哈希（sha256）。**覆盖三层**（plan D-86）。
    *
-   * 遍历顺序固定为「chunk 列键排序 → y → z → x」，所以同样的世界必然得到同样的哈希。
-   * 这是 M2 的核心不变式的判据：**增量构建的结果必须与 replay 的结果哈希相等**。
+   * 遍历顺序固定为「chunk 列键排序 → y → z → x」，稀疏层各自按键排序，
+   * 所以同样的世界必然得到同样的哈希。这是 M2 的核心不变式的判据：
+   * **增量构建的结果必须与 replay 的结果哈希相等**。
+   *
+   * 为什么非要把稀疏层算进来：不算的话，"方块一模一样、实体不一样"会被
+   * `verifyReplay` **静默放过**——而它正是"重放坏掉了没有"的唯一判据。
+   * 那是一种最贵的失败：世界看起来是对的，只有某几个对象悄悄错位。
+   * 两层各用一个字节前缀（`entity:` / `blockentity:`），不会与方块那一段撞。
    *
    * 注意是全量扫描，只在保存 / 测试 / 校验时调用。
    */
@@ -410,6 +503,8 @@ export class WorldStore {
         }
       }
     }
+    this.blockEntities.hashInto(hash)
+    this.entities.hashInto(hash)
     return hash.digest('hex')
   }
 

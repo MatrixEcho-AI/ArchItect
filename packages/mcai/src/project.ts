@@ -1,4 +1,4 @@
-import { EditLog, loadRegistry, Palette, WorldStore } from '@architect/core'
+import { applyOp, EditLog, loadRegistry, Palette, WorldStore } from '@architect/core'
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 
 import {
@@ -301,8 +301,13 @@ export function openProject(bytes: Uint8Array): { project: McaiProject; store: W
   store.restoreColumns(project.snapshot.columns, project.manifest.baseRevision)
   // 快照已包含 rev <= baseRevision 的全部变更，只重放其后的部分。
   // （重复重放虽然幂等，但既白做功，又会掩盖 baseRevision 的语义错误。）
+  //
+  // 走 `applyOp` 而不是 `store.applyPatch`：一条 op 现在可以带三层负载
+  // （方块 / 方块实体 / 实体，plan §18.2）。只贴方块那一层的话，打开工程会
+  // 安静地少掉实体与方块实体——而少掉的东西不在任何计数里，只有当有人
+  // 拿 `contentHash()` 对拍时才看得出来。
   for (const op of project.log.upTo(project.manifest.revision).slice(project.manifest.baseRevision)) {
-    store.applyPatch(op.patch)
+    applyOp(store, op)
   }
   store.setRevision(project.manifest.revision)
   return { project, store }

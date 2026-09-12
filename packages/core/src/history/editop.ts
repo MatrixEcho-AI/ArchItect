@@ -1,3 +1,4 @@
+import type { BlockEntityChange, EntityChange } from '../entity/types.js'
 import type { ChangeSet } from '../world/changeset.js'
 
 /** 一次编辑的来源。 */
@@ -7,6 +8,16 @@ export interface EditOpResult {
   changed: number
   overwrittenNonAir: number
   clipped: number
+  /**
+   * 方块实体层与实体层的变更条数。
+   *
+   * **可选**：`.mcai` 里老 op 没有这两个字段，读回来就是 `undefined`，
+   * 语义等同于 0（那时候世界上根本没有这两层）。写成必填会让所有老工程
+   * 在 `decodeEditOp` 上翻车——而那种翻车发生在 `fromJSONL` 的 `try` 之外，
+   * 结果是**整份工程打不开**（见 plan §18.1 第 4 条）。
+   */
+  blockEntitiesChanged?: number
+  entitiesChanged?: number
 }
 
 /**
@@ -36,8 +47,50 @@ export interface EditOp {
   result: EditOpResult
   /** 同一次 LLM 响应里的多个 op 共享，用于**整轮回滚**。 */
   correlationId?: string
-  /** 精确的方块变更。 */
+  /**
+   * 精确的方块变更。
+   *
+   * **恒在，可以是空集。** 一条只放实体、不动方块的 op 也带一个长度为 0 的
+   * `patch`——因为旧读方在 `patch` 缺席时会直接抛错，而那个抛错会让
+   * **整份工程打不开**（plan D-78）。空集是那个约束下唯一安全的选择。
+   */
   patch: ChangeSet
+  /**
+   * 方块实体层的变更（键 = 位置）。
+   *
+   * 由 `WorldStore.writeBlocks` 产出，不是工具层——因为它是**寄生**的：
+   * `fill_box` 覆盖一个满箱子时，只有 store 知道那个格子上原本挂着东西。
+   * 放到工具层收集的话，撤销之后箱子回来、里面的东西没了，而且是安静地没（D-81）。
+   */
+  blockEntityChanges?: BlockEntityChange[]
+  /** 实体层的变更（键 = id）。由工具层产出——只有它知道自己放了什么。 */
+  entityChanges?: EntityChange[]
+}
+
+/**
+ * 一条 op 携带的全部负载。三个字段对应世界的三层（plan §18.2）。
+ *
+ * 打包成一个对象而不是给 `makeOp` 加三个位置参数：调用点只有一个（`EditLog.record`），
+ * 但读的人要一眼看出"这条 op 改了哪几层"。
+ */
+export interface OpPayload {
+  patch: ChangeSet
+  blockEntityChanges?: readonly BlockEntityChange[]
+  entityChanges?: readonly EntityChange[]
+}
+
+/**
+ * 一次写入里**工具主动写**的稀疏层差分（`EditLog.record` 的第三个参数）。
+ *
+ * 方块实体层只有一半在这里：**寄生剪除**那一半跟着 `WriteResult` 回来，
+ * 因为只有 `WorldStore` 知道哪个格子上原本挂着东西（D-81）。这里放的是另一半——
+ * 工具明确要写的东西：给箱子塞东西、给告示牌写字、往世界里放一条船。
+ *
+ * 实体层则**全在这里**：`WorldStore` 根本不知道工具放了什么。
+ */
+export interface SparseWrite {
+  entities?: readonly EntityChange[]
+  blockEntities?: readonly BlockEntityChange[]
 }
 
 export interface MakeOpOptions {
@@ -69,7 +122,7 @@ export function opId(rev: number): string {
 /** 由一次写入的结果构造 `EditOp`。 */
 export function makeOp(
   rev: number,
-  patch: ChangeSet,
+  payload: OpPayload,
   result: EditOpResult,
   options: MakeOpOptions,
 ): EditOp {
@@ -82,9 +135,17 @@ export function makeOp(
     tool: options.tool,
     args: options.args,
     result,
-    patch,
+    patch: payload.patch,
   }
   if (options.correlationId !== undefined) op.correlationId = options.correlationId
+  // 空的负载**不写成空数组**：`undefined` 表示"这一层没动"，而 `[]` 也会被
+  // 当成没动，但前者在 JSONL 里少一段字节。老 op 读回来也正好是 `undefined`。
+  if (payload.blockEntityChanges !== undefined && payload.blockEntityChanges.length > 0) {
+    op.blockEntityChanges = [...payload.blockEntityChanges]
+  }
+  if (payload.entityChanges !== undefined && payload.entityChanges.length > 0) {
+    op.entityChanges = [...payload.entityChanges]
+  }
   return op
 }
 
@@ -100,4 +161,8 @@ export interface EditOpRecord {
   result: EditOpResult
   correlationId?: string
   patch: string
+  /** 方块实体差分，纯 JSON（不是 base64）。老 op 没有这个字段。 */
+  blockEntityChanges?: BlockEntityChange[]
+  /** 实体差分，纯 JSON（不是 base64）。老 op 没有这个字段。 */
+  entityChanges?: EntityChange[]
 }

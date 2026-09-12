@@ -3,7 +3,7 @@ import { rm, rename, readFile, writeFile } from 'node:fs/promises'
 import { activeProvider, AgentSession, costTableFor, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
 import type { DiscoveryResult, LlmImage, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
-import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
+import { applyOp, forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
 import type { Bounds, Pos, SliceAxis, WorldStore } from '@architect/core'
 import {
   DATA_VERSION_1_21_4,
@@ -562,7 +562,10 @@ export class StudioService {
     const log = this.session.log
     store.setRevision(log.length)
     for (const op of draft.ops) {
-      store.applyPatch(op.patch)
+      // 走 `applyOp`：一条 op 可能带三层负载（方块 / 方块实体 / 实体）。
+      // 只贴方块那一层的话，崩溃恢复会安静地少掉实体——而 WAL 里的 op 是
+      // 走 `encodeEditOp` 写出去的，实体那一层本来就在里面，丢的只是应用这一步。
+      applyOp(store, op)
       log.append(op)
     }
     const last = draft.ops[draft.ops.length - 1]

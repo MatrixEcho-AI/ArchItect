@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { WorldStore } from '@architect/core'
+import type { PlacedBlockEntity } from '@architect/core'
 import { DATA_VERSION_1_21_4, exportSchematic } from '@architect/interop'
 import { openProject } from '@architect/mcai'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -338,6 +339,87 @@ describe('崩溃恢复：主进程真的把草稿接回世界', () => {
     expect(after.agentSession.store.revision).toBe(5)
     // 草稿已经进世界了：同一卷 WAL 不该被恢复第二次
     expect(reopened.pending()).toBeUndefined()
+  })
+
+  it('**WAL 里的实体与方块实体也要被恢复**（只贴方块那一层会安静地丢东西）', async () => {
+    const savePath = join(dir, 'entities.mcai')
+
+    // —— 崩溃之前那个进程 ——
+    const before = makeStudio(2)
+    const wal = make()
+    before.attachAutosave(wal)
+    await before.save(savePath)
+
+    const store = before.agentSession.store
+    const log = before.agentSession.log
+
+    // 一笔"放一条船"：只有实体层，一个方块都不动
+    const boatId = store.entities.allocateId(store.revision + 1)
+    const boat = store.entities.set({
+      id: boatId,
+      type: 'minecraft:oak_boat',
+      x: 8.5,
+      y: 1,
+      z: 8.5,
+      yaw: 4,
+    })!
+    log.record(
+      undefined,
+      {
+        tool: 'place_entity',
+        args: {},
+        source: 'llm',
+        actor: 'assistant',
+        worldRevision: store.commitEntities([boat]),
+      },
+      { entities: [boat] },
+    )
+
+    // 一笔"给桶里塞东西"：方块（走 WriteResult）+ 工具主动写的方块实体
+    const barrel = store.write((emit) => emit(12, 0, 0), store.palette.indexOf('minecraft:barrel'), {
+      confirm: true,
+    })
+    const contents: PlacedBlockEntity = {
+      x: 12,
+      y: 0,
+      z: 0,
+      kind: 'barrel',
+      data: { items: [{ slot: 0, id: 'minecraft:coal', count: 8 }] },
+    }
+    const contentsChange = store.blockEntities.set(contents)!
+    log.record(
+      barrel,
+      {
+        tool: 'edit_block_entity',
+        args: {},
+        source: 'llm',
+        actor: 'assistant',
+        worldRevision: store.revision,
+      },
+      { blockEntities: [contentsChange] },
+    )
+
+    expect(before.autosaveNow()).toBe(2)
+    const expectedHash = store.contentHash()
+    expect(store.entities.size).toBe(1)
+    expect(store.blockEntities.size).toBe(1)
+
+    // —— 崩溃之后 ——
+    const after = new StudioService({ plain: true })
+    const reopened = make()
+    after.attachAutosave(reopened)
+    const pending = after.recover()!
+    expect(pending).toMatchObject({ ops: 2, baseExists: true, basePath: savePath })
+    // 草稿一步都还没进去
+    expect(after.agentSession.store.entities.size).toBe(0)
+    expect(after.agentSession.store.blockEntities.size).toBe(0)
+
+    await after.applyRecovery()
+    expect(after.agentSession.store.entities.get(boatId)?.type).toBe('minecraft:oak_boat')
+    expect(after.agentSession.store.blockEntities.at({ x: 12, y: 0, z: 0 })).toEqual(contents)
+    // 哈希对拍才是重点：少掉这两层的话，方块计数完全看不出来
+    expect(after.agentSession.store.contentHash()).toBe(expectedHash)
+    expect(after.agentSession.store.revision).toBe(4)
   })
 
   it('丢掉草稿：世界不变、WAL 清空、待办消失', () => {

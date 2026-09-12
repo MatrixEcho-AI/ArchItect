@@ -68,6 +68,41 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
    */
   const viewRef = useRef('iso_ne')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /**
+   * 对话栏宽度。**可拖动**（用户要求）。
+   *
+   * 默认 330 是原来写死的值；上下界也是刻意的：低于 240 时那些工具卡片与代码块
+   * 挤得没法读，高于 720 时视口就剩不下多少了——而这是看建筑的那个窗口。
+   */
+  const [chatWidth, setChatWidth] = useState(330)
+  const CHAT_MIN = 240
+  const CHAT_MAX = 720
+  /** 拖动中的解绑函数（拖完要摘掉，不然每拖一次就多挂一对监听）。 */
+  const stopResize = useRef<(() => void) | undefined>(undefined)
+  /**
+   * 从**左边缘**拖：鼠标往左移 → 栏变宽，所以是 `startX - x`。
+   * 监听挂在 `window` 上而不是那根细条上：指针移出那 5px 之后拖动必须继续，
+   * 否则手一快就断了（这是拖拽条最经典的一个 bug）。
+   */
+  const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = chatWidth
+    const onMove = (move: PointerEvent): void => {
+      const next = startWidth - (move.clientX - startX)
+      setChatWidth(Math.min(CHAT_MAX, Math.max(CHAT_MIN, next)))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      stopResize.current = undefined
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    stopResize.current = onUp
+  }
+  // 组件卸载时摘掉可能还挂着的监听
+  useEffect(() => () => stopResize.current?.(), [])
   const [editingProvider, setEditingProvider] = useState<string | undefined>(undefined)
   const [opDetailRev, setOpDetailRev] = useState<number | undefined>(undefined)
   const [opDetail, setOpDetail] = useState<Awaited<ReturnType<typeof window.architect.opDetail>>>()
@@ -345,7 +380,19 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
   const seekFrame = useRef<number | undefined>(undefined)
   /** 用户/脚本正在拖时间线：这期间不要用状态覆盖滑杆的值。 */
   const scrubbing = useRef(false)
+  /**
+   * **模型正在输出时锁住时间线**。
+   *
+   * 用户的要求。理由不只是"别碍事"：模型这一轮是**一边想一边改**的（工具每写完一次
+   * 就已经进了 rev），用户把游标拖回去，它的下一笔写入就会从历史分叉、把后面那几步
+   * 截断丢掉——那是不可逆的。停在这里比事后解释"为什么少了几步"要好。
+   *
+   * 判据用 `chat.running`（这一轮真的在跑），不是 `behindTip`（游标本来就不在最新）：
+   * 后者是**用户自己**翻上去的，那时滑杆必须还能拖回来。
+   */
+  const timelineLocked = studio.chat?.running === true
   const onScrub = (revision: number): void => {
+    if (timelineLocked) return
     scrubbing.current = true
     if (seekFrame.current !== undefined) cancelAnimationFrame(seekFrame.current)
     seekFrame.current = requestAnimationFrame(() => {
@@ -656,7 +703,10 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
                 min={0}
                 max={studio.state?.totalOps ?? 0}
                 defaultValue={studio.state?.revision ?? 0}
-                disabled={(studio.state?.totalOps ?? 0) === 0}
+                /* 两件事都会禁用它：空世界没得拖；模型正在跑时按用户要求锁在最新
+                   ——见 `timelineLocked` 的注释（拖回去会让它下一笔截断历史）。 */
+                disabled={(studio.state?.totalOps ?? 0) === 0 || timelineLocked}
+                title={timelineLocked ? t('timeline.lockedWhileRunning') : undefined}
                 onChange={(event) => onScrub(Number(event.target.value))}
               />
               <span
@@ -675,7 +725,26 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
             </Flex>
           </Layout.Content>
 
-          <Layout.Sider width={330} theme="light" style={{ overflow: 'hidden' }}>
+          <Layout.Sider width={chatWidth} theme="light" style={{ overflow: 'hidden', position: 'relative' }}>
+            {/* 拖拽条：压在对话栏的**左边缘**上，5px 宽、光标改成左右拉。
+                放 `Sider` 里而不是两个 Sider 之间：夹在中间会让它在布局里占 5px，
+                而那 5px 会跟着 antd 的 flex 一起被压缩，拖起来会飘。 */}
+            <div
+              id="chat-resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('chat.resizePanel')}
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: 5,
+                cursor: 'col-resize',
+                zIndex: 2,
+              }}
+              onPointerDown={startResize}
+            />
             <ChatPanel
               chat={studio.chat}
               state={studio.state}

@@ -6,7 +6,13 @@
  *
  * ⚠️ 这个字符串属于 §9.2 Regime A 的**稳定缓存前缀**——逐字节固定，
  * **不许插时间戳、版本号、随机 id**，否则整个前缀缓存失效（缓存读便宜 50 倍）。
+ *
+ * 上面那条的**唯一例外**是 `SUGGESTED_DESIGN_NOTES_CHARS`：它是个编译期常量，
+ * 值变了前缀才会变（改它等于主动作废一次缓存，那是改文案的本意）。
+ * 反过来，**别把这个 import 换成任何运行时才算出来的值**。
  */
+
+import { SUGGESTED_DESIGN_NOTES_CHARS } from '@architect/tools'
 
 export interface PromptContext {
   /** 工区，形如 `(0,0,0) .. (63,63,63)`。 */
@@ -87,8 +93,8 @@ export function buildSystemPrompt(context: PromptContext): string {
     `[WORKFLOW] Plan -> build in stages -> after each stage, slice or verify to read back`,
     `         -> holistic review when complete -> revise.`,
     `12. At every milestone (plan settled, one stage finished, a constraint discovered), call`,
-    `    update_notes with your COMPLETE current plan in under 1200 characters. Older turns may be`,
-    `    dropped from your context, and the notes are the only thing that survives.`,
+    `    update_notes with your COMPLETE current plan in about ${SUGGESTED_DESIGN_NOTES_CHARS} characters.`,
+    `    Older turns may be dropped from your context, and the notes are the only thing that survives.`,
     `    Record decisions a later turn must not undo (facing, dimensions, materials).`,
     `[OUTPUT LANGUAGE] Reply to the user in Chinese. Keep tool arguments and coordinates in ASCII.`,
   )

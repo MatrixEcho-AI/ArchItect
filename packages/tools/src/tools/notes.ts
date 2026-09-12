@@ -17,8 +17,23 @@ import { defineTool, failure } from '../types.js'
  * 2. **替换而不是追加**。笔记是"当前计划"，不是流水账；追加会越滚越长，
  *    而它进的是**每个请求**的前缀（长笔记 = 每轮都多付一遍钱）。
  *    所以这里有硬上限，超了直接拒绝并给出当前长度，让模型自己删。
+ *
+ * ## 硬墙 5000，提示词里说"大约 2000"
+ *
+ * 这两个数**故意不一样**（用户要求的）：
+ *
+ * - 5000 是**校验**用的硬墙，只负责挡住"模型把整段对话抄进笔记"这种失控。
+ *   它不该在模型正常写计划时把它顶回来——一次 `INVALID_ARGS` 要花一整轮去修，
+ *   而修的结果往往是**砍掉真正有用的那条约束**。
+ * - 2000 是**提示词里的期望值**。告诉模型"上限 5000"，它就会写到 5000：模型对显式
+ *   数字的服从度很高，而这个长度进每一轮的前缀，长笔记就是每轮都多付钱。
+ *
+ * 软目标负责省 token，硬墙负责兜底。改这两个数之前先想清楚你动的是哪一个。
  */
-export const MAX_DESIGN_NOTES_CHARS = 1_200
+export const MAX_DESIGN_NOTES_CHARS = 5_000
+
+/** 提示词里告诉模型的期望长度（**软目标**，不是校验）。见上面那段。 */
+export const SUGGESTED_DESIGN_NOTES_CHARS = 2_000
 
 export const updateNotesTool = defineTool<{ notes: string }>({
   name: 'update_notes',
@@ -28,8 +43,9 @@ export const updateNotesTool = defineTool<{ notes: string }>({
     'REPLACE semantics: you always send the complete, up-to-date notes — not a diff and not an append.\n' +
     'Good notes: what is already built, the dimensions and materials you settled on, what is next, ' +
     "and any decision a later turn must not undo (e.g. 'door faces south, keep the 2-block clearance').\n" +
-    `Call it at milestones, not every turn. Hard limit ${MAX_DESIGN_NOTES_CHARS} characters; ` +
-    'send an empty string to clear the notes.',
+    `Call it at milestones, not every turn. Aim for about ${SUGGESTED_DESIGN_NOTES_CHARS} characters; ` +
+    `anything over ${MAX_DESIGN_NOTES_CHARS} is rejected. ` +
+    'Send an empty string to clear the notes.',
   parameters: obj({ notes: str('The complete notes, replacing whatever was stored before. Empty string clears them.') }, [
     'notes',
   ]),

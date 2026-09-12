@@ -127,6 +127,7 @@ export const enUS = {
     attachImage: 'Insert image',
     grabViewport: 'Capture viewport',
     pastedImage: 'Pasted image',
+    resizePanel: 'Drag to resize the chat panel',
     attachRemove: 'Remove this image',
     attachCount: '{{count}} image(s) attached',
     attachRejected: '{{count}} file(s) could not be added: {{detail}}',
@@ -156,6 +157,7 @@ export const enUS = {
     latest: 'Jump to latest',
     revision: 'rev {{rev}} / {{total}}',
     drag: 'Drag to preview any historical revision',
+    lockedWhileRunning: 'The model is editing this world, so the timeline stays on the latest revision (dragging back would let its next edit overwrite the later steps)',
   },
   verify: {
     pass: 'pass',

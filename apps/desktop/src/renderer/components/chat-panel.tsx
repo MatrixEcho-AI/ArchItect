@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Flex, Input, Tooltip } from 'antd'
+import { Alert, Button, Flex, Input, Modal, Tooltip } from 'antd'
 import { DownOutlined, CameraOutlined, PictureOutlined, RightOutlined } from '@ant-design/icons'
 import { t } from '@architect/i18n'
 
@@ -642,11 +642,7 @@ export function Attachment({ id, alt }: { id: string; alt: string }): React.JSX.
   }, [id])
 
   if (url === undefined) return <></>
-  return (
-    <Tooltip title={alt}>
-      <img className="shot" src={url} alt={alt} />
-    </Tooltip>
-  )
+  return <ZoomableImage src={url} alt={alt} className="shot" />
 }
 
 /**
@@ -720,6 +716,37 @@ export function Collapsible({
 }
 
 /**
+ * **一张图 + 点开进模态框**（用户的要求：原来那套"点一下放大到 200%"换成模态框）。
+ *
+ * 为什么原来那套不够：200% 在 330px 宽的栏里等于把图裁掉一半，而截图要看的是整体
+ * 构图与比例；而且放大后那一列被撑高，滚动位置跟着跳。模态框里有整个窗口的宽度。
+ *
+ * 缩略图与模态图**是同一个 objectURL**，不重复解码、不重复建一份。
+ */
+function ZoomableImage({
+  src,
+  alt,
+  className,
+}: {
+  src: string
+  alt: string
+  className: string
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Tooltip title={alt}>
+        <img className={className} src={src} alt={alt} onClick={() => setOpen(true)} />
+      </Tooltip>
+      <Modal open={open} onCancel={() => setOpen(false)} footer={null} width="80vw" centered>
+        {/* 模态里的图**不再套 Tooltip**：整张图就在眼前，浮层文案没有意义了 */}
+        <img className="shot-modal" src={src} alt={alt} />
+      </Modal>
+    </>
+  )
+}
+
+/**
  * 对话里的截图。
  *
  * blob URL 按 `imageId` 缓存：同一张图不重复走 IPC，也不重复建 objectURL。
@@ -729,7 +756,6 @@ const imageUrls = new Map<string, string>()
 
 function Shot({ id, alt }: { id: string; alt: string }): React.JSX.Element {
   const [url, setUrl] = useState<string | undefined>(() => imageUrls.get(id))
-  const [zoom, setZoom] = useState(false)
 
   const load = useCallback(async () => {
     if (imageUrls.has(id)) return
@@ -751,16 +777,7 @@ function Shot({ id, alt }: { id: string; alt: string }): React.JSX.Element {
   }, [load])
 
   if (url === undefined) return <></>
-  return (
-    <Tooltip title={alt}>
-      <img
-        className={zoom ? 'shot zoom' : 'shot'}
-        src={url}
-        alt={alt}
-        onClick={() => setZoom((value) => !value)}
-      />
-    </Tooltip>
-  )
+  return <ZoomableImage src={url} alt={alt} className="shot" />
 }
 
 /**

@@ -569,8 +569,19 @@ function registerIpc(): void {
         // 渲染进程里那些**只有 DOM 能回答**的问题：时间线拖得动吗、编辑记录点得开吗、
         // 模板填得进输入框吗。以前这些全靠人肉看，现在一条条断言出来。
         const shooter = mainWindow
+        // **注入脚本里的异常要看得见。** 不接这一层的话，渲染进程里任何一处抛出都只会
+        // 变成主进程这边一句"渲染进程没有回报"+ 整条冒烟超时，而真正的原因（哪一行）
+        // 一个字都看不到。这个坑踩过一次：为了找一行 `undefined` 花了四轮。
         const checks =
-          shooter === undefined || shooter.isDestroyed() ? [] : await assertGuiPanels(shooter)
+          shooter === undefined || shooter.isDestroyed()
+            ? []
+            : await assertGuiPanels(shooter).catch((error: unknown): GuiCheck[] => [
+                {
+                  name: 'gui-panels-crashed',
+                  ok: false,
+                  detail: error instanceof Error ? error.message : String(error),
+                },
+              ])
         let failed = !result.ok
         for (const check of checks) {
           process.stdout.write(`[gui-smoke] ${check.ok ? '✓' : '✗'} ${check.name}: ${check.detail}\n`)
@@ -713,6 +724,37 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       labelChanged,
       '"' + before + '" → "' + (label ? label.textContent : '?') + '"（拖到 rev ' + target +
         '；读到的是 ' + shape + '）',
+    );
+
+    /**
+     * **对话栏的拖拽条在**，而且真能改宽度。
+     *
+     * 合成一次 pointerdown/pointermove/pointerup 走完整的拖动路径：这条不需要任何
+     * 原生对话框，所以是能诚实测的。判据是 Sider 的宽度真的变了——只断言
+     * "元素在"的话，把 onPointerDown 删掉它照样绿。
+     *
+     * ⚠️ **必须 waitFor 轮询，不能派发完立刻读**：React 的状态更新是异步的，
+     * 派发完那一刻 DOM 上还是旧宽度（实测读到的仍是 330，而 Sider 的 inline style
+     * 已经是 420 了）。这与"拖动没生效"长得一模一样，只是差一帧。
+     */
+    const resizer = document.querySelector('#chat-resizer');
+    const sider = resizer === null ? null : resizer.closest('.ant-layout-sider');
+    // ⚠️ 这里**不能写 TS 类型标注**：整段脚本是拼成字符串发给渲染进程当普通 JS 跑的，
+    // 一个 ": number" 就会让 executeJavaScript 直接解析失败，而报出来的只有一句
+    // "Script failed to execute" —— 找这个花了四轮。这段里的每一行都必须是合法 JS。
+    const siderWidth = () => (sider === null ? 0 : Math.round(sider.getBoundingClientRect().width));
+    const widthBefore = siderWidth();
+    if (resizer !== null) {
+      const startX = resizer.getBoundingClientRect().left + 2;
+      resizer.dispatchEvent(new PointerEvent('pointerdown', { clientX: startX, bubbles: true }));
+      window.dispatchEvent(new PointerEvent('pointermove', { clientX: startX - 90, bubbles: true }));
+      window.dispatchEvent(new PointerEvent('pointerup', { clientX: startX - 90, bubbles: true }));
+    }
+    const grew = await waitFor(() => siderWidth() > widthBefore + 60, 1000);
+    check(
+      'chat-resizer',
+      resizer !== null && grew,
+      resizer === null ? '没有 #chat-resizer' : '宽 ' + widthBefore + ' → ' + siderWidth() + '（往左拖 90px）',
     );
 
     const items = document.querySelectorAll('#ops li.op');

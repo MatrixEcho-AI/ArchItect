@@ -143,6 +143,26 @@ export type StudioEvent =
   | { type: 'chat'; view: ChatView }
   | { type: 'settings'; view: SettingsView }
   | { type: 'state'; state: unknown }
+  /**
+   * **一轮跑动中的轻量进度**：工具刚写完，世界版本前进了。
+   *
+   * 为什么不直接推一份 `state`：`StudioService.state()` 要 `measure()` 一遍全部方块
+   * （为了统计数与直方图），那是 O(方块数)。一次 `run_batch` 能写几千格、一轮里
+   * 又能有十几次工具调用——每次都全量数一遍，只为了让界面上的 rev 数字动一格。
+   *
+   * 所以这条只带**增量**：rev、op 数、以及新出现的那几条 op（左栏那份记录要能立刻
+   * 长出来）。统计数、包围盒、直方图仍然在一轮结束时由 `state` 给全量。
+   */
+  | { type: 'revision'; revision: number; totalOps: number; behindTip: boolean; ops: RevisionOp[] }
+
+/** `revision` 事件里那一条 op（与 `StudioState.ops` 同形）。 */
+export interface RevisionOp {
+  rev: number
+  tool: string
+  changed: number
+  ts: string
+  source: string
+}
 
 /**
  * **本轮要发给模型的东西**：一句话，外加用户随这句话给的图。
@@ -260,6 +280,7 @@ export class ChatController {
   private runner: ChatRunner
   private emit: (event: StudioEvent) => void = () => {}
   private afterRun: () => void = () => {}
+  private afterTool: () => void = () => {}
 
   constructor(
     options: ChatOptions,
@@ -281,6 +302,18 @@ export class ChatController {
   /** 一轮结束后回调（StudioService 用它刷新世界状态快照）。 */
   onAfterRun(listener: () => void): void {
     this.afterRun = listener
+  }
+
+  /**
+   * **每一次工具返回之后**的回调，无论那一次有没有改动世界。
+   *
+   * 宿主拿它做"改了就立刻进 rev"：不等整轮结束，工具每写完一次就把新版本推给界面。
+   * 判据（有没有真的改动）留给宿主——它才拿得到 `EditLog`，而这里只看得到工具名与
+   * `ok`，拿工具名去猜"这个工具是不是写操作"迟早会错（`run_batch` / `fill_line` /
+   * 以后新加的工具都会漏）。
+   */
+  onToolResult(listener: () => void): void {
+    this.afterTool = listener
   }
 
   // ── 设置 ────────────────────────────────────────────────────────────────────
@@ -1021,6 +1054,8 @@ export class ChatController {
     }
     if (streaming) this.emitStream()
     else this.flushView()
+    // 工具刚返回：**立刻**把可能前进的世界版本推出去（宿主自己判断有没有改动）
+    if (event.type === 'tool_result') this.afterTool()
   }
 
   private lastToolMessage(name: string): ChatMessageView | undefined {

@@ -291,10 +291,22 @@ body,
   image-rendering: pixelated;
 }
 
-.messages img.shot.zoom {
-  width: 200%;
-  max-width: none;
-  cursor: zoom-out;
+/*
+ * 模态框里那张图。
+ *
+ * `.zoom` 那套（点一下放大到 200%）已经删掉了——用户要的是模态框：200% 在 330px
+ * 的栏里等于把图裁掉一半，而截图要看的恰恰是整体构图。这里给的是整个窗口宽度。
+ *
+ * **必须同时限宽和限高**：只限宽的话一张竖长的图会把模态框顶出屏幕，
+ * 底部的翻页/关闭就够不着了。
+ */
+.shot-modal {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  max-height: 78vh;
+  object-fit: contain;
+  image-rendering: pixelated;
 }
 
 /* ── 隐藏（不是删除） ────────────────────────────────────────────────────────

@@ -129,6 +129,8 @@ export const zhCN = {
     attachImage: '插入图片',
     grabViewport: '采集视口',
     pastedImage: '粘贴的图片',
+    /** 对话栏左边缘那根拖拽条（无障碍与自动化靠它认元素）。 */
+    resizePanel: '拖动调整对话栏宽度',
     attachRemove: '移除这张图',
     attachCount: '已附 {{count}} 张图',
     attachRejected: '有 {{count}} 个文件没能加进来：{{detail}}',
@@ -158,6 +160,8 @@ export const zhCN = {
     latest: '回到最新',
     revision: 'rev {{rev}} / {{total}}',
     drag: '拖动可预览任意历史版本',
+    /** 模型正在跑时时间线被锁住。**说清为什么**，不然用户只会觉得滑杆坏了。 */
+    lockedWhileRunning: '模型正在改动这个世界，时间线先锁在最新版本（拖回去会让它的下一笔覆盖掉后面的步骤）',
   },
   verify: {
     pass: '通过',

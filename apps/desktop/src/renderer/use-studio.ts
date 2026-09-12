@@ -88,6 +88,25 @@ export function useStudio(onStateEvent: (next: StudioState) => void): StudioStor
       else if (event.type === 'state') {
         setStateValue(event.state)
         stateEvent.current(event.state)
+      } else if (event.type === 'revision') {
+        /**
+         * **一轮跑动中的增量**：工具刚写完，世界版本前进了。
+         *
+         * 只把会变的那几项合进现有快照，**其余原样留着**——统计数、包围盒、直方图
+         * 那条事件里没有（全量算一次要遍历所有方块，见主进程 `StudioEvent` 的注释），
+         * 硬编一个默认值只会让界面显示一个假的 0。一轮结束时的 `state` 会把它们补齐。
+         */
+        setStateValue((current) =>
+          current === undefined
+            ? current
+            : {
+                ...current,
+                revision: event.revision,
+                totalOps: event.totalOps,
+                behindTip: event.behindTip,
+                ops: event.ops,
+              },
+        )
       }
     })
     return () => {

@@ -413,7 +413,7 @@ reset:true clears it and goes back to the default preset.
 Write down your design plan so it survives context trimming. The notes become part of the system prompt from the NEXT turn onwards, so keep them short and current.
 REPLACE semantics: you always send the complete, up-to-date notes — not a diff and not an append.
 Good notes: what is already built, the dimensions and materials you settled on, what is next, and any decision a later turn must not undo (e.g. 'door faces south, keep the 2-block clearance').
-Call it at milestones, not every turn. Hard limit 1200 characters; send an empty string to clear the notes.
+Call it at milestones, not every turn. Aim for about 2000 characters; anything over 5000 is rejected. Send an empty string to clear the notes.
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |

@@ -205,6 +205,14 @@ export type StudioEvent =
   | { type: 'chat'; view: ChatView }
   | { type: 'settings'; view: SettingsView }
   | { type: 'state'; state: StudioState }
+  /** 一轮跑动中的轻量进度（工具刚写完）。字段与 `StudioState` 的同名项一致。 */
+  | {
+      type: 'revision'
+      revision: number
+      totalOps: number
+      behindTip: boolean
+      ops: StudioState['ops']
+    }
 
 // ── preload 暴露的桥 ──────────────────────────────────────────────────────────
 

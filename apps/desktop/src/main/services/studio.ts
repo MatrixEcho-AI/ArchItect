@@ -293,6 +293,12 @@ export class StudioService {
   /** 交互视口的网格缓存，见 `viewport()`。revision 一变就失效。 */
   private meshCache?: { revision: number; geometry: WorldGeometry }
   private projectPath?: string
+  /**
+   * 上一次推给界面的 op 条数（`revision` 事件用）。
+   *
+   * `undefined` = 这一轮还没推过：那时**不比较**，直接把当下当基准。见 `onToolResult`。
+   */
+  private pushedOps?: number
   private projectName = t('desktop.untitledProject')
   readonly chat: ChatController
   private emit: (event: StudioEvent) => void = () => {}
@@ -371,8 +377,56 @@ export class StudioService {
     this.chat.onAfterRun(() => {
       // 一轮结束时把这一步的 op 落进 WAL：agent 停下来时状态一定是齐的
       this.autosaveNow()
+      // 全量 state 已经把这些 op 带过去了，基准一起跟上——
+      // 不跟的话下一轮第一次工具调用会推一条内容没变的 `revision`，界面白闪一下
+      this.pushedOps = this.session.log.length
       this.emit({ type: 'state', state: this.state() })
     })
+    /**
+     * **工具每写完一次，就把新版本推给界面**（不再等整轮结束）。
+     *
+     * 用户的原话："模型在调用工具之后请即刻在 rev 里添加上，而不是等到模型完成整个
+     * 过程一次性全部加进来。" 一轮里模型可能连着调十几次工具，全都挤在最后那一下
+     * 出现，中间那段时间界面看着就像什么都没发生——而世界其实一直在变。
+     *
+     * 判据是 `EditLog` 的长度**有没有真的变**，不是"这个工具看起来像写操作"：
+     * `verify` 之类的读操作也会走这条回调，而拿工具名去猜迟早会错（`run_batch` /
+     * `fill_line` / 将来新加的工具都会漏）。写过没写过，日志最清楚。
+     *
+     * 这里**只发轻量的 `revision`**，不发完整 `state`——后者要 `measure()` 一遍全部
+     * 方块，而一次 `run_batch` 就能写几千格。统计数、直方图、包围盒由一轮结束时的
+     * `state` 给全量。见 `StudioEvent` 里 `revision` 那一段。
+     */
+    this.chat.onToolResult(() => {
+      const total = this.session.log.length
+      if (this.pushedOps !== undefined && total === this.pushedOps) return
+      this.pushedOps = total
+      this.emit({ type: 'revision', ...this.revisionProgress() })
+    })
+  }
+
+  /** `revision` 事件的内容：版本号、op 数、以及最近那几条 op（左栏记录要立刻长出来）。 */
+  private revisionProgress(): {
+    revision: number
+    totalOps: number
+    behindTip: boolean
+    ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
+  } {
+    return {
+      revision: this.session.store.revision,
+      totalOps: this.session.log.length,
+      behindTip: !this.session.history.atTip,
+      ops: this.session.log
+        .all()
+        .slice(-50)
+        .map((op) => ({
+          rev: op.rev,
+          tool: op.tool,
+          changed: op.result.changed,
+          ts: op.ts,
+          source: op.source,
+        })),
+    }
   }
 
   /** 接上自动保存。省略时（测试里）不做任何写盘。 */

@@ -1206,3 +1206,125 @@ describe('用户附图：这一轮发得出去、下一轮还在', () => {
     expect(toolTurn?.content).toContain('1 screenshot(s) omitted')
   })
 })
+
+/**
+ * **工具每写完一次就进 rev**（用户要求：不要等整轮一次性加进来）。
+ *
+ * 这里**驱动真的那根钩子**（`ChatController.onToolResult`），而不是另写一份等价逻辑：
+ * 后者只能证明我抄的那份对，证明不了 `StudioService` 里那份对。钩子由
+ * `ChatController.handle` 在 `tool_result` 事件上触发；直接调它等价于"一次工具刚返回"，
+ * 而世界那边已经真的被 `runAgent` 改过了。
+ */
+describe('工具写完即刻推 revision', () => {
+  /** 一个跑过一轮的 `StudioService`，以及它推出来的事件。 */
+  async function afterRun(
+    steps: ScriptedStep[],
+    goal: string,
+  ): Promise<{ service: StudioService; events: Array<{ type: string; [key: string]: unknown }> }> {
+    const service = new StudioService({ plain: true })
+    const events: Array<{ type: string; [key: string]: unknown }> = []
+    service.onEvent((event) => events.push(event as { type: string }))
+    const { runAgent } = await import('@architect/agent')
+    await runAgent(
+      {
+        provider: new ScriptedProvider(steps),
+        registry: service.agentSession.registry,
+        ctx: service.agentSession.ctx,
+        system: service.agentSession.buildSystem(),
+        stateLine: service.agentSession.buildStateLine(),
+      },
+      goal,
+    )
+    return { service, events }
+  }
+
+  /** 触发那根钩子 = 主进程刚收到一次 `tool_result`。 */
+  const toolReturned = (service: StudioService): void => {
+    ;(service.chat as unknown as { afterTool: () => void }).afterTool()
+  }
+  const roundEnded = (service: StudioService): void => {
+    ;(service.chat as unknown as { afterRun: () => void }).afterRun()
+  }
+
+  const revisions = (
+    events: Array<{ type: string; [key: string]: unknown }>,
+  ): Array<{ revision: number; totalOps: number; tools: string[] }> =>
+    events
+      .filter((event) => event.type === 'revision')
+      .map((event) => ({
+        revision: event['revision'] as number,
+        totalOps: event['totalOps'] as number,
+        tools: (event['ops'] as Array<{ tool: string }>).map((op) => op.tool),
+      }))
+
+  it('写一格推一条，而 `verify`（只读）不推', async () => {
+    const { service, events } = await afterRun(
+      scriptFromCalls([
+        ['fill_box', { from: [0, 0, 0], to: [3, 0, 3], block: 'minecraft:stone' }],
+        ['verify', { claims: [{ check: 'block_at', pos: [3, 0, 3], expect: 'minecraft:stone' }] }],
+      ]),
+      '铺一层 4x4 石地板',
+    )
+    // 世界确实已经改了（两条 op：fill_box + verify 的读回不写日志）
+    expect(service.agentSession.log.length).toBe(1)
+
+    toolReturned(service) // fill_box 刚返回
+    toolReturned(service) // verify 刚返回：日志没变，不该推
+    const pushed = revisions(events)
+    expect(pushed).toHaveLength(1)
+    expect(pushed[0]).toMatchObject({ revision: 1, totalOps: 1, tools: ['fill_box'] })
+  })
+
+  it('**全量 state 之后基准要跟上**，否则下一轮会推一条内容没变的 revision', async () => {
+    const { service, events } = await afterRun(
+      scriptFromCalls([['fill_box', { from: [0, 0, 0], to: [0, 0, 0], block: 'minecraft:stone' }]]),
+      '放一块石头',
+    )
+    toolReturned(service)
+    expect(revisions(events)).toHaveLength(1)
+    // 一轮结束：全量 state 已经把这些 op 带过去了
+    roundEnded(service)
+    // 再来一次「工具返回」，日志长度没变 → 不该再推
+    toolReturned(service)
+    expect(revisions(events)).toHaveLength(1)
+  })
+
+  it('**两处写入中间就各推一条**，不是最后一次性给', async () => {
+    const service = new StudioService({ plain: true })
+    /**
+     * 记录每条 `revision` 到达时日志**已经**有多长。
+     *
+     * 这就是原 bug 的判据：原来只有一轮结束才推一次，所以第一条 `revision` 到达时
+     * 日志已经写满两步（`[2, 2]`）；现在是每步各推一条，第一条到达时只写了一步（`[1]`）。
+     * 只数条数是抓不住这个区别的——收尾那次全量推送也会让条数看起来对。
+     */
+    const logAtPush: number[] = []
+    service.onEvent((event) => {
+      if (event.type === 'revision') {
+        logAtPush.push((event as unknown as { totalOps: number }).totalOps)
+      }
+    })
+    const handle = (service.chat as unknown as { handle: (e: unknown) => void }).handle.bind(
+      service.chat,
+    )
+    const { runAgent } = await import('@architect/agent')
+    await runAgent(
+      {
+        provider: new ScriptedProvider(
+          scriptFromCalls([
+            ['fill_box', { from: [0, 0, 0], to: [1, 0, 1], block: 'minecraft:stone' }],
+            ['fill_box', { from: [3, 0, 0], to: [4, 0, 1], block: 'minecraft:oak_planks' }],
+          ]),
+        ),
+        registry: service.agentSession.registry,
+        ctx: service.agentSession.ctx,
+        system: service.agentSession.buildSystem(),
+        stateLine: service.agentSession.buildStateLine(),
+        // **事件照真实那条路走一遍**：runner 拿到 onEvent 就是这么转给 ChatController 的
+        onEvent: (event) => handle(event),
+      },
+      '分两处铺地板',
+    )
+    expect(logAtPush).toEqual([1, 2])
+  })
+})

@@ -6,7 +6,7 @@ import {
   StateError,
   symmetrize,
 } from '@architect/core'
-import type { WorldStore, WriteMode, WriteResult } from '@architect/core'
+import type { OkWriteResult, SparseWrite, WorldStore, WriteMode, WriteResult } from '@architect/core'
 
 import { arr, blockRef, bool, int, num, obj, vec2, vec3 } from '../schema.js'
 import { defineTool, failure } from '../types.js'
@@ -29,6 +29,14 @@ export interface EditPlan {
   /** 默认方块在调色板里的下标。`mode === 'destroy'` 时无意义。 */
   blockIndex: number
   mode: WriteMode
+  /**
+   * 稀疏层的意图（实体与方块实体），**在方块写入之后**执行。
+   *
+   * 参数是这次写入的结果，因为它几乎总是取决于它："哪些格子真的被写了"
+   * （`mode: keep` 会跳过占着的格子、写同一份内容不算改动）决定了搬过来的
+   * 方块实体该放在哪。批处理把多个计划攒起来一起跑，所以这个字段是可选的。
+   */
+  sparse?: (write: OkWriteResult) => SparseWrite
 }
 
 /**
@@ -36,6 +44,10 @@ export interface EditPlan {
  *
  * 走 `writeBlocks` 而不是 `write`，是因为**粘贴**这类操作每一格的方块都不同，
  * 而 `write` 只接受一个方块下标。单材质操作把 `blockIndex` 当默认值用，行为完全一样。
+ *
+ * 有 `sparse` 时改走 `writeLayered`：**一笔 op 一个版本、三层一起落**
+ * （plan D-87）。顺序不能反——方块那一步会顺手剪掉被写格子上的旧方块实体，
+ * 而搬过来的新方块实体必须落在剪除之后。
  */
 export function commitPlan(
   ctx: ToolContext,
@@ -44,15 +56,35 @@ export function commitPlan(
   plan: EditPlan,
   confirm: boolean,
 ): ToolResult {
-  const result = ctx.store.writeBlocks((emit) => plan.cells((x, y, z, blockIndex) => emit(x, y, z, blockIndex ?? plan.blockIndex)), {
-    mode: plan.mode,
-    confirm,
-  })
-  return writeResultToTool(ctx, tool, args, result)
+  const produce = (
+    emit: (x: number, y: number, z: number, blockIndex: number) => void,
+  ): void => plan.cells((x, y, z, blockIndex) => emit(x, y, z, blockIndex ?? plan.blockIndex))
+  const options = { mode: plan.mode, confirm }
+  if (plan.sparse === undefined) {
+    return writeResultToTool(ctx, tool, args, ctx.store.writeBlocks(produce, options))
+  }
+  const result = ctx.store.writeLayered(produce, plan.sparse, options)
+  return writeResultToTool(ctx, tool, args, result, result.ok ? result.sparse : undefined)
 }
 
-/** 把校验过的 `[x,y,z]` 转成 `Pos`。 */
-export function toPos(value: unknown, field: string): { x: number; y: number; z: number } {
+/**
+ * 稀疏层改动的摘要句。
+ *
+ * **必须出现在工具返回里**：实体与方块实体在界面上是"看不见的数量"，
+ * 只报 `changed N cells` 的话，"复制了一座仓库但箱子是空的"这种事故
+ * 从工具的返回里完全读不出来。`run_batch` 也用它。
+ */
+export function sparseSummary(sparse: SparseWrite | undefined): string {
+  const entities = sparse?.entities?.length ?? 0
+  const blockEntities = sparse?.blockEntities?.length ?? 0
+  if (entities === 0 && blockEntities === 0) return ''
+  const parts: string[] = []
+  if (entities > 0) parts.push(`${entities} entity change(s)`)
+  if (blockEntities > 0) parts.push(`${blockEntities} block-entity change(s)`)
+  return ` Plus ${parts.join(' and ')}.`
+}
+
+/** 把校验过的 `[x,y,z]` 转成 `Pos`。 */export function toPos(value: unknown, field: string): { x: number; y: number; z: number } {
   if (!Array.isArray(value) || value.length !== 3) {
     throw new Error(`${field} must be [x,y,z]`)
   }
@@ -71,6 +103,7 @@ export function writeResultToTool(
   tool: string,
   args: unknown,
   result: WriteResult,
+  sparse?: SparseWrite,
 ): ToolResult {
   if (!result.ok) {
     if (result.reason === 'NEEDS_CONFIRM') {
@@ -99,7 +132,7 @@ export function writeResultToTool(
     )
   }
 
-  ctx.record(tool, args, result)
+  ctx.record(tool, args, result, sparse)
   const bounds = result.bounds
   const where =
     bounds === undefined
@@ -114,6 +147,7 @@ export function writeResultToTool(
     ok: true,
     summary:
       `changed ${result.changed} cells, bounds ${where}. revision ${result.revision}.` +
+      sparseSummary(sparse) +
       (notes.length > 0 ? ` (${notes.join('; ')})` : ''),
     data: {
       revision: result.revision,
@@ -566,6 +600,8 @@ export const symmetrizeTool = defineTool<{
     'Mirror across a plane: copy the source half **verbatim** onto the other half (preserving stair facing and material distribution). Build only half of a symmetric building, then call this.\n' +
     'The mirror plane passes through the **center** of the coordinate cell, so coordinate-1 maps to coordinate+1 and the coordinate cell maps to itself.\n' +
     'clear=false means "fill gaps only", without overwriting what already exists on the target side.\n' +
+    '**Entities and block-entity contents mirror too** (boats get their yaw mirrored, chest contents follow their block). ' +
+    'With clear=true (default) entities already on the target side are **removed** — the source half wins.\n' +
     'Block facing **is remapped**: an east-facing stair becomes west-facing, door hinges swap sides, and sign rotation lands on the mirrored value. ' +
     '(A few orientations have no mirror-image encoding in 1.21.4 — walls have no `down` counterpart, and jigsaw `orientation` only declares 12 of 24 combinations. Those cells keep their original facing rather than being guessed.)',
   parameters: obj(
@@ -592,6 +628,9 @@ export const symmetrizeTool = defineTool<{
       clear: args.clear !== false,
       confirm: args.confirm === true,
     }
-    return writeResultToTool(ctx, 'symmetrize', args, symmetrize(ctx.store, options))
+    const result = symmetrize(ctx.store, options)
+    // `symmetrize` 是**三层一起**做的：实体与方块实体跟着镜像过去（plan D-87）。
+    // `sparse` 必须回传给 `record`，否则那一笔 op 只记得方块，撤销/重放会丢另外两层。
+    return writeResultToTool(ctx, 'symmetrize', args, result, result.ok ? result.sparse : undefined)
   },
 })

@@ -30,14 +30,20 @@ function makeContext(): ToolContext {
     history: new ReplaySession(store, log),
     clipboard: {},
     correlationId: 'turn_1',
-    record: (tool, args, result) => {
-      log.record(result, {
-        tool,
-        args,
-        correlationId: 'turn_1',
-        ts: '2026-01-01T00:00:00.000Z',
-        worldRevision: store.revision,
-      })
+    record: (tool, args, result, sparse) => {
+      // `sparse` 必须转给 `log.record`：搬运类工具（paste_region / symmetrize）
+      // 的实体与方块实体差分全在这个参数里，夹具丢掉它等于让测试看不见第三层。
+      log.record(
+        result,
+        {
+          tool,
+          args,
+          correlationId: 'turn_1',
+          ts: '2026-01-01T00:00:00.000Z',
+          worldRevision: store.revision,
+        },
+        sparse ?? {},
+      )
     },
     shoot: () => {
       throw new Error('fix_states never takes a screenshot')

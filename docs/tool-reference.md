@@ -113,6 +113,7 @@ Three collinear points raise an error.
 ```
 Paste the clipboard so its **minimum corner** lands on `at`.
 **Facing is remapped**: rotate 90 turns an east-facing stair into a south-facing one, a mirror swaps door hinges, sign rotation moves to the mirrored value.
+**Entities move with it** (their yaw is remapped the same way) and chest/sign contents are copied into the pasted blocks — a chest only receives the contents if its block actually landed there, so `mode: keep` onto an occupied cell leaves that cell alone.
 rotate is applied **after** mirror. rotate 90/270 swaps the footprint: a 4x6 copy pasted with rotate=90 occupies 6x4.
 ```
 
@@ -255,6 +256,7 @@ from and to are two corners of a closed interval, in any order. The world has no
 Mirror across a plane: copy the source half **verbatim** onto the other half (preserving stair facing and material distribution). Build only half of a symmetric building, then call this.
 The mirror plane passes through the **center** of the coordinate cell, so coordinate-1 maps to coordinate+1 and the coordinate cell maps to itself.
 clear=false means "fill gaps only", without overwriting what already exists on the target side.
+**Entities and block-entity contents mirror too** (boats get their yaw mirrored, chest contents follow their block). With clear=true (default) entities already on the target side are **removed** — the source half wins.
 Block facing **is remapped**: an east-facing stair becomes west-facing, door hinges swap sides, and sign rotation lands on the mirrored value. (A few orientations have no mirror-image encoding in 1.21.4 — walls have no `down` counterpart, and jigsaw `orientation` only declares 12 of 24 combinations. Those cells keep their original facing rather than being guessed.)
 ```
 
@@ -302,6 +304,7 @@ Prefer a single call with several ids over several calls: one call is one revisi
 ```
 Copy a box into the session clipboard. **Read-only** — it neither changes the world nor the revision.
 Only non-air cells are stored and facing is preserved exactly; paste_region remaps facing when you rotate or mirror.
+**Entities and block-entity contents come along too**: boats standing in the box, and what is inside chests, signs and banners. Passing `only` filters by block name, and since entities have no block name that also leaves them behind — omit `only` when you want the whole scene.
 Copy once, paste many times: this is how you build repeated wings, towers and arches.
 ```
 

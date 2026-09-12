@@ -17,14 +17,20 @@ function makeContext(useVolume: Bounds = volume): ToolContext {
     history: new ReplaySession(store, log),
     clipboard: {},
     correlationId: 'turn_1',
-    record: (tool, args, result) => {
-      log.record(result, {
-        tool,
-        args,
-        correlationId: 'turn_1',
-        ts: '2026-01-01T00:00:00.000Z',
-        worldRevision: store.revision,
-      })
+    record: (tool, args, result, sparse) => {
+      // `sparse` 必须转给 `log.record`：搬运类工具（paste_region / symmetrize）
+      // 的实体与方块实体差分全在这个参数里，夹具丢掉它等于让测试看不见第三层。
+      log.record(
+        result,
+        {
+          tool,
+          args,
+          correlationId: 'turn_1',
+          ts: '2026-01-01T00:00:00.000Z',
+          worldRevision: store.revision,
+        },
+        sparse ?? {},
+      )
     },
     shoot: () => {
       throw new Error('这个测试不该截图')
@@ -451,5 +457,80 @@ describe('工具集顺序（plan §2：批量工具排在单格工具前面）',
     expect(names).toContain('copy_region')
     expect(names).toContain('paste_region')
     expect(names).toContain('replace_blocks')
+  })
+})
+
+describe('搬运类工具把实体与方块实体一起带走（plan D-87）', () => {
+  it('`paste_region` 复制一座带船与满箱子的码头，三样都到新位置', async () => {
+    const ctx = makeContext()
+    await call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 0, 3], block: 'minecraft:oak_planks', confirm: true })
+    await call(ctx, 'place_block', { pos: [1, 1, 1], block: 'minecraft:chest' })
+    await call(ctx, 'edit_block_entity', {
+      at: [1, 1, 1],
+      data: { Items: [{ id: 'minecraft:stone', count: 5 }] },
+    })
+    await call(ctx, 'place_entity', {
+      entities: [{ type: 'minecraft:oak_boat', at: [2, 1, 2], yaw: 0 }],
+    })
+
+    await call(ctx, 'copy_region', { from: [0, 0, 0], to: [3, 1, 3] })
+    const pasted = await call(ctx, 'paste_region', { at: [10, 0, 0], confirm: true })
+    expect(pasted.ok).toBe(true)
+    // 摘要必须说得出第三层——否则"复制了一座仓库、箱子是空的"从返回里读不出来
+    expect(pasted.summary).toContain('entity change')
+    expect(pasted.summary).toContain('block-entity change')
+
+    expect(blockAt(ctx, 11, 1, 1)).toContain('chest')
+    expect(ctx.store.blockEntities.at({ x: 11, y: 1, z: 1 })?.data).toEqual({
+      Items: [{ id: 'minecraft:stone', count: 5 }],
+    })
+    const boats = ctx.store.entities.list()
+    expect(boats).toHaveLength(2)
+    // 落点是浮点的（`place_entity` 默认把实体放在格心附近）
+    expect(boats.some((entity) => Math.floor(entity.x) === 12 && Math.floor(entity.z) === 2)).toBe(true)
+
+    // 一笔 op 一个版本：三层都落在那一次里
+    expect(ctx.log.length).toBe(ctx.store.revision)
+  })
+
+  it('`run_batch` 里的 `paste_region` 也带实体，而且整批仍然只有一个 revision', async () => {
+    const ctx = makeContext()
+    await call(ctx, 'fill_box', { from: [0, 0, 0], to: [1, 0, 1], block: 'minecraft:stone', confirm: true })
+    await call(ctx, 'place_entity', { entities: [{ type: 'minecraft:oak_boat', at: [0, 1, 0] }] })
+    await call(ctx, 'copy_region', { from: [0, 0, 0], to: [1, 1, 1] })
+    const before = ctx.store.revision
+
+    const result = await call(ctx, 'run_batch', {
+      ops: [
+        { tool: 'paste_region', args: { at: [8, 0, 0] } },
+        { tool: 'paste_region', args: { at: [16, 0, 0], rotate: 90 } },
+      ],
+      confirm: true,
+    })
+    expect(result.ok).toBe(true)
+    expect(ctx.store.revision).toBe(before + 1)
+    // 原来 1 条 + 两次粘贴各 1 条
+    expect(ctx.store.entities.list()).toHaveLength(3)
+  })
+
+  it('撤销一次搬运会把实体与箱子内容一起还原', async () => {
+    const ctx = makeContext()
+    await call(ctx, 'fill_box', { from: [0, 0, 0], to: [1, 0, 1], block: 'minecraft:stone', confirm: true })
+    await call(ctx, 'place_block', { pos: [0, 1, 0], block: 'minecraft:chest' })
+    await call(ctx, 'edit_block_entity', { at: [0, 1, 0], data: { Items: [{ id: 'minecraft:dirt', count: 2 }] } })
+    await call(ctx, 'place_entity', { entities: [{ type: 'minecraft:oak_boat', at: [0, 1, 0] }] })
+    await call(ctx, 'copy_region', { from: [0, 0, 0], to: [1, 1, 1] })
+
+    const entitiesBefore = ctx.store.entities.list().length
+    await call(ctx, 'paste_region', { at: [8, 0, 0], confirm: true })
+    expect(ctx.store.entities.list().length).toBe(entitiesBefore + 1)
+
+    // 撤销是"游标移动 + 重放"（plan §6）：走会话层，不走工具
+    ctx.history.undo()
+    expect(ctx.store.entities.list().length).toBe(entitiesBefore)
+    expect(ctx.store.blockEntities.at({ x: 8, y: 1, z: 0 })).toBeUndefined()
+    expect(ctx.store.blockEntities.at({ x: 0, y: 1, z: 0 })?.data).toEqual({
+      Items: [{ id: 'minecraft:dirt', count: 2 }],
+    })
   })
 })

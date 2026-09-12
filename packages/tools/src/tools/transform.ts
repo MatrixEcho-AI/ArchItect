@@ -1,4 +1,4 @@
-import { clipPasteSize, copyRegion, planPaste } from '@architect/core'
+import { clipPasteSize, copyRegion, planPaste, planPasteSparse, pasteSparseWriter } from '@architect/core'
 import type { ClipRegion, MirrorAxis, RotateDegrees } from '@architect/core'
 
 import { bool, obj, str, vec3 } from '../schema.js'
@@ -36,6 +36,8 @@ export const copyRegionTool = defineTool<{
   description:
     'Copy a box into the session clipboard. **Read-only** — it neither changes the world nor the revision.\n' +
     'Only non-air cells are stored and facing is preserved exactly; paste_region remaps facing when you rotate or mirror.\n' +
+    '**Entities and block-entity contents come along too**: boats standing in the box, and what is inside chests, signs and banners. ' +
+    'Passing `only` filters by block name, and since entities have no block name that also leaves them behind — omit `only` when you want the whole scene.\n' +
     'Copy once, paste many times: this is how you build repeated wings, towers and arches.',
   parameters: obj(
     {
@@ -87,6 +89,8 @@ export const pasteRegionTool = defineTool<{
   description:
     'Paste the clipboard so its **minimum corner** lands on `at`.\n' +
     '**Facing is remapped**: rotate 90 turns an east-facing stair into a south-facing one, a mirror swaps door hinges, sign rotation moves to the mirrored value.\n' +
+    '**Entities move with it** (their yaw is remapped the same way) and chest/sign contents are copied into the pasted blocks — ' +
+    'a chest only receives the contents if its block actually landed there, so `mode: keep` onto an occupied cell leaves that cell alone.\n' +
     'rotate is applied **after** mirror. rotate 90/270 swaps the footprint: a 4x6 copy pasted with rotate=90 occupies 6x4.',
   parameters: obj(
     {
@@ -135,6 +139,11 @@ export const pasteRegionTool = defineTool<{
  *
  * 与 `core/planPaste` 只差一层：这里把"局部坐标 + stateId"翻成调色板下标，
  * 用 `emit` 的按格覆盖参数交给写入层。`run_batch` 复用同一个函数。
+ *
+ * **另外两层也在这里定下来**（`sparse`）：`planPasteSparse` + `pasteSparseWriter`
+ * 是 core 里同一对函数，`pasteRegion` 用的就是它们。共用是刻意的——
+ * "批处理里粘贴的船落在哪"与"单独粘贴的船落在哪"必须是同一个答案。
+ * 那个回调在**方块写入之后**执行，所以它能看出哪一格真的被写成了源方块。
  */
 export function planPasteTool(
   ctx: ToolContext,
@@ -149,15 +158,24 @@ export function planPasteTool(
     ...(mirror !== undefined ? { mirror } : {}),
   }
   const cells = planPaste(ctx.store.registry, clip, at, transform)
-  if (cells.length === 0) {
+  // **只有实体、没有方块也是合法的一贴**：一块空地上停着一条船，剪贴板里
+  // 一个非空气格都没有。按"没有格子"拒掉的话，这条船永远复制不走。
+  if (cells.length === 0 && clip.entities.length === 0) {
     return failure('NOT_FOUND', 'The clipboard holds no cells.', 'Call copy_region on a non-empty box first.')
   }
   const indices = cells.map((cell) => ctx.store.blockIndexForStateId(cell.stateId))
+  const sparse = pasteSparseWriter(
+    ctx.store,
+    planPasteSparse(ctx.store, clip, at, transform),
+    // 版本在写入前算得出来：这一笔至多推进一格
+    ctx.store.revision + 1,
+  )
   return {
     cells: (emit) => {
       for (const [index, cell] of cells.entries()) emit(cell.x, cell.y, cell.z, indices[index]!)
     },
     blockIndex: 0,
     mode,
+    sparse: () => sparse(),
   }
 }

@@ -250,11 +250,25 @@ function mapAxisValue(text: string, m: Mat3): string {
 function mapRotationValue(text: string, m: Mat3): string {
   const start = Number(text)
   if (!Number.isFinite(start)) return text
+  return String(remapRotationStepWith(start, m))
+}
+
+/**
+ * 把 `0..15` 的朝向档位过一遍变换（与方块 `rotation` 属性**同一套仿射公式**）。
+ *
+ * 实体朝向用的就是这个口径：`PlacedEntity.yaw` 与方块的 `rotation` 都是
+ * "从南开始、每格 22.5°、俯视顺时针"，所以镜像一个区域时船的艏向必须与
+ * 告示牌的 `rotation` 走**同一个函数**。各写一套迟早会对不上。
+ */
+export function remapRotationStep(step: number, transform: Transform): number {
+  return remapRotationStepWith(step, matrixOf(transform))
+}
+
+function remapRotationStepWith(start: number, m: Mat3): number {
   // "南"在变换后落在哪一档 → 仿射映射的常数项
   const offset = rotationIndexOf(applyMatrix(m, [0, 0, 1]))
   const sign = flipsHorizontalHandedness(m) ? -1 : 1
-  const next = (((sign * start + offset) % ROTATION_STEPS) + ROTATION_STEPS) % ROTATION_STEPS
-  return String(next)
+  return (((sign * start + offset) % ROTATION_STEPS) + ROTATION_STEPS) % ROTATION_STEPS
 }
 
 /**
@@ -431,4 +445,35 @@ export function transformLocalPoint(point: LocalPoint, size: Size3, transform: T
 /** 水平镜像轴到竖直镜像轴的转换：区域变换里的 `y` 镜像只影响高度。 */
 export function transformLocalY(y: number, height: number, transform: Transform): number {
   return transform.mirror === 'y' ? height - 1 - y : y
+}
+
+/**
+ * `transformLocalPoint` 的**浮点**版本：给实体用（它的位置不是整数格）。
+ *
+ * 与整数版的差别只有一处**口径**，不是巧合：整数版映射的是"格子的下标"，
+ * 所以镜像写作 `sx-1-x`；实体映射的是"区域内的一个点"，而区域占
+ * `[0, sx]`，所以镜像写作 `sx-x`。两者是同一件事的两种写法——
+ * 格 `x` 覆盖 `[x, x+1)`，镜像后覆盖 `[sx-x-1, sx-x)`，下标正是 `sx-1-x`。
+ *
+ * `y` 镜像在这里**一起处理**（整数版把它拆给 `transformLocalY`，因为方块
+ * 的高度是另一套记账）。旋转绕区域的竖直中轴，公式与整数版同源：
+ * 90° 顺时针是 `(x,z) → (sz-z, x)`，逐次 90° 迭代、每步把 `sx/sz` 换位。
+ */
+export function transformLocalPointF(point: LocalPoint, size: Size3, transform: Transform): LocalPoint {
+  let [x, y, z] = point
+  let [sx, sy, sz] = size
+
+  if (transform.mirror === 'x') x = sx - x
+  else if (transform.mirror === 'z') z = sz - z
+  else if (transform.mirror === 'y') y = sy - y
+
+  const steps = Math.round((transform.rotate ?? 0) / 90) % 4
+  for (let i = 0; i < steps; i++) {
+    const nx = sz - z
+    const nz = x
+    x = nx
+    z = nz
+    ;[sx, sz] = [sz, sx]
+  }
+  return [x, y, z]
 }

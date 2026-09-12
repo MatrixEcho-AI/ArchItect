@@ -1,5 +1,12 @@
-import type { BlockEntityChange, EntityChange } from '../entity/types.js'
+import type { BlockEntityChange, EntityChange, SparseWrite } from '../entity/types.js'
 import type { ChangeSet } from '../world/changeset.js'
+
+/**
+ * `SparseWrite` 定义在 `entity/types.ts`（`WorldStore` 要用它，而 `history/`
+ * 是依赖 `world/` 的那一层，反过来引会成环）。这里**原样转出**，
+ * 让"事件日志那几个模块"仍然只需要 import `./editop.js`。
+ */
+export type { SparseWrite }
 
 /** 一次编辑的来源。 */
 export type OpSource = 'llm' | 'user' | 'import' | 'system'
@@ -88,11 +95,6 @@ export interface OpPayload {
  *
  * 实体层则**全在这里**：`WorldStore` 根本不知道工具放了什么。
  */
-export interface SparseWrite {
-  entities?: readonly EntityChange[]
-  blockEntities?: readonly BlockEntityChange[]
-}
-
 export interface MakeOpOptions {
   source?: OpSource
   actor?: string

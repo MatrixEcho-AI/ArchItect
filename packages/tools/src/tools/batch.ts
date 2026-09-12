@@ -1,8 +1,11 @@
+import { mergeSparse } from '@architect/core'
+
 import { arr, blockRef, bool, obj, str, vec3 } from '../schema.js'
 import { defineTool, failure } from '../types.js'
 import type { ToolContext, ToolResult } from '../types.js'
 import {
   isToolResult,
+  sparseSummary,
   planErase,
   resolveBlock,
   planExtrude,
@@ -194,7 +197,7 @@ export const runBatchTool = defineTool<{
       plan.cells(emit)
     }
 
-    if (pending.size === 0) {
+    if (pending.size === 0 && !plans.some((plan) => plan.sparse !== undefined)) {
       return {
         ok: true,
         summary: `run_batch: ${plans.length} operation(s) produced no changes (everything was already as requested, or every cell was filtered out by keep/overlay).`,
@@ -203,14 +206,20 @@ export const runBatchTool = defineTool<{
     }
 
     // ── 3. 一次提交。dry-run 预览与确认阈值由 writeBlocks 在**合并后**判定。──
+    //
+    // 稀疏层（实体与方块实体）也在这**一次**提交里：`writeLayered` 先落方块
+    // （顺路剪掉被写格子上的旧方块实体），再跑各 op 的稀疏层意图，**只推进一格版本**。
+    // 意图按 op 顺序拼起来，所以后面 op 写同一个格子时覆盖前面的——与方块一致。
     const cells = [...pending.entries()].map(([key, value]) => {
       const [x, y, z] = key.split(',').map(Number) as [number, number, number]
       return { x, y, z, blockIndex: value.blockIndex }
     })
-    const result = ctx.store.writeBlocks(
+    const writers = plans.map((plan) => plan.sparse).filter((sparse) => sparse !== undefined)
+    const result = ctx.store.writeLayered(
       (emit) => {
         for (const cell of cells) emit(cell.x, cell.y, cell.z, cell.blockIndex)
       },
+      (write) => mergeSparse(writers.map((sparse) => sparse(write))),
       { mode: 'replace', confirm: args.confirm === true },
     )
 
@@ -235,7 +244,9 @@ export const runBatchTool = defineTool<{
       }
     }
 
-    ctx.record('run_batch', args, result)
+    // `sparse` 必须回传给 `record`：那一笔 op 要同时记下三层，否则撤销/重放会丢掉
+    // 批处理里粘贴带过来的船与箱子内容。
+    ctx.record('run_batch', args, result, result.sparse)
     const bounds = result.bounds
     const where =
       bounds === undefined
@@ -252,6 +263,7 @@ export const runBatchTool = defineTool<{
       summary:
         `run_batch applied ${plans.length} operation(s) as **one revision** (${result.revision}): ` +
         `${result.changed} cell(s) changed, bounds ${where}.` +
+        sparseSummary(result.sparse) +
         (result.overwrittenNonAir > 0 ? ` Overwrote ${result.overwrittenNonAir} non-air cell(s).` : '') +
         (result.clipped > 0 ? ` Clipped ${result.clipped} cell(s) outside the world height.` : '') +
         `\nOps: ${JSON.stringify(sources)}. Now read the result back with verify().`,

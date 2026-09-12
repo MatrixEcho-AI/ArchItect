@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { BlockEntityStore } from '../entity/blockentities.js'
 import { EntityStore } from '../entity/store.js'
-import type { BlockEntityChange, EntityChange } from '../entity/types.js'
+import type { BlockEntityChange, EntityChange, SparseWrite } from '../entity/types.js'
 import { normalizeBounds } from '../geometry/box.js'
 import { AIR_STATE_ID, Palette } from '../palette.js'
 import { loadRegistry } from '../registry.js'
@@ -73,6 +73,19 @@ export type WriteResult =
       blockEntityChanges: BlockEntityChange[]
     }
   | { ok: false; reason: 'NEEDS_CONFIRM' | 'TOO_LARGE'; preview: WritePreview }
+
+/** `WriteResult` 成功的那一支。搬运类操作要按它决定"哪些格子真的被写了"。 */
+export type OkWriteResult = Extract<WriteResult, { ok: true }>
+
+/**
+ * **一笔 op 改三层**的结果：方块那一笔原样，外加这一笔**主动写**的稀疏层差分。
+ *
+ * 形状上是 `WriteResult` 的一个扩展（成功分支多一个 `sparse`），所以
+ * `writeResultToTool` 之类按 `WriteResult` 写的代码不用改就能收它。
+ */
+export type LayeredWriteResult =
+  | (OkWriteResult & { sparse: SparseWrite })
+  | Extract<WriteResult, { ok: false }>
 
 export const DEFAULT_CONFIRM_THRESHOLD = 50_000
 export const DEFAULT_HARD_LIMIT = 4_000_000
@@ -344,11 +357,6 @@ export class WorldStore {
    * 一个方块都不动"没有任何方块写入，版本号没人推——不补这一下，日志与游标
    * 当场脱节，`record` 直接抛错。告示牌文字那种"只改方块实体"的写入同理。
    *
-   * **一笔 op 只能推进一次版本**，所以两层在**一次调用**里一起提交。
-   * 将来若有一个工具同时改方块与稀疏层，正确做法是**先**把稀疏层落进 store、
-   * 再调 `writeBlocks`（让方块那次推进版本），然后把差分作为 `SparseWrite`
-   * 交给 `EditLog.record` —— 一条 op、一个版本、三层。
-   *
    * 空差分不推进版本、不产生 op，与 `writeBlocks` 对空操作的态度一致
    * （revision 是截图缓存与 stale 判断的键，无谓地 +1 会让所有缓存失效）。
    *
@@ -357,17 +365,58 @@ export class WorldStore {
    * `applyChanges` 的语义就是"把世界置为 `after`"——好处是 replay 路径与工具路径
    * 调的是同一个函数，而不是"一个 apply 一个 apply"。
    */
-  commitSparse(changes: {
-    entities?: readonly EntityChange[]
-    blockEntities?: readonly BlockEntityChange[]
-  }): number {
+  commitSparse(changes: SparseWrite): number {
+    this.applySparse(changes, true)
+    return this.currentRevision
+  }
+
+  /**
+   * 把稀疏层差分应用上去。`advanceRevision` 决定要不要把版本推进一格。
+   *
+   * **为什么要有"不推进版本"这一档**：一笔 op 只能推进一次版本（D-58），
+   * 所以"同时改方块与稀疏层"的那一笔必须由 `writeLayered` 先做方块写入
+   * （那次推进版本）、再由这里**不推进**地落稀疏层。直接调 `commitSparse`
+   * 会推两次，`EditLog.record` 的 `rev === worldRevision` 断言当场失败。
+   *
+   * 顺序也是语义的一部分：**方块先、稀疏层后**。`writeBlocks` 会顺路剪掉
+   * 被写格子上的旧方块实体（寄生语义），而粘贴/镜像要写入的**新**方块实体
+   * 必须落在剪除**之后**——反过来的话刚写进去的东西会被自己的剪除清掉。
+   * （`commitSparse` 的注释里曾经建议"先落稀疏层再调 `writeBlocks`"，
+   * 那个顺序在"同一格既改方块又改方块实体"时是错的，见 D-87。）
+   */
+  applySparse(changes: SparseWrite, advanceRevision: boolean): void {
     const entities = changes.entities ?? []
     const blockEntities = changes.blockEntities ?? []
-    if (entities.length === 0 && blockEntities.length === 0) return this.currentRevision
+    if (entities.length === 0 && blockEntities.length === 0) return
     if (entities.length > 0) this.entities.applyChanges(entities)
     if (blockEntities.length > 0) this.blockEntities.applyChanges(blockEntities)
-    this.currentRevision++
-    return this.currentRevision
+    if (advanceRevision) this.currentRevision++
+  }
+
+  /**
+   * **一笔 op 改三层**：先写方块（顺路剪除方块实体），再把稀疏层落上去，
+   * **只推进一格版本**。
+   *
+   * `sparse` 可以是一个回调，因为它几乎总是**取决于这次写入的结果**：
+   * "哪些格子真的被写了"（`mode: keep` 会跳过占着的格子；写同一份内容不算改动）
+   * 决定了搬运过来的方块实体该放在哪、以及新实体该领哪个版本的 id。
+   * 传一个普通对象是"与写入结果无关"的简写。
+   *
+   * 回调在**方块已经落盘、稀疏层还没落**的时刻执行——那正是"能读到写入后的世界、
+   * 又能把差分交给下一步"的那个窗口。
+   */
+  writeLayered(
+    blocks: BlockProducer,
+    sparse: SparseWrite | ((write: OkWriteResult) => SparseWrite),
+    options: WriteOptions = {},
+  ): LayeredWriteResult {
+    const result = this.writeBlocks(blocks, options)
+    if (!result.ok) return result
+    const changes = typeof sparse === 'function' ? sparse(result) : sparse
+    // 方块那一步已经推进过版本了就不再推；一格都没改时（比如把同一份内容重贴一遍）
+    // 由稀疏层这一次推进，否则只动实体的一笔会没有 op。
+    this.applySparse(changes, result.changed === 0)
+    return { ...result, sparse: changes }
   }
 
   /**

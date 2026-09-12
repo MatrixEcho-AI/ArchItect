@@ -70,6 +70,41 @@ export type EntityChange = KeyedChange<PlacedEntity>
 export type BlockEntityChange = KeyedChange<PlacedBlockEntity>
 
 /**
+ * 一次写入里**工具主动写**的稀疏层部分（plan D-87）。
+ *
+ * 与 `WriteResult.blockEntityChanges` 的分工是这套记账最容易搞错的一处：
+ *
+ * - **剪除**那一半只有 `WorldStore` 知道（"这个格子上原本挂着什么"），所以它跟着
+ *   `writeBlocks` 的返回值回来；
+ * - **主动写**那一半只有工具知道（实体全是工具放的；方块实体里"给箱子塞东西、
+ *   给告示牌写字"也是）。方块实体因此**两个来源都有**，`EditLog.record` 必须相加。
+ *
+ * 放在 `entity/` 而不是 `history/`：`WorldStore` 自己就要用它（`applySparse` /
+ * `writeLayered`），而 `history/` 是**依赖** `world/` 的那一层，反过来引会成环。
+ */
+export interface SparseWrite {
+  entities?: readonly EntityChange[]
+  blockEntities?: readonly BlockEntityChange[]
+}
+
+/**
+ * 把几笔稀疏层差分按给定顺序拼成一笔。
+ *
+ * 用在 `run_batch`：批处理把多个 `paste_region` 的实体意图攒起来，
+ * 在**合并后的那一次方块写入之后**统一落盘。**顺序生效**——后面的 op 写同一个
+ * 格子时覆盖前面的，与批处理对方块的语义一致。
+ */
+export function mergeSparse(writes: readonly SparseWrite[]): SparseWrite {
+  const entities: EntityChange[] = []
+  const blockEntities: BlockEntityChange[] = []
+  for (const write of writes) {
+    if (write.entities !== undefined) entities.push(...write.entities)
+    if (write.blockEntities !== undefined) blockEntities.push(...write.blockEntities)
+  }
+  return { entities, blockEntities }
+}
+
+/**
  * 反演一串差分：**逐条交换 before/after，并把顺序整体倒过来**。
  *
  * 顺序也要倒，不是洁癖：`[c1, c2]` 的逆是 `[c2⁻¹, c1⁻¹]`，不是 `[c1⁻¹, c2⁻¹]`。

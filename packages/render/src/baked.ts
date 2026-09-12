@@ -94,8 +94,8 @@ export function bakedDataRoot(): string {
     if (existsSync(root)) return root
   }
   throw new Error(
-    `找不到烘好的渲染数据目录。找过这些位置：\n  ${roots.join('\n  ')}\n` +
-      '开发时跑 `pnpm bake:gen` 生成；打包时确认 electron-builder 的 extraResources 里有 packages/render/data。',
+    `Could not find the baked render data directory. Looked in:\n  ${roots.join('\n  ')}\n` +
+      'Run `pnpm bake:gen` during development, and check that a packaged app ships packages/render/data through extraResources.',
   )
 }
 
@@ -112,12 +112,12 @@ export function bakedVersions(): string[] {
 function readJson<T extends { format: number }>(version: string, file: string): T {
   const path = join(bakedDataRoot(), version, file)
   if (!existsSync(path)) {
-    throw new Error(`没有版本 "${version}" 的 ${file}（找的是 ${path}）——跑 pnpm bake:gen`)
+    throw new Error(`No ${file} for version "${version}" (looked at ${path}); run pnpm bake:gen`)
   }
   const parsed = JSON.parse(readFileSync(path, 'utf8')) as T
   if (parsed.format !== BAKED_FORMAT) {
     throw new Error(
-      `${path} 的格式版本是 ${parsed.format}，本代码只认 ${BAKED_FORMAT}——跑 pnpm bake:gen 重新生成`,
+      `${path} has format ${parsed.format} but this code reads ${BAKED_FORMAT}; run pnpm bake:gen`,
     )
   }
   return parsed

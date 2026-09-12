@@ -126,13 +126,13 @@ export function parseTransform(input: { rotate?: unknown; mirror?: unknown } | u
   if (input.rotate !== undefined) {
     const degrees = Number(input.rotate)
     if (degrees !== 0 && degrees !== 90 && degrees !== 180 && degrees !== 270) {
-      throw new Error(`rotate 只支持 0 / 90 / 180 / 270，收到 ${String(input.rotate)}`)
+      throw new Error(`rotate accepts 0 / 90 / 180 / 270, got ${String(input.rotate)}`)
     }
     if (degrees !== 0) out.rotate = degrees
   }
   if (input.mirror !== undefined && input.mirror !== null && input.mirror !== 'none') {
     if (input.mirror !== 'x' && input.mirror !== 'y' && input.mirror !== 'z') {
-      throw new Error(`mirror 只支持 x / y / z，收到 ${String(input.mirror)}`)
+      throw new Error(`mirror accepts x / y / z, got ${String(input.mirror)}`)
     }
     out.mirror = input.mirror
   }
@@ -328,7 +328,7 @@ export function remapStateId(registry: BlockRegistry, stateId: number, transform
   const m = matrixOf(transform)
   if (isIdentity(transform)) return stateId
   const block = registry.blockByStateId(stateId)
-  if (block === undefined) throw new Error(`未知 state id ${stateId}`)
+  if (block === undefined) throw new Error(`Unknown state id ${stateId}`)
   if (block.states.length === 0) return stateId
 
   const mirrored = flipsHorizontalHandedness(m)
@@ -358,14 +358,14 @@ export function remapStateString(registry: BlockRegistry, stateString: string, t
 
 function resolveStateId(registry: BlockRegistry, stateString: string): number {
   const match = /^(?:minecraft:)?([a-z0-9_]+)(?:\[([^\]]*)\])?$/.exec(stateString.trim())
-  if (match === null) throw new Error(`不是合法的方块状态："${stateString}"`)
+  if (match === null) throw new Error(`Not a valid block state: "${stateString}"`)
   const block = registry.blockByName(match[1]!)
-  if (block === undefined) throw new Error(`未知方块 "${match[1]}"`)
+  if (block === undefined) throw new Error(`Unknown block "${match[1]}"`)
   const overrides: Properties = {}
   for (const pair of (match[2] ?? '').split(',')) {
     if (pair.trim().length === 0) continue
     const eq = pair.indexOf('=')
-    if (eq <= 0) throw new Error(`"${pair}" 不是 key=value`)
+    if (eq <= 0) throw new Error(`"${pair}" is not key=value`)
     const name = pair.slice(0, eq).trim()
     const raw = pair.slice(eq + 1).trim()
     overrides[name] = raw === 'true' ? true : raw === 'false' ? false : INT_LIKE.test(raw) ? Number(raw) : raw

@@ -42,7 +42,7 @@ export interface ExportResult {
  */
 export function exportSchematic(store: WorldStore, options: ExportOptions = {}): ExportResult {
   const region = options.region ?? store.contentBounds()
-  if (region === undefined) throw new Error('世界是空的，没有可导出的内容')
+  if (region === undefined) throw new Error('The world is empty, so there is nothing to export')
   const size: [number, number, number] =
     options.size ??
     [region.max.x - region.min.x + 1, region.max.y - region.min.y + 1, region.max.z - region.min.z + 1]
@@ -144,7 +144,7 @@ export function importSchematicInto(
   const targetVolume = data.size[0] * data.size[1] * data.size[2]
   if (targetVolume > DEFAULT_HARD_LIMIT) {
     throw new Error(
-      `导入目标盒 ${data.size.join('x')} = ${targetVolume} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+      `Import target box ${data.size.join('x')} = ${targetVolume} cells, over the ${DEFAULT_HARD_LIMIT}-cell limit for a single write`,
     )
   }
 
@@ -234,7 +234,7 @@ export function importSchematicInto(
     { mode: 'replace', confirm: true },
   )
   if (!written.ok) {
-    throw new Error(`导入写盘失败：${written.reason}（预览 ${written.preview.willChange} 格）`)
+    throw new Error(`Import write failed: ${written.reason} (preview: ${written.preview.willChange} cells would change)`)
   }
 
   const output: ImportResult = {

@@ -111,7 +111,7 @@ describe('.litematic 往返', () => {
   it('超出区域尺寸的方块直接报错', () => {
     expect(() =>
       writeLitematic({ regions: [{ blocks: [{ x: 5, y: 0, z: 0, state: 'minecraft:stone' }], size: [2, 1, 1] }] }),
-    ).toThrow(/超出区域尺寸/)
+    ).toThrow(/outside the region size/)
   })
 
   it('缺 Regions 时给出可读的错误', async () => {
@@ -272,7 +272,7 @@ describe('.obj 导出', () => {
   })
 
   it('空世界报可读错误', () => {
-    expect(() => exportObj(makeStore())).toThrow(/空的/)
+    expect(() => exportObj(makeStore())).toThrow(/world is empty/i)
   })
 })
 
@@ -323,7 +323,7 @@ describe('不按文件声明的数字分配', () => {
         { size: [2050, 2000, 1], dataVersion: 4189, blocks: [] } as never,
         { at: { x: 0, y: 0, z: 0 } },
       ),
-    ).toThrow(/超过单次写入上限/)
+    ).toThrow(/limit for a single write/)
   })
 
   it('**声明超大区域的 .litematic 被拒绝**', async () => {
@@ -336,7 +336,7 @@ describe('不按文件声明的数字分配', () => {
       author: 'a',
     })
     await expect(readLitematic(forgedRegionSize(bytes, 2050, 2000, 1))).rejects.toThrow(
-      /超过单次写入上限/,
+      /limit for a single write/,
     )
   })
 

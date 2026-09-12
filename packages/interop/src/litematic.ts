@@ -127,7 +127,7 @@ export function writeLitematic(input: WriteLitematicInput): Uint8Array {
     for (const block of region.blocks) {
       if (block.state === 'minecraft:air') continue
       if (block.x < 0 || block.x >= width || block.y < 0 || block.y >= height || block.z < 0 || block.z >= length) {
-        throw new RangeError(`方块 (${block.x},${block.y},${block.z}) 超出区域尺寸 ${width}x${height}x${length}`)
+        throw new RangeError(`Block (${block.x},${block.y},${block.z}) is outside the region size ${width}x${height}x${length}`)
       }
       let slot = paletteIndex.get(block.state)
       if (slot === undefined) {
@@ -191,7 +191,7 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
   // `NBT` 的根是 `{ name, value }`，字段在 `value` 里——用 `child()` 取，别直接下标
   const version = asInt(child(root, 'Version'), 0)
   const regionsTree = asCompound(child(root, 'Regions'))
-  if (regionsTree === undefined) throw new Error('不是合法的 .litematic：缺少 Regions')
+  if (regionsTree === undefined) throw new Error('Not a valid .litematic: no Regions')
 
   const regions: LitematicRegion[] = []
   // 跨区域的总量预算：单区域的上限挡不住「很多个刚好不超限的区域」。
@@ -215,8 +215,8 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
     const count = size[0] * size[1] * size[2]
     if (count > DEFAULT_HARD_LIMIT) {
       throw new Error(
-        `Litematica: 区域 ${regionName} 声明了 ${size.join('x')} = ${count} 格，` +
-          `超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+        `Litematica: region ${regionName} declares ${size.join('x')} = ${count} cells, ` +
+          `over the ${DEFAULT_HARD_LIMIT}-cell limit for a single write`,
       )
     }
     // 单区域不超限还不够：一个文件可以声明很多个「刚好不超」的区域，而导入最终只用
@@ -224,13 +224,13 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
     totalCells += count
     if (totalCells > DEFAULT_HARD_LIMIT) {
       throw new Error(
-        `Litematica: 各区域合计 ${totalCells} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+        `Litematica: the regions total ${totalCells} cells, over the ${DEFAULT_HARD_LIMIT}-cell limit for a single write`,
       )
     }
 
     const palette = readPalette(region['BlockStatePalette'])
     const longs = asUnsignedLongArray(region['BlockStates'])
-    if (longs === undefined) throw new Error(`区域 ${regionName} 缺少 BlockStates`)
+    if (longs === undefined) throw new Error(`Region ${regionName} has no BlockStates`)
 
     const indices = unpackBlockStates(longs, count, palette.length)
 
@@ -270,7 +270,7 @@ export interface ExportLitematicOptions {
 /** 从世界导出（单区域，内容包围盒就是那个区域）。 */
 export function exportLitematic(store: WorldStore, options: ExportLitematicOptions = {}): Uint8Array {
   const region = options.region ?? store.contentBounds()
-  if (region === undefined) throw new Error('世界是空的，没有可导出的内容')
+  if (region === undefined) throw new Error('The world is empty, so there is nothing to export')
   const size: [number, number, number] = [
     region.max.x - region.min.x + 1,
     region.max.y - region.min.y + 1,
@@ -297,7 +297,7 @@ export function exportLitematic(store: WorldStore, options: ExportLitematicOptio
 /** `.litematic` → 与 `.schem` 通用的中间表示，这样导入逻辑只有一份。 */
 export function litematicToSchematicData(data: LitematicData): SchematicData {
   const region = data.regions[0]
-  if (region === undefined) throw new Error('.litematic 里没有区域')
+  if (region === undefined) throw new Error('.litematic has no regions')
   const output: SchematicData = {
     size: region.size,
     offset: region.position,

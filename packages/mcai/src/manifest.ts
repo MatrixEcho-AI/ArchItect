@@ -117,7 +117,7 @@ export function createManifest(init: {
 /** 校验 manifest 的必填字段与格式版本兼容性。 */
 export function validateManifest(value: unknown): Manifest {
   if (typeof value !== 'object' || value === null) {
-    throw new McaiFormatError('manifest.json 不是一个对象')
+    throw new McaiFormatError('manifest.json is not an object')
   }
   const m = value as Partial<Manifest>
   const required: Array<keyof Manifest> = [
@@ -135,23 +135,23 @@ export function validateManifest(value: unknown): Manifest {
   ]
   const missing = required.filter((k) => m[k] === undefined)
   if (missing.length > 0) {
-    throw new McaiFormatError(`manifest.json 缺少必填字段：${missing.join(', ')}`)
+    throw new McaiFormatError(`manifest.json is missing required fields: ${missing.join(', ')}`)
   }
   if (typeof m.formatVersion !== 'string') {
-    throw new McaiFormatError('manifest.formatVersion 必须是字符串')
+    throw new McaiFormatError('manifest.formatVersion must be a string')
   }
   const [major] = m.formatVersion.split('.')
   if (major !== FORMAT_VERSION.split('.')[0]) {
     throw new McaiFormatError(
-      `工程格式版本 ${m.formatVersion} 与本程序支持的 ${FORMAT_VERSION} 主版本不同，无法打开`,
+      `Project format ${m.formatVersion} has a different major version from the supported ${FORMAT_VERSION}`,
     )
   }
   if (typeof m.revision !== 'number' || typeof m.baseRevision !== 'number') {
-    throw new McaiFormatError('manifest.revision / baseRevision 必须是数字')
+    throw new McaiFormatError('manifest.revision / baseRevision must be numbers')
   }
   if (m.baseRevision > m.revision) {
     throw new McaiFormatError(
-      `manifest.baseRevision (${m.baseRevision}) 不能大于 revision (${m.revision})`,
+      `manifest.baseRevision (${m.baseRevision}) cannot exceed revision (${m.revision})`,
     )
   }
   return m as Manifest

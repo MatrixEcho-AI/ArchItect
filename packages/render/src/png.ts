@@ -22,7 +22,7 @@ const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
  */
 export function decodePng(bytes: Uint8Array): RgbaImage {
   for (let i = 0; i < SIGNATURE.length; i++) {
-    if (bytes[i] !== SIGNATURE[i]) throw new PngError('不是 PNG（签名不匹配）')
+    if (bytes[i] !== SIGNATURE[i]) throw new PngError('Not a PNG: the signature does not match')
   }
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -46,7 +46,7 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
     )
     const dataStart = offset + 8
     if (dataStart + length + 4 > bytes.length) {
-      throw new PngError(`PNG 块 ${type} 声明长度 ${length} 超出文件末尾`)
+      throw new PngError(`PNG chunk ${type} declares ${length} bytes, past the end of the file`)
     }
 
     if (type === 'IHDR') {
@@ -67,18 +67,18 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
     offset = dataStart + length + 4
   }
 
-  if (width === 0 || height === 0) throw new PngError('PNG 缺少有效的 IHDR')
-  if (interlace !== 0) throw new PngError('不支持隔行 PNG')
-  if (idat.length === 0) throw new PngError('PNG 没有任何 IDAT 数据')
+  if (width === 0 || height === 0) throw new PngError('PNG has no valid IHDR')
+  if (interlace !== 0) throw new PngError('Interlaced PNG is not supported')
+  if (idat.length === 0) throw new PngError('PNG has no IDAT data')
 
   const merged = concat(idat)
   // PNG 的 IDAT 是 **zlib** 流（带 2 字节头与 Adler-32），不是裸 deflate
   const raw = unzlibSync(merged)
 
   const channels = CHANNELS[colorType]
-  if (channels === undefined) throw new PngError(`不支持的色彩类型 ${colorType}`)
+  if (channels === undefined) throw new PngError(`Unsupported colour type ${colorType}`)
   if (bitDepth !== 8 && !(bitDepth === 1 || bitDepth === 2 || bitDepth === 4) ) {
-    throw new PngError(`不支持的位深 ${bitDepth}`)
+    throw new PngError(`Unsupported bit depth ${bitDepth}`)
   }
 
   const bitsPerPixel = channels * bitDepth
@@ -86,7 +86,7 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
   const bytesPerRow = Math.ceil((width * bitsPerPixel) / 8)
   const expected = (bytesPerRow + 1) * height
   if (raw.length < expected) {
-    throw new PngError(`PNG 像素数据不足：有 ${raw.length} 字节，需要 ${expected}`)
+    throw new PngError(`Not enough PNG pixel data: ${raw.length} bytes, ${expected} needed`)
   }
 
   const unfiltered = unfilter(raw, bytesPerRow, height, bytesPerPixel)
@@ -134,7 +134,7 @@ function unfilter(
         case 2: restored = value + b; break
         case 3: restored = value + ((a + b) >> 1); break
         case 4: restored = value + paeth(a, b, c); break
-        default: throw new PngError(`未知的行过滤器 ${filter}`)
+        default: throw new PngError(`Unknown row filter ${filter}`)
       }
       out[rowStart + x] = restored & 0xff
     }
@@ -166,7 +166,7 @@ function toRgba(
 
   // 调色板要能在位深 1/2/4 下取到索引，统一走位读取
   if (colorType === 3) {
-    if (palette === undefined) throw new PngError('调色板 PNG 缺少 PLTE 块')
+    if (palette === undefined) throw new PngError('Palette PNG has no PLTE chunk')
     const bitsPerPixel = bitDepth
     const bytesPerRow = Math.ceil((width * bitsPerPixel) / 8)
     const mask = (1 << bitDepth) - 1
@@ -232,7 +232,7 @@ function toRgba(
           out[o + 3] = rows[s + 3]!
           break
         default:
-          throw new PngError(`不支持的色彩类型 ${colorType}`)
+          throw new PngError(`Unsupported colour type ${colorType}`)
       }
     }
   }
@@ -267,10 +267,10 @@ export function decodeBase64(text: string): Uint8Array {
 /** 解码 `data:image/png;base64,...`。 */
 export function decodeDataUri(uri: string): RgbaImage {
   if (typeof uri !== 'string') {
-    throw new PngError(`期望 data URI 字符串，收到 ${uri === null ? 'null' : typeof uri}`)
+    throw new PngError(`Expected a data URI string, got ${uri === null ? 'null' : typeof uri}`)
   }
   const comma = uri.indexOf(',')
-  if (comma < 0 || !uri.startsWith('data:')) throw new PngError('不是合法的 data URI')
+  if (comma < 0 || !uri.startsWith('data:')) throw new PngError('Not a valid data URI')
   return decodePng(decodeBase64(uri.slice(comma + 1)))
 }
 

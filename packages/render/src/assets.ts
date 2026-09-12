@@ -36,7 +36,7 @@ export function assetsTexturePack(minecraftVersion: string): TexturePack {
   const assets = load(minecraftVersion)
   const directory = assets?.directory
   if (typeof directory !== 'string') {
-    throw new Error(`minecraft-assets 没有版本 "${minecraftVersion}" 的资源包目录`)
+    throw new Error(`minecraft-assets has no resource pack directory for version "${minecraftVersion}"`)
   }
   const blockDir = join(directory, 'blocks')
   // 与 `buildTextureAtlas` 一样要排序：文件系统给的顺序不同会让 UV 索引漂移

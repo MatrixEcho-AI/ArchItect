@@ -328,7 +328,7 @@ function renderTextured(store: WorldStore, options: RenderOptions): RenderResult
     // vendored 的模型解析里炸出一句 `"undefined" is not valid JSON`——那句话
     // 指向的是症状不是原因。这里直接把原因说出来。
     throw new Error(
-      `textured 渲染需要一个有方块纹理的来源（options.textures，当前 ${pack === undefined ? '没给' : `给了 ${pack.id}，但 blockTiles 是空的`}）——见 texturepack.ts`,
+      `Textured rendering needs a source with block textures (options.textures; currently ${pack === undefined ? 'none was given' : `${pack.id} was given but blockTiles is empty`}). See texturepack.ts.`,
     )
   }
   const data = loadRenderData(store.registry.minecraftVersion, pack)

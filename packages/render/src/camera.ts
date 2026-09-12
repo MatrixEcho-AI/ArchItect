@@ -148,7 +148,7 @@ export function orientationFromEye(
   const dz = lookAt.z - eye.z
   const horizontal = Math.hypot(dx, dz)
   if (horizontal < 1e-9 && Math.abs(dy) < 1e-9) {
-    throw new RangeError('相机位置与注视点重合，朝向无法确定')
+    throw new RangeError('The camera position and the look-at point coincide, so the direction is undefined')
   }
   // cameraBasis 里 forward = (-sinA·cosE, -sinE, -cosA·cosE)，反解：
   const length = Math.hypot(dx, dy, dz)
@@ -364,7 +364,7 @@ export const VIEW_PRESETS: Record<ViewPreset, { azimuth: number; elevation: numb
 
 export function presetAngles(preset: ViewPreset): { azimuth: number; elevation: number } {
   const angles = VIEW_PRESETS[preset]
-  if (angles === undefined) throw new RangeError(`未知机位预设 "${preset}"`)
+  if (angles === undefined) throw new RangeError(`Unknown camera preset "${preset}"`)
   return angles
 }
 

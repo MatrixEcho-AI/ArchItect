@@ -57,7 +57,7 @@ const DEFAULT_KEEP_IMAGES = 3
 
 /** 有缓存就走 A：不做任何裁剪。 */
 export function appendPolicy(
-  reason = 'provider 有前缀缓存，裁剪会以全价重算它后面的 token',
+  reason = 'The provider caches prefixes, so trimming would re-bill every later token at full price',
 ): ContextPolicy {
   return {
     regime: 'append',
@@ -78,14 +78,14 @@ export function contextPolicyFor(
   capabilities?: { promptCache: PromptCacheMode; contextWindow?: number },
   overrides: { keepTurns?: number; keepImages?: number } = {},
 ): ContextPolicy {
-  if (capabilities === undefined) return appendPolicy('没有 provider 能力信息，按"不裁剪"处理')
+  if (capabilities === undefined) return appendPolicy('No provider capability information is available, so nothing is trimmed')
   if (capabilities.promptCache === 'none') {
     return {
       regime: 'windowed',
       keepTurns: overrides.keepTurns ?? DEFAULT_KEEP_TURNS,
       keepImages: overrides.keepImages ?? DEFAULT_KEEP_IMAGES,
       toolResultChars: WINDOWED_TOOL_RESULT_CHARS,
-      reason: 'provider 没有前缀缓存，旧 token 每个请求都要全价重付',
+      reason: 'The provider does not cache prefixes, so old tokens are re-billed at full price on every request',
     }
   }
   const window = capabilities.contextWindow
@@ -95,7 +95,7 @@ export function contextPolicyFor(
       keepTurns: overrides.keepTurns ?? DEFAULT_KEEP_TURNS,
       keepImages: overrides.keepImages ?? DEFAULT_KEEP_IMAGES,
       toolResultChars: WINDOWED_TOOL_RESULT_CHARS,
-      reason: `上下文窗口只有 ${window} token，不裁剪会直接放不下`,
+      reason: `The context window is only ${window} tokens, so the request only fits after trimming`,
     }
   }
   return appendPolicy()

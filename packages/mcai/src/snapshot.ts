@@ -38,9 +38,9 @@ export class SnapshotError extends Error {
  */
 export function encodeSnapshot(snapshot: Snapshot): Uint8Array {
   const { minY, worldHeight, paletteSize, columns } = snapshot
-  if (worldHeight <= 0) throw new SnapshotError(`worldHeight 必须为正，收到 ${worldHeight}`)
+  if (worldHeight <= 0) throw new SnapshotError(`worldHeight must be positive, got ${worldHeight}`)
   if (paletteSize > 0x10000) {
-    throw new SnapshotError(`调色板有 ${paletteSize} 项，超出 uint16 上限`)
+    throw new SnapshotError(`The palette has ${paletteSize} entries, over the uint16 limit`)
   }
 
   const perColumn = 8 + worldHeight * 256 * 2
@@ -51,7 +51,7 @@ export function encodeSnapshot(snapshot: Snapshot): Uint8Array {
     const expected = worldHeight * 256
     if (column.indices.length !== expected) {
       throw new SnapshotError(
-        `列 (${column.chunkX},${column.chunkZ}) 有 ${column.indices.length} 个索引，期望 ${expected}`,
+        `Column (${column.chunkX},${column.chunkZ}) has ${column.indices.length} indices, expected ${expected}`,
       )
     }
     bodyView.setInt32(offset, column.chunkX, true)
@@ -79,22 +79,22 @@ export function encodeSnapshot(snapshot: Snapshot): Uint8Array {
 
 export function decodeSnapshot(bytes: Uint8Array): Snapshot {
   if (bytes.length < HEADER_BYTES) {
-    throw new SnapshotError(`base.mcvox 只有 ${bytes.length} 字节，连头部都不够`)
+    throw new SnapshotError(`base.mcvox is only ${bytes.length} bytes, too short for a header`)
   }
   for (let i = 0; i < MAGIC.length; i++) {
-    if (bytes[i] !== MAGIC[i]) throw new SnapshotError('base.mcvox 魔数不匹配，不是本程序写出的快照')
+    if (bytes[i] !== MAGIC[i]) throw new SnapshotError('base.mcvox has the wrong magic number, so this program did not write it')
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const version = view.getUint32(8, true)
   if (version !== SNAPSHOT_VERSION) {
-    throw new SnapshotError(`快照版本 ${version} 不受支持（本程序支持 ${SNAPSHOT_VERSION}）`)
+    throw new SnapshotError(`Snapshot version ${version} is not supported (this program writes ${SNAPSHOT_VERSION})`)
   }
   const minY = view.getInt32(12, true)
   const worldHeight = view.getUint32(16, true)
   const paletteSize = view.getUint32(20, true)
   const columnCount = view.getUint32(24, true)
-  if (worldHeight === 0) throw new SnapshotError('快照的 worldHeight 为 0')
-  if (paletteSize === 0) throw new SnapshotError('快照的 paletteSize 为 0（调色板至少要含 air）')
+  if (worldHeight === 0) throw new SnapshotError('The snapshot worldHeight is 0')
+  if (paletteSize === 0) throw new SnapshotError('The snapshot paletteSize is 0; a palette holds at least air')
 
   const perColumn = 8 + worldHeight * 256 * 2
   // **按表头算出来的期望长度预分配输出缓冲**，而不是让它自己解到输入耗尽。
@@ -108,12 +108,12 @@ export function decodeSnapshot(bytes: Uint8Array): Snapshot {
   // 真出现更长的数据会被截掉，紧接着的长度比对就会报错。
   const expected = columnCount * perColumn
   if (expected > MAX_SNAPSHOT_BYTES) {
-    throw new SnapshotError(`快照声明了 ${expected} 字节正文，超过上限 ${MAX_SNAPSHOT_BYTES}`)
+    throw new SnapshotError(`The snapshot declares ${expected} bytes of body, over the ${MAX_SNAPSHOT_BYTES}-byte limit`)
   }
   const body = unzlibSync(bytes.subarray(HEADER_BYTES), { out: new Uint8Array(expected) })
   if (body.length !== columnCount * perColumn) {
     throw new SnapshotError(
-      `快照正文有 ${body.length} 字节，按 ${columnCount} 列 × ${perColumn} 字节应为 ${columnCount * perColumn}`,
+      `The snapshot body is ${body.length} bytes; ${columnCount} columns x ${perColumn} bytes is ${columnCount * perColumn}`,
     )
   }
 

@@ -82,7 +82,7 @@ export const DATA_VERSION_1_21_4 = 4189
 export function writeSpongeSchematic(input: WriteSchematicInput): Uint8Array {
   const [width, height, length] = input.size
   if (width <= 0 || height <= 0 || length <= 0) {
-    throw new RangeError(`尺寸必须为正：收到 ${width}x${height}x${length}`)
+    throw new RangeError(`Dimensions must be positive, got ${width}x${height}x${length}`)
   }
 
   // 调色板：第 0 项固定是空气，和游戏工具的惯例一致
@@ -94,7 +94,7 @@ export function writeSpongeSchematic(input: WriteSchematicInput): Uint8Array {
     if (block.state === 'minecraft:air' || block.state === 'air') continue
     if (block.x < 0 || block.x >= width || block.y < 0 || block.y >= height || block.z < 0 || block.z >= length) {
       throw new RangeError(
-        `方块 (${block.x},${block.y},${block.z}) 超出声明尺寸 ${width}x${height}x${length}`,
+        `Block (${block.x},${block.y},${block.z}) is outside the declared size ${width}x${height}x${length}`,
       )
     }
     let index = paletteIndex.get(block.state)
@@ -138,11 +138,11 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
     // 也可能是 v1 的老布局：Palette / BlockData 直接挂在根上
     if (child(root, 'Palette') !== undefined) {
       throw new Error(
-        '这是 Sponge v1 格式（Palette/BlockData 在根上），本工具只支持 v2/v3。' +
-          '用 WorldEdit `//schem save` 重新导出一次即可升级到 v3。',
+        'This is the Sponge v1 layout (Palette and BlockData at the root); only v2 and v3 are supported. ' +
+          'Re-export with WorldEdit `//schem save` to upgrade it to v3.',
       )
     }
-    throw new Error('不是合法的 .schem：根标签里没有 Schematic 复合标签')
+    throw new Error('Not a valid .schem: the root has no Schematic compound tag')
   }
 
   const version = asInt(schematic['Version'], 0)
@@ -150,13 +150,13 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
   const height = asInt(schematic['Height'])
   const length = asInt(schematic['Length'])
   if (width <= 0 || height <= 0 || length <= 0) {
-    throw new Error(`.schem 尺寸非法：${width}x${height}x${length}`)
+    throw new Error(`Invalid .schem size: ${width}x${height}x${length}`)
   }
 
   const blocksTag = asCompound(schematic['Blocks'])
-  if (blocksTag === undefined) throw new Error('.schem 缺少 Blocks 复合标签')
+  if (blocksTag === undefined) throw new Error('.schem has no Blocks compound tag')
   const paletteTree = asCompound(blocksTag['Palette'])
-  if (paletteTree === undefined) throw new Error('.schem 缺少 Blocks.Palette')
+  if (paletteTree === undefined) throw new Error('.schem has no Blocks.Palette')
 
   const palette: string[] = []
   for (const [name, indexTag] of Object.entries(paletteTree)) {
@@ -165,7 +165,7 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
   }
 
   const data = asByteArray(blocksTag['Data'])
-  if (data === undefined) throw new Error('.schem 缺少 Blocks.Data')
+  if (data === undefined) throw new Error('.schem has no Blocks.Data')
 
   // v3 是 VarInt，v2 是定宽 2 字节大端。版本号缺失时按 v2 试——
   // 老文件里 Version 字段本来就可能没有。
@@ -175,7 +175,7 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
   const expected = width * height * length
   if (expected > DEFAULT_HARD_LIMIT) {
     throw new Error(
-      `.schem 声明了 ${width}x${height}x${length} = ${expected} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+      `.schem declares ${width}x${height}x${length} = ${expected} cells, over the ${DEFAULT_HARD_LIMIT}-cell limit for a single write`,
     )
   }
 
@@ -228,7 +228,7 @@ export function encodeVarints(values: ArrayLike<number>): number[] {
   const out: number[] = []
   for (let i = 0; i < values.length; i++) {
     let value = values[i]!
-    if (value < 0) throw new RangeError(`VarInt 不接受负数：${value}`)
+    if (value < 0) throw new RangeError(`VarInt cannot be negative, got ${value}`)
     for (;;) {
       const chunk = value & 0x7f
       value >>>= 7
@@ -255,7 +255,7 @@ export function decodeVarints(bytes: readonly number[]): number[] {
       continue
     }
     shift += 7
-    if (shift > 28) throw new Error('VarInt 超过 5 字节——数据可能不是 v3 编码')
+    if (shift > 28) throw new Error('VarInt is longer than 5 bytes, so the data is probably not v3')
   }
   return out
 }

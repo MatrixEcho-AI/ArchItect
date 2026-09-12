@@ -137,7 +137,7 @@ export function packProject(input: PackInput): Uint8Array {
         2,
       ) + '\n',
     ),
-    [PATHS.log]: strToU8(`打包于 ${manifest.modifiedAt}，版本 ${manifest.revision}\n`),
+    [PATHS.log]: strToU8(`packed ${manifest.modifiedAt}, revision ${manifest.revision}\n`),
   }
   // 截图条目名是动态的，单独加进来
   for (const id of [...captures.files.keys()].sort()) {
@@ -191,18 +191,18 @@ export function unpackProject(bytes: Uint8Array): McaiProject {
     filter: (file) => {
       if (file.originalSize > MAX_ENTRY_BYTES) {
         throw new McaiFormatError(
-          `工程里的 ${file.name} 声明解压后 ${file.originalSize} 字节，超过上限 ${MAX_ENTRY_BYTES}`,
+          `${file.name} declares ${file.originalSize} bytes uncompressed, over the ${MAX_ENTRY_BYTES}-byte limit`,
         )
       }
       declaredBytes += file.originalSize
       entryCount++
       if (declaredBytes > MAX_TOTAL_BYTES) {
         throw new McaiFormatError(
-          `工程里的条目合计声明解压后 ${declaredBytes} 字节，超过上限 ${MAX_TOTAL_BYTES}`,
+          `The entries declare ${declaredBytes} bytes uncompressed in total, over the ${MAX_TOTAL_BYTES}-byte limit`,
         )
       }
       if (entryCount > MAX_ENTRIES) {
-        throw new McaiFormatError(`工程有超过 ${MAX_ENTRIES} 个条目，拒绝解包`)
+        throw new McaiFormatError(`The project has more than ${MAX_ENTRIES} entries`)
       }
       return true
     },
@@ -210,25 +210,25 @@ export function unpackProject(bytes: Uint8Array): McaiProject {
 
   const manifestBytes = entries[PATHS.manifest]
   if (manifestBytes === undefined) {
-    throw new McaiFormatError(`${PATHS.manifest} 缺失——这不是一个有效的 .mcai 工程`)
+    throw new McaiFormatError(`${PATHS.manifest} is missing, so this is not a valid .mcai project`)
   }
   const manifest = validateManifest(JSON.parse(strFromU8(manifestBytes)))
 
   const paletteBytes = entries[PATHS.palette]
-  if (paletteBytes === undefined) throw new McaiFormatError(`${PATHS.palette} 缺失，无法解释方块数据`)
+  if (paletteBytes === undefined) throw new McaiFormatError(`${PATHS.palette} is missing, so the block data cannot be read`)
   const palettePayload = JSON.parse(strFromU8(paletteBytes)) as { entries: string[] }
 
   const baseBytes = entries[PATHS.base]
-  if (baseBytes === undefined) throw new McaiFormatError(`${PATHS.base} 缺失，工程没有方块数据`)
+  if (baseBytes === undefined) throw new McaiFormatError(`${PATHS.base} is missing, so the project has no block data`)
   const snapshot = decodeSnapshot(baseBytes)
 
   if (snapshot.paletteSize !== palettePayload.entries.length) {
     throw new McaiFormatError(
-      `调色板有 ${palettePayload.entries.length} 项，但快照声明 ${snapshot.paletteSize} 项，文件已损坏`,
+      `The palette has ${palettePayload.entries.length} entries but the snapshot declares ${snapshot.paletteSize}`,
     )
   }
   if (snapshot.minY !== manifest.minY || snapshot.worldHeight !== manifest.worldHeight) {
-    throw new McaiFormatError('快照的世界高度与 manifest 不一致，文件已损坏')
+    throw new McaiFormatError('The snapshot world height does not match the manifest')
   }
 
   const registry = loadRegistry(manifest.minecraftVersion)
@@ -277,10 +277,10 @@ function validateCapturesQuietly(bundle: CaptureBundle): string[] {
   const problems: string[] = []
   for (const ref of bundle.refs) {
     const bytes = bundle.files.get(ref.id)
-    if (bytes === undefined) problems.push(`截图 ${ref.id} 在索引里但没有对应文件`)
-    else if (bytes.length !== ref.bytes) problems.push(`截图 ${ref.id} 大小与索引不一致`)
+    if (bytes === undefined) problems.push(`Capture ${ref.id} is in the index but has no file`)
+    else if (bytes.length !== ref.bytes) problems.push(`Capture ${ref.id} does not match the size in the index`)
   }
-  if (problems.length > 0) process.emitWarning(`.mcai 截图索引有问题：${problems.join('；')}`)
+  if (problems.length > 0) process.emitWarning(`.mcai capture index: ${problems.join('; ')}`)
   return problems
 }
 

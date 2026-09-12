@@ -58,7 +58,7 @@ describe('截图：外部渲染后端', () => {
 
     expect(pngMagic(image.png)).toEqual([0x89, 0x50, 0x4e, 0x47])
     expect(image.revision).toBe(session.store.revision)
-    expect(session.renderFallback).toBe('外部渲染后端拒绝了这一枪')
+    expect(session.renderFallback).toBe('The external render backend rejected this shot')
   })
 
   it('后端抛错也只是回落，不会把整轮对话带走', async () => {
@@ -94,7 +94,7 @@ describe('截图：外部渲染后端', () => {
     // 拿到的必须是软件光栅器**按新状态**画的那张，而不是那个 3 字节的假图
     expect(pngMagic(image.png)).toEqual([0x89, 0x50, 0x4e, 0x47])
     expect(image.revision).toBe(session.store.revision)
-    expect(session.renderFallback).toBe('渲染期间世界被改动，这一枪作废')
+    expect(session.renderFallback).toBe('The world changed while rendering, so this shot was discarded')
   })
 
   it('纯色会话**根本不问**外部后端，也不算回落', async () => {

@@ -391,7 +391,7 @@ describe('字符串解析的边界', () => {
   })
 
   it('不认识的方块报错而不是静默返回', () => {
-    expect(() => remapStateString(registry, 'minecraft:not_a_block', { rotate: 90 })).toThrow(/未知方块/)
+    expect(() => remapStateString(registry, 'minecraft:not_a_block', { rotate: 90 })).toThrow(/Unknown block/)
     expect(() => remapStateString(registry, '!!!', { rotate: 90 })).toThrow()
   })
 

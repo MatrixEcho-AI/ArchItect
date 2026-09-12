@@ -1438,7 +1438,7 @@ function formatBounds(b: Bounds): string {
 function cliTexturePack(inv: { textures?: string }, version: string): TexturePack {
   if (inv.textures !== undefined) {
     const pack = texturePackAt(inv.textures)
-    if (pack === undefined) throw new Error(`--textures 指向的路径里没有方块纹理：${inv.textures}`)
+    if (pack === undefined) throw new Error(`No block textures at the --textures path: ${inv.textures}`)
     return pack
   }
   return assetsTexturePack(version)

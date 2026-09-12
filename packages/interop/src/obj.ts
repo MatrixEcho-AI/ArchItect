@@ -62,7 +62,7 @@ interface Quad {
 
 export function exportObj(store: WorldStore, options: ObjExportOptions = {}): ObjExportResult {
   const region = options.region ?? store.contentBounds()
-  if (region === undefined) throw new Error('世界是空的，没有可导出的内容')
+  if (region === undefined) throw new Error('The world is empty, so there is nothing to export')
   const precision = options.precision ?? 4
   const cull = options.cullFaces !== false
   const origin = options.originAtZero !== false ? region.min : { x: 0, y: 0, z: 0 }

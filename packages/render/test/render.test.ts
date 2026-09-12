@@ -87,7 +87,7 @@ describe('PNG 编解码', () => {
 
   it('拒绝非 PNG 输入', () => {
     expect(() => decodePng(new Uint8Array(64))).toThrow(PngError)
-    expect(() => decodePng(new Uint8Array(64))).toThrow(/签名/)
+    expect(() => decodePng(new Uint8Array(64))).toThrow(/signature/)
   })
 
   it('拒绝截断的 PNG', () => {
@@ -143,7 +143,7 @@ describe('相机', () => {
   it('预设角度符合约定（0 度 = 从 +Z 看向 -Z，90 度 = 正俯视）', () => {
     expect(VIEW_PRESETS.front).toEqual({ azimuth: 0, elevation: 0 })
     expect(VIEW_PRESETS.top.elevation).toBe(90)
-    expect(() => presetAngles('nope' as never)).toThrow(/未知机位/)
+    expect(() => presetAngles('nope' as never)).toThrow(/Unknown camera preset/)
   })
 
   it('正视图的基向量正确', () => {

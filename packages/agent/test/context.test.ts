@@ -72,7 +72,7 @@ describe('上下文策略：选哪一套', () => {
     expect(chosen.regime).toBe('windowed')
     expect(chosen.keepTurns).toBe(6)
     expect(chosen.keepImages).toBe(3)
-    expect(chosen.reason).toContain('缓存')
+    expect(chosen.reason).toContain('cache prefixes')
   })
 
   it('**窗口很小 → 也必须裁剪**（否则请求直接放不下，跟缓存无关了）', () => {

@@ -346,7 +346,7 @@ export class AgentSession {
           return image
         }
         this.recordFallback(
-          image === undefined ? '外部渲染后端拒绝了这一枪' : '渲染期间世界被改动，这一枪作废',
+          image === undefined ? 'The external render backend rejected this shot' : 'The world changed while rendering, so this shot was discarded',
         )
       } catch (error) {
         // 外部分支坏掉不该把整轮对话带走

@@ -110,11 +110,11 @@ describe('快照编解码', () => {
 
   it('魔数不对要报错', () => {
     expect(() => decodeSnapshot(new Uint8Array(64))).toThrow(SnapshotError)
-    expect(() => decodeSnapshot(new Uint8Array(64))).toThrow(/魔数/)
+    expect(() => decodeSnapshot(new Uint8Array(64))).toThrow(/magic number/)
   })
 
   it('太短的输入要报错', () => {
-    expect(() => decodeSnapshot(new Uint8Array(8))).toThrow(/连头部都不够/)
+    expect(() => decodeSnapshot(new Uint8Array(8))).toThrow(/too short for a header/)
   })
 
   it('列长度不符要报错', () => {
@@ -125,7 +125,7 @@ describe('快照编解码', () => {
         paletteSize: 2,
         columns: [{ chunkX: 0, chunkZ: 0, indices: new Uint16Array(10) }],
       }),
-    ).toThrow(/期望/)
+    ).toThrow(/expected/)
   })
 })
 
@@ -244,7 +244,7 @@ describe('.mcai 的损坏检测', () => {
 
   it('manifest 字段缺失会报错', () => {
     expect(() => validateManifest({ formatVersion: '0.1' })).toThrow(McaiFormatError)
-    expect(() => validateManifest({ formatVersion: '0.1' })).toThrow(/缺少必填字段/)
+    expect(() => validateManifest({ formatVersion: '0.1' })).toThrow(/missing required fields/)
   })
 
   it('格式主版本不兼容会报错', () => {
@@ -253,14 +253,14 @@ describe('.mcai 的损坏检测', () => {
     const project = unpackProject(bytes)
     expect(() =>
       validateManifest({ ...project.manifest, formatVersion: '9.0' }),
-    ).toThrow(/主版本不同/)
+    ).toThrow(/different major version/)
   })
 
   it('baseRevision 大于 revision 会报错', () => {
     const { store, log } = scenario()
     const project = unpackProject(pack(store, log))
     expect(() => validateManifest({ ...project.manifest, baseRevision: 99 })).toThrow(
-      /不能大于/,
+      /cannot exceed/,
     )
   })
 
@@ -270,7 +270,7 @@ describe('.mcai 的损坏检测', () => {
     entries[PATHS.palette] = strToU8(
       JSON.stringify({ minecraftVersion: '1.21.4', entries: ['minecraft:air'] }),
     )
-    expect(() => unpackProject(zipSync(entries))).toThrow(/调色板有 1 项，但快照声明/)
+    expect(() => unpackProject(zipSync(entries))).toThrow(/palette has 1 entries but the snapshot declares/)
   })
 
   it('快照的世界高度与 manifest 不符会报错', () => {
@@ -279,7 +279,7 @@ describe('.mcai 的损坏检测', () => {
     const manifest = JSON.parse(strFromU8(entries[PATHS.manifest]!)) as Record<string, unknown>
     manifest.worldHeight = (manifest.worldHeight as number) + 16
     entries[PATHS.manifest] = strToU8(JSON.stringify(manifest))
-    expect(() => unpackProject(zipSync(entries))).toThrow(/与世界高度不符|不一致/)
+    expect(() => unpackProject(zipSync(entries))).toThrow(/world height does not match/)
   })
 
   it('快照正文被截断会报错（不是静默读出垃圾）', () => {
@@ -374,7 +374,7 @@ describe('格式版本策略：可选字段可以随便加，破坏性改动必�
     const manifest = JSON.parse(strFromU8(entries[PATHS.manifest]!)) as Record<string, unknown>
     manifest.formatVersion = '9.0'
     entries[PATHS.manifest] = strToU8(JSON.stringify(manifest))
-    expect(() => unpackProject(zipSync(entries))).toThrow(/主版本不同/)
+    expect(() => unpackProject(zipSync(entries))).toThrow(/different major version/)
   })
 
   it('缺必填字段时报出**具体缺了哪个**（迁移器不做，但错误要能指导人）', () => {
@@ -406,7 +406,7 @@ describe('不按文件声明的尺寸解压', () => {
     expect(at, '没找到中央目录项——这个夹具需要跟着 zip 布局更新').toBeGreaterThanOrEqual(0)
     // 中央目录项里「解压后大小」在签名后第 24 字节
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(at + 24, 0x7fffffff, true)
-    expect(() => unpackProject(bytes)).toThrow(/超过上限/)
+    expect(() => unpackProject(bytes)).toThrow(/byte limit/)
   })
 
   it('**快照声明了超大的正文长度时拒绝**，而不是照着分配', () => {
@@ -414,7 +414,7 @@ describe('不按文件声明的尺寸解压', () => {
     // 头部布局：magic[8] | version | minY | worldHeight | paletteSize | **columnCount** | reserved
     const bytes = encodeSnapshot({ minY: 0, worldHeight: 384, paletteSize: 2, columns: [] })
     new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(24, 3_000_000, true)
-    expect(() => decodeSnapshot(bytes)).toThrow(/超过上限/)
+    expect(() => decodeSnapshot(bytes)).toThrow(/byte limit/)
   })
 
   it('对照：正常尺寸的快照编解码不受影响', () => {

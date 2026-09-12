@@ -45,7 +45,7 @@ describe('VarInt 编解码（v3 的 Data 用）', () => {
   })
 
   it('不接受负数', () => {
-    expect(() => encodeVarints([-1])).toThrow(/负数/)
+    expect(() => encodeVarints([-1])).toThrow(/negative/)
   })
 })
 
@@ -130,8 +130,8 @@ describe('.schem 写出：布局必须逐项对上规范', () => {
         blocks: [block(5, 0, 0, 'minecraft:stone')],
         dataVersion: DATA_VERSION_1_21_4,
       }),
-    ).toThrow(/超出声明尺寸/)
-    expect(() => writeSpongeSchematic({ size: [0, 1, 1], blocks: [], dataVersion: 1 })).toThrow(/尺寸必须为正/)
+    ).toThrow(/outside the declared size/)
+    expect(() => writeSpongeSchematic({ size: [0, 1, 1], blocks: [], dataVersion: 1 })).toThrow(/must be positive/)
   })
 })
 
@@ -196,7 +196,7 @@ describe('.schem 读入：v3 与 v2 都要认', () => {
         BlockData: byteArray([0, 1, 0, 0]),
       }),
     )
-    await expect(readSpongeSchematic(v1)).rejects.toThrow(/v1 格式/)
+    await expect(readSpongeSchematic(v1)).rejects.toThrow(/Sponge v1 layout/)
   })
 
   it('尺寸非法 / 缺 Blocks 时报可读的错误', async () => {
@@ -206,7 +206,7 @@ describe('.schem 读入：v3 与 v2 都要认', () => {
     const badSize = await gzip(
       writeNbtRaw({ Schematic: compound({ Version: int(3), Width: short(0), Height: short(1), Length: short(1) }) }),
     )
-    await expect(readSpongeSchematic(badSize)).rejects.toThrow(/尺寸非法/)
+    await expect(readSpongeSchematic(badSize)).rejects.toThrow(/Invalid \.schem size/)
 
     await expect(readSpongeSchematic(new Uint8Array([1, 2, 3, 4]))).rejects.toThrow()
   })
@@ -318,7 +318,7 @@ describe('M7 验收：导出再导入，contentHash 必须相等', () => {
   })
 
   it('导出空世界给出可读的错误，而不是写一个空文件', () => {
-    expect(() => exportSchematic(makeStore())).toThrow(/空的/)
+    expect(() => exportSchematic(makeStore())).toThrow(/world is empty/i)
   })
 
   it('只导出指定范围', () => {

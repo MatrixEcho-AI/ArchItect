@@ -96,7 +96,7 @@ export class TranscriptRecorder {
     this.model = options.model
     this.session = {
       id: options.sessionId ?? `s${Date.now().toString(36)}`,
-      title: options.title ?? '未命名会话',
+      title: options.title ?? 'Untitled session',
       createdAt: this.now(),
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),

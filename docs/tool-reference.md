@@ -26,7 +26,7 @@
 | [`paste_region`](#paste_region) | ✅ | — | Paste the clipboard so its **minimum corner** lands on `at`. |
 | [`replace_blocks`](#replace_blocks) | ✅ | — | **Material swap**: inside the box, replace every cell whose block is one of `blo… |
 | [`fix_states`](#fix_states) | ✅ | — | Repair block states that are locally inconsistent with their neighbours: fence /… |
-| [`erase`](#erase) | ✅ | ⚠️ | Delete blocks inside a box (equivalent to fill_box + mode=destroy, but more dire… |
+| [`erase`](#erase) | ✅ | ⚠️ | Delete **blocks** inside a box (equivalent to fill_box + mode=destroy, but more … |
 | [`place_block`](#place_block) | ✅ | — | Place a **single** block. |
 | [`place_entity`](#place_entity) | ✅ | — | Place one or more **entities** (boats, minecarts, armour stands, item frames…) i… |
 | [`edit_block_entity`](#edit_block_entity) | ✅ | — | Write the block entity data on one cell — sign text, banner patterns, container … |
@@ -269,7 +269,9 @@ Block facing **is remapped**: an east-facing stair becomes west-facing, door hin
 ## `erase`
 
 ```
-Delete blocks inside a box (equivalent to fill_box + mode=destroy, but more direct).
+Delete **blocks** inside a box (equivalent to fill_box + mode=destroy, but more direct).
+Block entity data attached to those cells goes with them — that is what "the chest is gone" means.
+This does **not** remove entities: a boat floating over the spot is still there afterwards. The result tells you how many entities it left behind; use remove_entity if you wanted those gone too.
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
@@ -316,6 +318,7 @@ Render one slice as an **ASCII plan view** (with coordinate rulers and a legend)
 Use it to confirm "is this cell the block I think it is"; do not guess coordinates from a screenshot (one cell is only a few pixels there).
 axis=y is a top-down plan (columns are x, rows are z); axis=x / axis=z are elevations (rows are y, top to bottom).
 Limiting the range with the x/y/z arguments can compress the output to a few dozen lines. If the range is too large it errors and tells you how far to shrink it.
+Entities that sit in this layer are drawn on top of the block glyph and are marked [entity] in the legend — that is how you see where a boat actually is, since a screenshot cannot show you the cell.
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |

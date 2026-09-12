@@ -9,6 +9,20 @@ export interface SliceRange {
   z?: readonly [number, number]
 }
 
+/**
+ * 一个落在切片平面上的实体。坐标是**浮点**，画图时取它所在的格。
+ *
+ * 为什么实体值得单独一层字形：D3 说精确编辑靠文本、审美才靠图。实体是浮点位置、
+ * 一格能叠任意多个，模型在截图上根本数不出来——而这张 ASCII 图是它唯一能
+ * "看见第 4 格上到底有没有船"的地方。
+ */
+export interface SliceEntityMark {
+  x: number
+  y: number
+  z: number
+  type: string
+}
+
 export interface SliceOptions {
   axis: SliceAxis
   index: number
@@ -18,12 +32,17 @@ export interface SliceOptions {
   maxCells?: number
   /** 覆盖自动分配的字形（方块规范串 → 单个字符）。 */
   glyphs?: Record<string, string>
+  /** 世界里的实体；落在这一层的会被盖在方块的格子上，并进图例。 */
+  entities?: readonly SliceEntityMark[]
 }
 
 export interface SliceLegendEntry {
   glyph: string
+  /** 方块规范串；`entity` 为真时这里是**实体类型**。 */
   block: string
   count: number
+  /** 这一项是实体而不是方块。图例里要能一眼分开。 */
+  entity?: boolean
 }
 
 export interface SliceResult {
@@ -41,6 +60,16 @@ export interface SliceResult {
 /** 空气固定用 `.`，其余按出现次数从多到少分配。 */
 const AIR_GLYPH = '.'
 const GLYPHS = '#%*=-~:;<>@$&ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+
+/**
+ * 实体的字形池。
+ *
+ * **必须从方块池里挖出来**：两套池子有重叠时，一个 `o` 会同时出现在
+ * "o = minecraft:oak_planks" 与 "o = minecraft:oak_boat" 两行上，而图例正是
+ * 模型读坐标的依据。只在真的有实体落在这一层时才挖——否则同一个世界的
+ * `slice` 输出会在加了实体支持之后**整体改字形**，那是没有必要的回归。
+ */
+const ENTITY_GLYPHS = 'oO0@&$%+=~'
 
 export const DEFAULT_MAX_SLICE_CELLS = 4096
 
@@ -102,19 +131,41 @@ export function renderSlice(store: WorldStore, options: SliceOptions): SliceResu
   if (options.glyphs !== undefined) {
     for (const [block, glyph] of Object.entries(options.glyphs)) glyphOf.set(block, glyph)
   }
+  // 实体**先**占字形：它们要从方块池里把字符挖走，所以得先知道自己用了哪些
+  const marks = new Array<string | undefined>(columns * rows)
+  const entityCounts = new Map<string, number>()
+  for (const entity of options.entities ?? []) {
+    const cell: Record<SliceAxis, number> = {
+      x: Math.floor(entity.x),
+      y: Math.floor(entity.y),
+      z: Math.floor(entity.z),
+    }
+    if (cell[axis] !== index) continue // 不在这一层上
+    const c = cell[columnAxis] - columnRange[0]
+    const r = rowCoords.indexOf(cell[rowAxis])
+    if (c < 0 || c >= columns || r < 0 || r >= rows) continue
+    const glyph = entityGlyphFor(marks, entityCounts, entity.type)
+    marks[r * columns + c] = glyph
+  }
+
+  const blockPool = entityCounts.size > 0 ? [...GLYPHS].filter((ch) => !ENTITY_GLYPHS.includes(ch)) : GLYPHS
   const rest = [...counts.keys()]
     .filter((b) => b !== airBlock)
     .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || a.localeCompare(b))
   let next = 0
   for (const block of rest) {
     if (glyphOf.has(block)) continue
-    glyphOf.set(block, GLYPHS[next] ?? '?')
+    glyphOf.set(block, blockPool[next] ?? '?')
     next++
   }
 
   const legend: SliceLegendEntry[] = [...counts.entries()]
     .map(([block, count]) => ({ glyph: glyphOf.get(block)!, block, count }))
     .sort((a, b) => b.count - a.count || a.block.localeCompare(b.block))
+  // 实体排在方块之后：方块那一段按出现次数排（主材在前），实体是少数派
+  for (const [type, count] of [...entityCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+    legend.push({ glyph: entityGlyphFor(marks, entityCounts, type), block: type, count, entity: true })
+  }
 
   const text = compose({
     axis,
@@ -126,6 +177,7 @@ export function renderSlice(store: WorldStore, options: SliceOptions): SliceResu
     columns,
     rows,
     cells,
+    marks,
     rowCoords,
     glyphOf,
     legend,
@@ -140,6 +192,19 @@ export function renderSlice(store: WorldStore, options: SliceOptions): SliceResu
     rowAxis,
     extent: boundsOf(axis, index, columnAxis, columnRange, rowAxis, rowRange),
   }
+}
+
+/** 给一种实体类型分配字形（同一层里每种类型一个），并累加它的出现次数。 */
+function entityGlyphFor(
+  _marks: Array<string | undefined>,
+  counts: Map<string, number>,
+  type: string,
+): string {
+  const existing = counts.get(type)
+  counts.set(type, (existing ?? 0) + 1)
+  // 插入顺序就是分配顺序（第一次见到某个类型时它才进这张表）
+  const index = [...counts.keys()].indexOf(type)
+  return ENTITY_GLYPHS[index] ?? '?'
 }
 
 function planeAxes(axis: SliceAxis): { columnAxis: SliceAxis; rowAxis: SliceAxis } {
@@ -220,6 +285,8 @@ interface ComposeInput {
   columns: number
   rows: number
   cells: string[]
+  /** 实体盖在格子上的字形；`undefined` = 这一格没有实体。 */
+  marks: Array<string | undefined>
   /** 每一行对应的坐标（第 0 行在最上面）。 */
   rowCoords: number[]
   glyphOf: Map<string, string>
@@ -227,7 +294,7 @@ interface ComposeInput {
 }
 
 function compose(input: ComposeInput): string {
-  const { axis, index, columnAxis, rowAxis, columnRange, rowRange, columns, rows, cells, glyphOf } = input
+  const { axis, index, columnAxis, rowAxis, columnRange, rowRange, columns, rows, cells, marks, glyphOf } = input
 
   const rowLabelWidth = Math.max(String(rowRange[0]).length, String(rowRange[1]).length)
   const gutter = ` ${rowAxis} `.padEnd(rowLabelWidth + 2)
@@ -239,7 +306,7 @@ function compose(input: ComposeInput): string {
   )
   lines.push(
     `legend: ${input.legend
-      .map((e) => `${e.glyph} = ${e.block} (${e.count})`)
+      .map((e) => `${e.glyph} = ${e.block}${e.entity === true ? ' [entity]' : ''} (${e.count})`)
       .join('   ')}`,
   )
 
@@ -256,7 +323,9 @@ function compose(input: ComposeInput): string {
   for (let r = 0; r < rows; r++) {
     let row = ''
     for (let c = 0; c < columns; c++) {
-      row += glyphOf.get(cells[r * columns + c]!) ?? '?'
+      const i = r * columns + c
+      // 实体盖在方块之上：同一格里两者都有时，先让人看见那个"多出来的东西"
+      row += marks[i] ?? glyphOf.get(cells[i]!) ?? '?'
     }
     const label = String(input.rowCoords[r]!).padStart(rowLabelWidth)
     lines.push(`${gutter}${label}|${row}|`)

@@ -504,7 +504,11 @@ export function planFillPlane(
 
 export const eraserTool = defineTool<{ from: number[]; to: number[]; confirm?: boolean }>({
   name: 'erase',
-  description: 'Delete blocks inside a box (equivalent to fill_box + mode=destroy, but more direct).',
+  description:
+    'Delete **blocks** inside a box (equivalent to fill_box + mode=destroy, but more direct).\n' +
+    'Block entity data attached to those cells goes with them — that is what "the chest is gone" means.\n' +
+    'This does **not** remove entities: a boat floating over the spot is still there afterwards. ' +
+    'The result tells you how many entities it left behind; use remove_entity if you wanted those gone too.',
   parameters: obj({ from: vec3('start [x,y,z]'), to: vec3('end [x,y,z]'), confirm: CONFIRM }, [
     'from',
     'to',
@@ -513,7 +517,34 @@ export const eraserTool = defineTool<{ from: number[]; to: number[]; confirm?: b
   destructive: true,
   execute: (ctx, args) => {
     const plan = planErase(args.from, args.to)
-    return commitPlan(ctx, 'erase', args, plan, args.confirm === true)
+    const result = commitPlan(ctx, 'erase', args, plan, args.confirm === true)
+    if (!result.ok) return result
+
+    /**
+     * **实体不会被 erase 删掉，而这件事必须说出来。**
+     *
+     * 方块与实体是两层：拆掉码头之后船还悬在原地，而 erase 的摘要只说"删了多少格"。
+     * 模型据此认为"那里已经空了"，接着就会在同一个位置放新的东西——两样东西叠在
+     * 一起，而它一直到截图才发现。harness 给事实，删不删由模型决定。
+     */
+    const from = toPos(args.from, 'from')
+    const to = toPos(args.to, 'to')
+    const bounds = {
+      min: { x: Math.min(from.x, to.x), y: Math.min(from.y, to.y), z: Math.min(from.z, to.z) },
+      max: { x: Math.max(from.x, to.x), y: Math.max(from.y, to.y), z: Math.max(from.z, to.z) },
+    }
+    const left = ctx.store.entities
+      .inBounds(bounds)
+      .filter((entity) => ctx.store.getBlockString({ x: Math.floor(entity.x), y: Math.floor(entity.y), z: Math.floor(entity.z) }) === 'minecraft:air')
+    if (left.length === 0) return result
+    return {
+      ...result,
+      summary:
+        `${result.summary} **${left.length} ${left.length === 1 ? 'entity is' : 'entities are'} still in that box** ` +
+        `(${left.map((entity) => `${entity.id} ${entity.type}`).join(', ')}) — erase does not touch entities; ` +
+        'call remove_entity if you wanted them gone.',
+      data: { ...result.data, entitiesLeft: left.map((entity) => ({ id: entity.id, type: entity.type })) },
+    }
   },
 })
 

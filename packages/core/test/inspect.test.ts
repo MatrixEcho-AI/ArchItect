@@ -207,3 +207,64 @@ describe('measure', () => {
     expect(result.histogram[0]!.percent).toBe(100)
   })
 })
+
+describe('slice 把实体画在方块之上（D3：精确编辑靠文本）', () => {
+  it('实体所在的格换成实体字形，图例里标 [entity]', () => {
+    const store = makeStore()
+    store.setBlock({ x: 2, y: 1, z: 2 }, 'minecraft:stone')
+    const result = renderSlice(store, {
+      axis: 'y',
+      index: 1,
+      range: { x: [0, 4], z: [0, 4] },
+      entities: [{ x: 3.5, y: 1.5, z: 2.5, type: 'minecraft:oak_boat' }],
+    })
+
+    // 第 2 行（z=2）的第 3 列（x=3）是那条船
+    expect(rowAt(result.text, 2)[3]).toBe('o')
+    // 方块那一格不受影响
+    expect(rowAt(result.text, 2)[2]).not.toBe('o')
+    const entityEntry = result.legend.find((entry) => entry.entity === true)
+    expect(entityEntry).toMatchObject({ glyph: 'o', block: 'minecraft:oak_boat', count: 1 })
+    expect(result.text).toContain('o = minecraft:oak_boat [entity] (1)')
+  })
+
+  it('**不和方块抢字形**：同一个 `o` 不会既是方块又是实体', () => {
+    const store = makeStore()
+    // 铺一大片不同的方块，把方块池用到实体池的字符上
+    let i = 0
+    for (let x = 0; x < 4; x++) {
+      for (let z = 0; z < 4; z++) {
+        const block = ['minecraft:stone', 'minecraft:dirt', 'minecraft:oak_planks', 'minecraft:glass'][i++ % 4]!
+        store.setBlock({ x, y: 1, z }, block)
+      }
+    }
+    const result = renderSlice(store, {
+      axis: 'y',
+      index: 1,
+      range: { x: [0, 3], z: [0, 3] },
+      entities: [{ x: 1.5, y: 1, z: 1.5, type: 'minecraft:oak_boat' }],
+    })
+    const glyphs = result.legend.map((entry) => entry.glyph)
+    expect(new Set(glyphs).size).toBe(glyphs.length)
+  })
+
+  it('不在这一层的实体不出现', () => {
+    const store = makeStore()
+    const result = renderSlice(store, {
+      axis: 'y',
+      index: 1,
+      range: { x: [0, 3], z: [0, 3] },
+      entities: [{ x: 1.5, y: 5, z: 1.5, type: 'minecraft:oak_boat' }],
+    })
+    expect(result.legend.some((entry) => entry.entity === true)).toBe(false)
+    expect(result.text).not.toContain('[entity]')
+  })
+
+  it('没有实体时输出与以前**逐字节相同**（不给既有工程换字形）', () => {
+    const store = makeStore()
+    store.setBlock({ x: 1, y: 1, z: 1 }, 'minecraft:stone')
+    const withOption = renderSlice(store, { axis: 'y', index: 1, range: { x: [0, 3], z: [0, 3] }, entities: [] })
+    const withoutOption = renderSlice(store, { axis: 'y', index: 1, range: { x: [0, 3], z: [0, 3] } })
+    expect(withOption.text).toBe(withoutOption.text)
+  })
+})

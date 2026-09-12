@@ -357,3 +357,34 @@ describe('verify 的实体 claim：完成闸门唯一的读回途径', () => {
     expect(ctx.store.entities.size).toBe(1)
   })
 })
+
+describe('erase 与 slice：方块那一层要看得到实体', () => {
+  it('**拆掉方块之后船还在** —— erase 的摘要必须说出来', async () => {
+    const ctx = makeContext()
+    await call(ctx, 'place_entity', { entities: [{ type: 'minecraft:oak_boat', at: [1, 0, 1] }] })
+    await call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 2, 3], block: 'stone' })
+    const erased = await call(ctx, 'erase', { from: [0, 0, 0], to: [3, 2, 3], confirm: true })
+
+    expect(erased.ok).toBe(true)
+    // 不报的话模型会以为那里已经空了，然后在同一个位置再放一个东西
+    expect(erased.summary).toMatch(/still in that box/)
+    expect(erased.data?.entitiesLeft).toHaveLength(1)
+    expect(ctx.store.entities.size).toBe(1)
+  })
+
+  it('区域里没有实体时不啰嗦', async () => {
+    const ctx = makeContext()
+    await call(ctx, 'fill_box', { from: [0, 0, 0], to: [3, 2, 3], block: 'stone' })
+    const erased = await call(ctx, 'erase', { from: [0, 0, 0], to: [3, 2, 3], confirm: true })
+    expect(erased.summary).not.toMatch(/still in that box/)
+    expect(erased.data?.entitiesLeft).toBeUndefined()
+  })
+
+  it('slice 的图里能看到实体字形与 [entity] 图例', async () => {
+    const ctx = makeContext()
+    await call(ctx, 'place_entity', { entities: [{ type: 'minecraft:oak_boat', at: [1, 0, 1] }] })
+    const sliced = await call(ctx, 'slice', { axis: 'y', index: 0, x: [0, 3], z: [0, 3] })
+    expect(sliced.ok).toBe(true)
+    expect(sliced.summary).toContain('minecraft:oak_boat [entity]')
+  })
+})

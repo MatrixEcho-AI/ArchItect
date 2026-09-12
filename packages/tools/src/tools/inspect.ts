@@ -18,7 +18,9 @@ export const sliceTool = defineTool<{
     'Render one slice as an **ASCII plan view** (with coordinate rulers and a legend) — **this is your main tool for precise editing**.\n' +
     'Use it to confirm "is this cell the block I think it is"; do not guess coordinates from a screenshot (one cell is only a few pixels there).\n' +
     'axis=y is a top-down plan (columns are x, rows are z); axis=x / axis=z are elevations (rows are y, top to bottom).\n' +
-    'Limiting the range with the x/y/z arguments can compress the output to a few dozen lines. If the range is too large it errors and tells you how far to shrink it.',
+    'Limiting the range with the x/y/z arguments can compress the output to a few dozen lines. If the range is too large it errors and tells you how far to shrink it.\n' +
+    'Entities that sit in this layer are drawn on top of the block glyph and are marked [entity] in the legend — ' +
+    'that is how you see where a boat actually is, since a screenshot cannot show you the cell.',
   parameters: obj(
     {
       axis: { type: 'string', description: 'Which axis the slice is perpendicular to.', enum: ['x', 'y', 'z'] },
@@ -42,6 +44,8 @@ export const sliceTool = defineTool<{
         index: args.index,
         ...(Object.keys(range).length > 0 ? { range } : {}),
         ...(args.maxCells !== undefined ? { maxCells: args.maxCells } : {}),
+        // 实体盖在方块的格子上：它们是浮点的、一格能叠多个，模型只能从这里看见
+        entities: ctx.store.entities.list(),
       })
       return {
         ok: true,

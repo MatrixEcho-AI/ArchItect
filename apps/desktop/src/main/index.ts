@@ -748,28 +748,59 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     /**
      * **插图的两个入口。**
      *
-     * 只断言"在、可用、带 aria-label"，**不点它们**：文件选择框是原生对话框，
-     * 点下去会把这条冒烟测试挂在那儿等人（CI 里就是永久卡住）。真实行为由
-     * chat.test.ts 与 image-input.test.ts 覆盖——那两层不需要弹窗。
+     * 三条断言：在、带 aria-label、待发区那个容器在。
      *
-     * #pending-images 也一起看一眼：它必须**存在**（没图时带 hidden），
-     * 因为"图进没进待发区"是这条链路唯一能在 DOM 上读到的证据。
+     * **可用性不硬断言**：这两个按钮在"正在生成"与"停在历史版本"时是禁用的（locked），
+     * 而冒烟跑到这里时这两件事**都成立**：demo 那一轮可能还在飞，而这个脚本自己刚刚
+     * 把时间线拖到 rev 3（timeline-drag 那一条），世界停在 rev 7 —— 于是
+     * state.behindTip 为真。第一版硬断言 disabled===false，等于拿两个与本次改动
+     * 无关的状态判了红。所以这里读一次真实状态，只在**本该可用**时要求它可用。
+     *
+     * 也**不点它们**：文件选择框是原生对话框，点下去会把冒烟测试挂在那儿等人
+     * （CI 里就是永久卡住）。真实行为由 chat.test.ts 与 image-input.test.ts 覆盖。
+     *
+     * #pending-images 必须**存在**（没图时带 hidden）：那是"图进没进待发区"唯一能读的证据。
      */
     const attach = document.querySelector('#btn-attach-image');
     const grab = document.querySelector('#btn-grab-viewport');
     const pending = document.querySelector('#pending-images');
+    const chatView = await window.architect.chat();
+    const studioState = await window.architect.state();
+    const busy = chatView.running === true;
+    const behind = studioState.behindTip === true;
     check(
       'attach-buttons',
       attach !== null &&
         grab !== null &&
-        attach.disabled === false &&
-        grab.disabled === false &&
+        pending !== null &&
         attach.getAttribute('aria-label') !== null &&
         grab.getAttribute('aria-label') !== null &&
-        pending !== null,
-      '插入图片=' + (attach === null ? '缺失' : attach.getAttribute('aria-label')) +
-        ' / 采集视口=' + (grab === null ? '缺失' : grab.getAttribute('aria-label')) +
-        ' / 待发区=' + (pending === null ? '缺失' : (pending.classList.contains('hidden') ? '空（隐藏）' : '有图')),
+        (busy || behind || (attach.disabled === false && grab.disabled === false)),
+      '插入图片=' + (attach === null ? '缺失' : '在') +
+        ' / 采集视口=' + (grab === null ? '缺失' : '在') +
+        ' / 待发区=' + (pending === null ? '缺失' : '在') +
+        ' / ' +
+        (busy
+          ? '生成中（按设计禁用）'
+          : behind
+            ? '停在历史版本（按设计禁用）'
+            : attach.disabled === false
+              ? '空闲且可用'
+              : '空闲却被禁用'),
+    );
+
+    /**
+     * **粘贴的接线还在。**
+     *
+     * 只断言输入框带着那个标记，不验行为——原因见上面那段的注释：合成 paste 事件
+     * 会把渲染进程弄崩，一个把自己弄红的测试比没有测试更糟。
+     */
+    check(
+      'paste-bound',
+      input !== null && input.getAttribute('data-paste-bound') === '1',
+      input === null
+        ? '没有 #chat-input'
+        : (input.getAttribute('data-paste-bound') === '1' ? '挂在输入框上' : '标记丢了'),
     );
 
     // 恢复条：**有草稿才显示**。这里不能硬断言"一定是隐藏的"——

@@ -71,14 +71,18 @@ export interface OpDetailView {
  * 发送时才发生（用户可能选完又删掉，那就不该占主进程的位置）。
  */
 export interface StagedImage {
-  /** 稳定 key（React 列表用）。同一张图选两次是两个条目，所以不能用内容哈希。 */
-  key: string
   dataUrl: string
   mimeType: string
   /** 采集视口来的那一张，发出去之后按这个 id 取缩略图；文件选来的没有。 */
   id?: string
   /** 文件名或机位标签，画在缩略图的角上。 */
   label: string
+  /**
+   * React 列表的 key。**由待发区自己补**（见 `ChatPanel` 的 `stage`），
+   * 所以调用方不必给——同一张图选两次是两个条目，key 必须是"第几次加入"
+   * 而不是内容，那只有待发区知道。
+   */
+  key?: string
 }
 
 /** 发给主进程的附图（`chat:send`）。 */

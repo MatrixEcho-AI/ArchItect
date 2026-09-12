@@ -127,9 +127,8 @@ export const zhCN = {
      * 就会觉得功能坏了（其实附图是长期保留的，但"素材库"这层预期本身是错的）。
      */
     attachImage: '插入图片',
-    attachImageTip: '从磁盘选图片，随这条消息一起发给模型',
     grabViewport: '采集视口',
-    grabViewportTip: '把你此刻看到的画面作成一张图，随这条消息发给模型',
+    pastedImage: '粘贴的图片',
     attachRemove: '移除这张图',
     attachCount: '已附 {{count}} 张图',
     attachRejected: '有 {{count}} 个文件没能加进来：{{detail}}',

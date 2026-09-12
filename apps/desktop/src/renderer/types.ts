@@ -257,6 +257,16 @@ export interface ScenePayload {
   uvs: Float32Array
   indices: Uint32Array
   atlas: { size: number; data: Uint8Array }
+  /** 实体那一段；世界为空或没有实体时缺省。见主进程 `ScenePayload` 的说明。 */
+  entities?: {
+    positions: Float32Array
+    normals: Float32Array
+    colors: Float32Array
+    uvs: Float32Array
+    indices: Uint32Array
+    atlas: { size: number; data: Uint8Array; tileSize?: number }
+    list: Array<{ id: string; type: string; x: number; y: number; z: number; yaw: number }>
+  }
   /** 内容包围盒（忽略空气）。空世界没有这一项。 */
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   /**

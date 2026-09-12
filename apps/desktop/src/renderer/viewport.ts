@@ -62,6 +62,22 @@ export interface ScenePayload {
   uvs: Float32Array
   indices: Uint32Array
   atlas: { size: number; data: Uint8Array }
+  /**
+   * 实体：**独立的一份几何与图集**。
+   *
+   * 为什么不并进上面那份再加一个材质位：three.js 一个 mesh 一个材质，按材质拆成
+   * 两份反而更顺；而软件光栅器那边要的是一份三角形汤。两边各自拿最顺手的形状，
+   * 但**几何来自同一个 `meshWorldEntities`**——D-48 靠的是同一份数据。
+   */
+  entities?: {
+    positions: Float32Array
+    normals: Float32Array
+    colors: Float32Array
+    uvs: Float32Array
+    indices: Uint32Array
+    atlas: { size: number; data: Uint8Array; tileSize?: number }
+    list: Array<{ id: string; type: string; x: number; y: number; z: number; yaw: number }>
+  }
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
 }
@@ -193,6 +209,10 @@ export class Viewport implements SceneViewport {
   private opaque?: THREE.Mesh
   private translucent?: THREE.Mesh
   private texture?: THREE.DataTexture
+  /** 实体那两层网格与它自己的图集（tile 尺寸与方块那张不同）。 */
+  private entityOpaque?: THREE.Mesh
+  private entityTranslucent?: THREE.Mesh
+  private entityTexture?: THREE.DataTexture
   private bounds?: { min: [number, number, number]; max: [number, number, number] }
   private volume: { min: [number, number, number]; max: [number, number, number] } = {
     min: [0, 0, 0],
@@ -249,11 +269,105 @@ export class Viewport implements SceneViewport {
     this.volume = payload.volume
     this.rebuildGrid()
 
-    if (this.texture === undefined || this.texture.image.width !== payload.atlas.size) {
+    /**
+     * 方块与实体各建一次，形状完全一样：一张图集、一批顶点、按 tile 判据拆成
+     * 不透明/半透明两块网格。
+     *
+     * 两份数据来自主进程的**同一份** `meshWorldEntities` 与 `meshWorld`，
+     * 所以"用户看到的 = 模型看到的"（D-48）靠的是同一个来源，而不是两边各做一遍。
+     * 唯一的差别是 tile 网格：实体的 tile 尺寸由内容决定（船的贴图是 128×64），
+     * 所以判据表要按各自的 `tileSize` 建。
+     */
+    const build = (
+      layer: {
+        positions: Float32Array
+        normals: Float32Array
+        colors: Float32Array
+        uvs: Float32Array
+        indices: Uint32Array
+        atlas: { size: number; data: Uint8Array; tileSize?: number }
+      },
+      texture: THREE.DataTexture,
+      slot: 'block' | 'entity',
+    ): void => {
+      const atlas: TextureAtlas = {
+        size: layer.atlas.size,
+        data: layer.atlas.data,
+        textures: {},
+        ...(layer.atlas.tileSize !== undefined ? { tileSize: layer.atlas.tileSize } : {}),
+      }
+      const tilesPerRow = tilesPerRowOf(atlas)
+      const opaqueTiles = buildOpaqueTileTable(atlas)
+
+      // 顶点色 = AO × 生物群系着色 × **方向明暗**。明暗按法线烘进来，
+      // 这样材质可以是不带灯的 MeshBasicMaterial，而每一面的亮度就是原版那个值。
+      const vertexCount = layer.positions.length / 3
+      const colors = new Float32Array(vertexCount * 3)
+      for (let i = 0; i < vertexCount; i++) {
+        const shade = shadeFor(layer.normals[i * 3]!, layer.normals[i * 3 + 1]!, layer.normals[i * 3 + 2]!)
+        colors[i * 3] = layer.colors[i * 3]! * shade
+        colors[i * 3 + 1] = layer.colors[i * 3 + 1]! * shade
+        colors[i * 3 + 2] = layer.colors[i * 3 + 2]! * shade
+      }
+
+      const opaqueIndices: number[] = []
+      const translucentIndices: number[] = []
+      for (let t = 0; t < layer.indices.length; t += 3) {
+        const i0 = layer.indices[t]!
+        const i1 = layer.indices[t + 1]!
+        const i2 = layer.indices[t + 2]!
+        const uc = (layer.uvs[i0 * 2]! + layer.uvs[i1 * 2]! + layer.uvs[i2 * 2]!) / 3
+        const vc = (layer.uvs[i0 * 2 + 1]! + layer.uvs[i1 * 2 + 1]! + layer.uvs[i2 * 2 + 1]!) / 3
+        const target = opaqueTiles[tileIndex(uc, vc, tilesPerRow)] === 1 ? opaqueIndices : translucentIndices
+        target.push(i0, i1, i2)
+      }
+
+      // 顶点属性两块共用
+      const make = (indices: number[], material: THREE.Material): THREE.Mesh => {
+        const geometry = new THREE.BufferGeometry()
+        geometry.setAttribute('position', new THREE.BufferAttribute(layer.positions, 3))
+        geometry.setAttribute('normal', new THREE.BufferAttribute(layer.normals, 3))
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+        geometry.setAttribute('uv', new THREE.BufferAttribute(layer.uvs, 2))
+        geometry.setIndex(indices)
+        const mesh = new THREE.Mesh(geometry, material)
+        // mesher 的三角形绕向会跟着 AO 翻转（见 vendored models.js），
+        // 开背面剔除会随机吃掉一半的面，所以两面都画：背面本来也被正面挡住
+        mesh.frustumCulled = false
+        this.scene.add(mesh)
+        return mesh
+      }
+
+      const base = {
+        map: texture,
+        vertexColors: true,
+        side: THREE.DoubleSide,
+        // 我们的纹理是近邻采样的像素材质，不要各向异性平滑
+        fog: false,
+      }
+      const opaqueMesh = make(
+        opaqueIndices,
+        new THREE.MeshBasicMaterial({ ...base, alphaTest: 0.5, transparent: false }),
+      )
+      const translucentMesh = make(
+        translucentIndices,
+        new THREE.MeshBasicMaterial({ ...base, transparent: true, depthWrite: false, alphaTest: 0.02 }),
+      )
+      if (slot === 'block') {
+        this.opaque = opaqueMesh
+        this.translucent = translucentMesh
+      } else {
+        this.entityOpaque = opaqueMesh
+        this.entityTranslucent = translucentMesh
+      }
+    }
+
+    const upload = (existing: THREE.DataTexture | undefined, source: { size: number; data: Uint8Array }): THREE.DataTexture => {
+      if (existing !== undefined && existing.image.width === source.size) return existing
       const texture = new THREE.DataTexture(
-        new Uint8Array(payload.atlas.data),
-        payload.atlas.size,
-        payload.atlas.size,
+        new Uint8Array(source.data),
+        source.size,
+        source.size,
         THREE.RGBAFormat,
       )
       texture.magFilter = THREE.NearestFilter
@@ -261,73 +375,17 @@ export class Viewport implements SceneViewport {
       texture.generateMipmaps = false
       texture.colorSpace = THREE.SRGBColorSpace
       texture.needsUpdate = true
-      this.texture?.dispose()
-      this.texture = texture
-    }
-
-    const atlas: TextureAtlas = {
-      size: payload.atlas.size,
-      data: payload.atlas.data,
-      textures: {},
-    }
-    const tilesPerRow = tilesPerRowOf(atlas)
-    const opaqueTiles = buildOpaqueTileTable(atlas)
-
-    // 顶点色 = AO × 生物群系着色 × **方向明暗**。明暗按法线烘进来，
-    // 这样材质可以是不带灯的 MeshBasicMaterial，而每一面的亮度就是原版那个值。
-    const vertexCount = payload.positions.length / 3
-    const colors = new Float32Array(vertexCount * 3)
-    for (let i = 0; i < vertexCount; i++) {
-      const shade = shadeFor(payload.normals[i * 3]!, payload.normals[i * 3 + 1]!, payload.normals[i * 3 + 2]!)
-      colors[i * 3] = payload.colors[i * 3]! * shade
-      colors[i * 3 + 1] = payload.colors[i * 3 + 1]! * shade
-      colors[i * 3 + 2] = payload.colors[i * 3 + 2]! * shade
-    }
-
-    const opaqueIndices: number[] = []
-    const translucentIndices: number[] = []
-    for (let t = 0; t < payload.indices.length; t += 3) {
-      const i0 = payload.indices[t]!
-      const i1 = payload.indices[t + 1]!
-      const i2 = payload.indices[t + 2]!
-      const uc = (payload.uvs[i0 * 2]! + payload.uvs[i1 * 2]! + payload.uvs[i2 * 2]!) / 3
-      const vc = (payload.uvs[i0 * 2 + 1]! + payload.uvs[i1 * 2 + 1]! + payload.uvs[i2 * 2 + 1]!) / 3
-      const target = opaqueTiles[tileIndex(uc, vc, tilesPerRow)] === 1 ? opaqueIndices : translucentIndices
-      target.push(i0, i1, i2)
+      existing?.dispose()
+      return texture
     }
 
     this.disposeMeshes()
-    // 顶点属性四份 mesh 共用（两块几何体的 position/normal/color/uv 完全相同）
-    const make = (indices: number[], material: THREE.Material): THREE.Mesh => {
-      const geometry = new THREE.BufferGeometry()
-      geometry.setAttribute('position', new THREE.BufferAttribute(payload.positions, 3))
-      geometry.setAttribute('normal', new THREE.BufferAttribute(payload.normals, 3))
-      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
-      geometry.setAttribute('uv', new THREE.BufferAttribute(payload.uvs, 2))
-      geometry.setIndex(indices)
-      const mesh = new THREE.Mesh(geometry, material)
-      // mesher 的三角形绕向会跟着 AO 翻转（见 vendored models.js），
-      // 开背面剔除会随机吃掉一半的面，所以两面都画：背面本来也被正面挡住
-      mesh.frustumCulled = false
-      this.scene.add(mesh)
-      return mesh
+    this.texture = upload(this.texture, payload.atlas)
+    build({ ...payload, atlas: payload.atlas }, this.texture, 'block')
+    if (payload.entities !== undefined) {
+      this.entityTexture = upload(this.entityTexture, payload.entities.atlas)
+      build(payload.entities, this.entityTexture, 'entity')
     }
-
-    const base = {
-      map: this.texture,
-      vertexColors: true,
-      side: THREE.DoubleSide,
-      // 我们的纹理是近邻采样的像素材质，不要各向异性平滑
-      fog: false,
-    }
-    this.opaque = make(
-      opaqueIndices,
-      new THREE.MeshBasicMaterial({ ...base, alphaTest: 0.5, transparent: false }),
-    )
-    this.translucent = make(
-      translucentIndices,
-      new THREE.MeshBasicMaterial({ ...base, transparent: true, depthWrite: false, alphaTest: 0.02 }),
-    )
   }
 
   /** 相机与画布尺寸变化后重画。`draft` 在 GPU 这条路上没有意义（一帧就几毫秒）。 */
@@ -579,7 +637,7 @@ export class Viewport implements SceneViewport {
   }
 
   private disposeMeshes(): void {
-    for (const mesh of [this.opaque, this.translucent]) {
+    for (const mesh of [this.opaque, this.translucent, this.entityOpaque, this.entityTranslucent]) {
       if (mesh === undefined) continue
       this.scene.remove(mesh)
       mesh.geometry.dispose()
@@ -587,6 +645,8 @@ export class Viewport implements SceneViewport {
     }
     this.opaque = undefined
     this.translucent = undefined
+    this.entityOpaque = undefined
+    this.entityTranslucent = undefined
   }
 }
 

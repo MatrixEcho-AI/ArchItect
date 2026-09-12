@@ -27,6 +27,7 @@ import {
   fitCamera,
   loadRenderData,
   meshWorld,
+  meshWorldEntities,
   pickBlock,
   rasterize,
 } from '@architect/render'
@@ -190,6 +191,27 @@ export interface ScenePayload {
   uvs: Float32Array
   indices: Uint32Array
   atlas: { size: number; data: Uint8Array }
+  /**
+   * 实体：**独立的一份几何与一张图集**，而不是并进上面那份再加材质位。
+   *
+   * 桌面视口按材质拆两次网格本来就更容易（three.js 一个 mesh 一个材质），
+   * 而软件路径要的是一份三角形汤（它只有一个光栅器）——两边各自拿最顺手的形状。
+   * 几何本身来自**同一个** `meshWorldEntities`，所以 D-48（用户看到的 = 模型看到的）
+   * 靠的是同一份数据，不是"两边都小心地做一遍"。
+   *
+   * 世界里没有实体时整个字段缺省。
+   */
+  entities?: {
+    positions: Float32Array
+    normals: Float32Array
+    colors: Float32Array
+    uvs: Float32Array
+    indices: Uint32Array
+    /** 实体图集。`tileSize` 由内容决定，与方块那张不同。 */
+    atlas: { size: number; data: Uint8Array; tileSize?: number }
+    /** 给拾取与左栏用的实体清单（几何里没有身份信息）。 */
+    list: Array<{ id: string; type: string; x: number; y: number; z: number; yaw: number }>
+  }
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   /** 自动取景框住的范围（参考区域 ∪ 内容）。见 `frameBounds`。 */
   frame: { min: [number, number, number]; max: [number, number, number] }
@@ -296,6 +318,8 @@ export class StudioService {
   private session: AgentSession
   /** 交互视口的网格缓存，见 `viewport()`。revision 一变就失效。 */
   private meshCache?: { revision: number; geometry: WorldGeometry }
+  /** 实体那一段的缓存，见 `entitiesFor`。 */
+  private entityCache?: { revision: number; payload: ScenePayload['entities'] }
   private projectPath?: string
   /**
    * 打开工程时收下的、**本版本不认识的 zip 条目**（`McaiProject.extra`）。
@@ -1188,6 +1212,44 @@ export class StudioService {
   }
 
   /** 当前版本的网格，按 revision 缓存。绘图、截图、拾取都吃这一份。 */
+  /**
+   * 实体那一段（几何 + 图集 + 清单），按 revision 缓存。
+   *
+   * 与方块分开缓存是因为它**取决于世界里有哪些实体**：实体图集只装用得到的那几张
+   * 贴图，不进"版本 | 资源包"那张缓存。
+   */
+  private entitiesFor(store: WorldStore): ScenePayload['entities'] {
+    if (this.entityCache !== undefined && this.entityCache.revision === store.revision) {
+      return this.entityCache.payload
+    }
+    const result = meshWorldEntities(store, this.texturePack(store.registry.minecraftVersion))
+    const payload: ScenePayload['entities'] =
+      result === undefined
+        ? undefined
+        : {
+            positions: result.geometry.positions,
+            normals: result.geometry.normals,
+            colors: result.geometry.colors,
+            uvs: result.geometry.uvs,
+            indices: result.geometry.indices,
+            atlas: {
+              size: result.atlas.size,
+              data: result.atlas.data,
+              ...(result.atlas.tileSize !== undefined ? { tileSize: result.atlas.tileSize } : {}),
+            },
+            list: store.entities.list().map((entity) => ({
+              id: entity.id,
+              type: entity.type,
+              x: entity.x,
+              y: entity.y,
+              z: entity.z,
+              yaw: entity.yaw,
+            })),
+          }
+    this.entityCache = { revision: store.revision, payload }
+    return payload
+  }
+
   private geometryFor(store: WorldStore): { geometry: WorldGeometry; meshed: boolean } {
     if (this.meshCache !== undefined && this.meshCache.revision === store.revision) {
       return { geometry: this.meshCache.geometry, meshed: false }
@@ -1249,9 +1311,11 @@ export class StudioService {
     const store = this.session.store
     const data = loadRenderData(store.registry.minecraftVersion, this.texturePack(store.registry.minecraftVersion))
     const { geometry } = this.geometryFor(store)
+    const entities = this.entitiesFor(store)
     const bounds = store.contentBounds()
     return {
       revision: store.revision,
+      ...(entities !== undefined ? { entities } : {}),
       positions: geometry.positions,
       normals: geometry.normals,
       colors: geometry.colors,

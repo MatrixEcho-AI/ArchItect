@@ -742,3 +742,48 @@ describe('StudioService：保存是原子替换', () => {
     ).toBe(true)
   })
 })
+
+describe('视口所用的场景负载：实体那一层', () => {
+  it('**世界里没有实体时 payload 不带 entities**（既有渲染路径的形状不变）', () => {
+    const studio = new StudioService({ plain: true })
+    studio.agentSession.store.setBlock({ x: 0, y: 0, z: 0 }, 'minecraft:stone')
+    expect(studio.scene().entities).toBeUndefined()
+  })
+
+  it('有实体时带上几何、**实体自己的图集**、以及拾取要用的清单', () => {
+    const studio = new StudioService({ plain: true })
+    const store = studio.agentSession.store
+    store.setBlock({ x: 0, y: 0, z: 0 }, 'minecraft:stone')
+    store.entities.set({ id: 'e_1_1', type: 'minecraft:oak_boat', x: 2.5, y: 1, z: 2.5, yaw: 4 })
+
+    const scene = studio.scene()
+    const entities = scene.entities
+    expect(entities).toBeDefined()
+    expect(entities!.indices.length).toBeGreaterThan(0)
+    // 逐顶点属性必须等长——渲染进程按 vertices 建 BufferAttribute，
+    // 长度对不上会在 three.js 里画出乱七八糟的东西而不是报错
+    const vertices = entities!.positions.length / 3
+    expect(entities!.normals.length).toBe(vertices * 3)
+    expect(entities!.colors.length).toBe(vertices * 3)
+    expect(entities!.uvs.length).toBe(vertices * 2)
+    expect(Math.max(...entities!.indices)).toBeLessThan(vertices)
+    // 实体图集的 tile 尺寸由内容决定，与方块那张不同——判据表要按各自的尺寸建
+    expect(entities!.atlas.size).toBeGreaterThan(0)
+    expect(entities!.atlas.tileSize).toBeGreaterThanOrEqual(16)
+    // 几何里没有身份信息，拾取与左栏要靠这份清单
+    expect(entities!.list).toEqual([
+      { id: 'e_1_1', type: 'minecraft:oak_boat', x: 2.5, y: 1, z: 2.5, yaw: 4 },
+    ])
+  })
+
+  it('实体变了就重算（缓存按 revision 失效）', () => {
+    const studio = new StudioService({ plain: true })
+    const store = studio.agentSession.store
+    store.entities.set({ id: 'e_1_1', type: 'minecraft:oak_boat', x: 2.5, y: 1, z: 2.5, yaw: 0 })
+    const before = studio.scene().entities!.indices.length
+    store.commitSparse({
+      entities: [store.entities.set({ id: 'e_1_2', type: 'minecraft:oak_boat', x: 5.5, y: 1, z: 5.5, yaw: 0 })!],
+    })
+    expect(studio.scene().entities!.indices.length).toBeGreaterThan(before)
+  })
+})

@@ -4,7 +4,7 @@ import type { WorldStore } from '@architect/core'
 import type { TextureAtlas } from './atlas-format.js'
 import { loadBakedEntityModels } from './baked.js'
 import { buildEntityAtlas, ENTITY_FALLBACK_TEXTURE } from './entity-atlas.js'
-import { defaultTextureOf, entityModelFor } from './entity-models.js'
+import { entityModelFor, textureForModel } from './entity-models.js'
 import { meshEntity, meshFallbackBox } from './entitymesher.js'
 import type { EntityMeshOptions, RawEntityModel } from './entitymesher.js'
 import { concatGeometry } from './mesher.js'
@@ -57,7 +57,10 @@ export function meshWorldEntities(
     const ref = entityModelFor(entity.type, models)
     if (ref === undefined) return { entity, model: undefined, texture: ENTITY_FALLBACK_TEXTURE }
     const model = models[ref.model] as RawEntityModel | undefined
-    const texture = ref.texture ?? defaultTextureOf(model)
+    // `textureForModel` 而不是 `defaultTextureOf`：模型表里有一批贴图路径停在
+    // 1.16 时代、还有一批变体模型根本没有 `default`（见那里的 `MODEL_TEXTURE`）。
+    // 直接用 `default` 的症状是"形状对、糊了一层兜底灰"，很难看出是坏的。
+    const texture = textureForModel(ref.model, model, ref.texture)
     if (model === undefined || texture === undefined) {
       return { entity, model: undefined, texture: ENTITY_FALLBACK_TEXTURE }
     }

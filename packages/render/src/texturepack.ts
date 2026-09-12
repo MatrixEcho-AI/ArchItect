@@ -260,10 +260,12 @@ export function bakedColorTexturePack(version: string): TexturePack {
     blockTiles: () => tiles,
     read(path: string): Uint8Array | undefined {
       // 实体贴图：烘出来的表里**没有**实体的平均色，所以这里画一张确定性的棋盘。
+      // `item/` 走同一条路：只有烟花火箭与药水两个实体会请求它（原版画的就是物品
+      // 图标，见 `entity-models.ts` 的 `MODEL_TEXTURE`），同样没有烘过平均色。
       // 棋盘而不是纯色，是因为它顺带把 UV 方向也验了——映射反了在 golden 里
       // 表现为格子的相位不对，而纯色看不出来。尺寸取 64×32（非正方形），
       // 好让 golden 走一遍"tile 里塞不满"的那条路。
-      if (path.startsWith('entity/')) {
+      if (path.startsWith('entity/') || path.startsWith('item/')) {
         const cachedEntity = pngCache.get(path)
         if (cachedEntity !== undefined) return cachedEntity
         const png = checkerTile(path)

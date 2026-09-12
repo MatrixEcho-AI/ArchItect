@@ -87,12 +87,82 @@ export function entityModelFor(
  *
  * 模型表里的值是 `textures/entity/cow/cow` 这种写法（相对资源包根），
  * 而 `TexturePack.read` 收的是相对 `textures/` 的路径（`entity/cow/cow`）。
- * 这个转换只做一次，放在这里。
+ *
+ * 这里做两层翻译，都把上游的写法换成 `TexturePack` 那个**资源包命名空间**的写法：
+ * ① 去掉 `textures/` 前缀；② 物品贴图上游写作复数的 `items/`（那是
+ * minecraft-assets 的目录名），而资源包里是单数的 `item/`。
+ * 目录名与命名空间不一致这件事只在 `assetsTexturePack` 那一层还原
+ * （`block/` → `blocks/` 同理），所以这里给出的一律是命名空间的写法。
  */
 export function defaultTextureOf(model: unknown, variant?: string): string | undefined {
   const textures = (model as { textures?: Record<string, string> } | undefined)?.textures
   if (textures === undefined) return undefined
   const value = (variant !== undefined ? textures[variant] : undefined) ?? textures['default']
   if (typeof value !== 'string' || value.length === 0) return undefined
-  return value.replace(/^textures\//, '')
+  return value.replace(/^textures\//, '').replace(/^items\//, 'item/')
 }
+
+/**
+ * 模型表里**默认贴图缺失或路径过时**的模型 → 1.21.4 里真正该画的那张。
+ *
+ * ## 为什么必须有一张手写的修正表
+ *
+ * 上游表是 `prismarine-viewer` 的，**实体贴图路径停在 1.16 时代**（见文件头的说明）。
+ * 1.21.4 把好几类挪进了子目录，于是表里的值指向一个不存在的文件。两条后果都是
+ * **安静的**：`buildEntityAtlas` 把读不到的路径收进 `missing` 就继续跑，那个实体
+ * 于是被画成"形状对、糊了一层兜底灰"——比兜底盒更难看出是坏的。
+ *
+ * 三类修正，每一类都在这里写明理由：
+ *
+ * 1. **路径挪窝**：`entity/squid` → `entity/squid/squid`（1.17 起生物各自一个目录）、
+ *    `entity/arrow` → `entity/projectiles/arrow`、`entity/steve` →
+ *    `entity/player/wide/steve`。
+ * 2. **改画物品贴图**：烟花火箭与药水在 1.21.4 没有自己的实体贴图，
+ *    原版画的就是物品图标（`item/firework_rocket`、`item/splash_potion`）。
+ * 3. **变体模型没有 `default`**：猫、马、羊驼、村民、兔子、鹦鹉、狐狸、豹猫、
+ *    潜影贝、热带鱼这些在表里**只列了变体贴图**（`white`/`black`/`brown`…），
+ *    取 `textures.default` 得到 `undefined`，于是整只生物退化成 AABB 盒子。
+ *    这里给每个挑一个原版最常见的变体：**形状是真的，只有花纹是"某一种"**——
+ *    比一个灰盒子接近得多，而且这件事写在 README 的已知差异里。
+ */
+const MODEL_TEXTURE: Readonly<Record<string, string>> = {
+  // ── 1. 路径挪窝 ──
+  squid: 'entity/squid/squid',
+  arrow: 'entity/projectiles/arrow',
+  player: 'entity/player/wide/steve',
+  // ── 2. 原版画的是物品贴图 ──
+  firework_rocket: 'item/firework_rocket',
+  potion: 'item/splash_potion',
+  // ── 3. 只有变体贴图，没有 default ──
+  cat: 'entity/cat/white',
+  ocelot: 'entity/cat/ocelot',
+  horse: 'entity/horse/horse_brown',
+  donkey: 'entity/horse/donkey',
+  mule: 'entity/horse/mule',
+  skeleton_horse: 'entity/horse/horse_skeleton',
+  zombie_horse: 'entity/horse/horse_zombie',
+  llama: 'entity/llama/creamy',
+  villager: 'entity/villager/type/plains',
+  zombie_villager: 'entity/zombie_villager/zombie_villager',
+  rabbit: 'entity/rabbit/brown',
+  parrot: 'entity/parrot/parrot_red_blue',
+  fox: 'entity/fox/fox',
+  shulker: 'entity/shulker/shulker_purple',
+  tropical_fish: 'entity/fish/tropical_a',
+}
+
+/**
+ * 一个实体**最终要读的那张贴图**。
+ *
+ * 优先级：显式指定（船的木种那样，模型对但贴图得挑）> 修正表 > 模型自带的 `default`。
+ * 修正表排在 `default` 之前是刻意的：那张 `default` 正是"过时或缺失"的定义。
+ */
+export function textureForModel(
+  modelKey: string,
+  model: unknown,
+  explicit?: string,
+): string | undefined {
+  if (explicit !== undefined) return explicit
+  return MODEL_TEXTURE[modelKey] ?? defaultTextureOf(model)
+}
+

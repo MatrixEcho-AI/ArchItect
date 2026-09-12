@@ -55,7 +55,9 @@
       "package.json",
       "!node_modules/minecraft-assets/minecraft-assets/data/*/*/**",
       "node_modules/minecraft-assets/minecraft-assets/data/*/*.json",
-      "node_modules/minecraft-assets/minecraft-assets/data/1.21.4/blocks/**"
+      "node_modules/minecraft-assets/minecraft-assets/data/1.21.4/blocks/**",
+      "node_modules/minecraft-assets/minecraft-assets/data/1.21.4/entity/**",
+      "node_modules/minecraft-assets/minecraft-assets/data/1.21.4/items/**"
     ],
     "fileAssociations": [
       {

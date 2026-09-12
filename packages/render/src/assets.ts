@@ -40,6 +40,7 @@ export function assetsTexturePack(minecraftVersion: string): TexturePack {
   }
   const blockDir = join(directory, 'blocks')
   const entityDir = join(directory, 'entity')
+  const itemDir = join(directory, 'items')
   // 与 `buildTextureAtlas` 一样要排序：文件系统给的顺序不同会让 UV 索引漂移
   const tiles = readdirSync(blockDir)
     .filter((file) => file.endsWith('.png'))
@@ -52,13 +53,22 @@ export function assetsTexturePack(minecraftVersion: string): TexturePack {
     detail: directory,
     blockTiles: () => tiles,
     read(path: string): Uint8Array | undefined {
-      // 方块纹理在 `blocks/`，实体纹理在 `entity/`（**可以带子目录**：`entity/boat/oak`）。
-      // 这个来源里没有物品纹理，而颜色解析走的正是方块纹理，所以只认这两个前缀。
+      // 三个前缀沿用**资源包**的写法（`block/` / `item/`），因为那是 `TexturePack`
+      // 对外统一的命名空间；落到这个来源上时目录名可能不一样（`block/` → `blocks/`、
+      // `item/` → `items/`），映射只发生在这里。路径都可以带子目录：
+      // `block/oak_planks`、`entity/boat/oak`、`item/splash_potion`。
+      //
+      // `item/` 这一支不是给"画个物品"用的——是**烟花火箭与药水**那两个实体：
+      // 1.21.4 里它们没有自己的实体贴图，原版画的就是物品图标
+      // （见 `entity-models.ts` 的 `MODEL_TEXTURE`）。不收这一支的话它们会被
+      // 画成"形状对、贴图糊成兜底灰"，而不是报错。
       const file = path.startsWith('block/')
         ? join(blockDir, `${path.slice('block/'.length)}.png`)
         : path.startsWith('entity/')
           ? join(entityDir, `${path.slice('entity/'.length)}.png`)
-          : undefined
+          : path.startsWith('item/')
+            ? join(itemDir, `${path.slice('item/'.length)}.png`)
+            : undefined
       if (file === undefined) return undefined
       // 懒读：一次渲染通常只用几十张纹理，1000 多张全读一遍要几百毫秒
       try {

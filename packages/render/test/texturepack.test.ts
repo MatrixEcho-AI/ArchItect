@@ -189,7 +189,11 @@ describe('解析设置 → 真正用的资源包（永远给得出一个）', ()
     const pack = bakedColorTexturePack(VERSION)
     const map = loadBakedBlockMap(VERSION)
     expect(pack.blockTiles()).toEqual([...map.tiles].sort())
-    expect(pack.read('item/stick')).toBeUndefined()
+    // 烘焙文件里**没有**物品贴图的平均色，所以物品路径给的是确定性的棋盘
+    // （两个会请求物品贴图的实体是烟花火箭与药水，见 `entity-models.ts`）。
+    expect(pack.read('item/stick')).toBeDefined()
+    // 认不出的命名空间仍然如实返回 undefined，而不是编一张图出来
+    expect(pack.read('gui/unknown_thing')).toBeUndefined()
     const bytes = pack.read('block/stone')!
     // PNG magic
     expect(Array.from(bytes.slice(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47])

@@ -145,16 +145,25 @@ export interface ChatView {
   running: boolean
   messages: ChatMessageView[]
   usage: ChatUsageView
-  costUsd?: number
+  costAmount?: number
+  /** 金额的币种代码（来自价格表）。 */
+  costCurrency?: string
   stopReason?: string
   error?: string
   /** 被预算刹住的原因（如果有）。**不是故障**，界面要说清楚。 */
-  budgetStop?: string
   ready: boolean
   blocking: string[]
 }
 
 // ── 设置 ──────────────────────────────────────────────────────────────────────
+
+/** 一张价格表在界面上的形状（金额 + 币种）。 */
+export interface CostTableView {
+  currency?: 'USD' | 'CNY' | 'EUR'
+  inPerMTok: number
+  outPerMTok: number
+  cacheReadPerMTok?: number
+}
 
 export interface ProviderView {
   id: string
@@ -173,9 +182,9 @@ export interface ProviderView {
     probedAt?: string
   }
   /** provider 级兜底价格（预设带的那份）。 */
-  cost?: { inPerMTok: number; outPerMTok: number; cacheReadPerMTok?: number }
+  cost?: CostTableView
   /** **按模型**的价格表。查表顺序见 `costTableFor`：先精确匹配当前模型，再退到 `cost`。 */
-  costs?: Record<string, { inPerMTok: number; outPerMTok: number; cacheReadPerMTok?: number }>
+  costs?: Record<string, CostTableView>
   compat?: Record<string, unknown>
   hasKey: boolean
   envName?: string
@@ -184,7 +193,6 @@ export interface ProviderView {
 export interface SettingsView {
   activeId: string
   providers: ProviderView[]
-  budget?: { maxUsd?: number; maxTokensOut?: number; maxTurns?: number }
   locale: 'zh-CN' | 'en-US'
   ui: { view?: string; requireVerification?: boolean }
   secrets: { location: string; encrypted: boolean }
@@ -380,7 +388,6 @@ export interface ArchitectBridge {
   removeProvider(id: string): Promise<SettingsView>
   addProvider(preset: string): Promise<SettingsView>
   setActive(id: string): Promise<SettingsView>
-  setBudget(budget: unknown): Promise<SettingsView>
   setLocale(locale: string): Promise<SettingsView>
   setUi(patch: unknown): Promise<SettingsView>
   testConnection(input: unknown): Promise<DiscoveryResult>

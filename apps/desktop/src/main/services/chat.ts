@@ -4,6 +4,7 @@ import {
   activeProvider,
   createProvider,
   costTableFor,
+  currencyOf,
   discoverProvider,
   normalizeProviderCosts,
   resolveApiKey,
@@ -14,7 +15,6 @@ import {
 } from '@architect/agent'
 import type {
   AgentEvent,
-  Budget,
   CostTable,
   DiscoveryResult,
   LlmMessage,
@@ -101,11 +101,12 @@ export interface ChatView {
   running: boolean
   messages: ChatMessageView[]
   usage: UsageTotals
-  costUsd?: number
+  costAmount?: number
+  /** 金额的币种代码（价格表带的那个）。 */
+  costCurrency?: string
   stopReason?: string
   error?: string
   /** 被预算刹住的原因（如果有）。与 `error` 分开：这不是故障。 */
-  budgetStop?: string
   /** provider 配置是否齐备。不齐时界面直接引导去设置，而不是等报错。 */
   ready: boolean
   /** 配置缺什么（中文，直接显示）。 */
@@ -122,7 +123,6 @@ export interface ProviderView extends ProviderConfig {
 export interface SettingsView {
   activeId: string
   providers: ProviderView[]
-  budget?: Budget
   locale: 'zh-CN' | 'en-US'
   ui: { view?: string; requireVerification?: boolean }
   secrets: { location: string; encrypted: boolean }
@@ -277,7 +277,6 @@ export class ChatController {
    */
   private recorder: TranscriptRecorder
   /** 最近一次预算刹车的原因。界面据此把"停下来"解释清楚。 */
-  private budgetStop: string | undefined
   /** 由 StudioService 注入：真正跑 agent 循环的那个函数。 */
   private runner: ChatRunner
   private emit: (event: StudioEvent) => void = () => {}
@@ -336,7 +335,6 @@ export class ChatController {
     return {
       activeId: this.settings.activeId,
       providers: this.settings.providers.map((config) => this.providerView(config)),
-      ...(this.settings.budget !== undefined ? { budget: this.settings.budget } : {}),
       locale: this.settings.locale ?? 'zh-CN',
       ui: this.settings.ui ?? {},
       secrets: { location: this.secrets.location, encrypted: this.secrets.encrypted },
@@ -427,16 +425,6 @@ export class ChatController {
 
   setActive(id: string): SettingsView {
     this.settings = { ...this.settings, activeId: id }
-    const view = this.settingsView()
-    this.emit({ type: 'settings', view })
-    return view
-  }
-
-  setBudget(budget: Budget | undefined): SettingsView {
-    const next: ProviderSettings = { ...this.settings }
-    if (budget === undefined) delete next.budget
-    else next.budget = budget
-    this.settings = next
     const view = this.settingsView()
     this.emit({ type: 'settings', view })
     return view
@@ -551,12 +539,9 @@ export class ChatController {
       running: this.running,
       messages: this.messages.map((m) => ({ ...m })),
       usage: this.meter.value,
-      ...(this.meter.costUsd(this.activeCost()) !== undefined
-        ? { costUsd: this.meter.costUsd(this.activeCost()) }
-        : {}),
+      ...(this.costNow() !== undefined ? this.costNow()! : {}),
       ...(this.stopReason !== undefined ? { stopReason: this.stopReason } : {}),
       ...(this.error !== undefined ? { error: this.error } : {}),
-      ...(this.budgetStop !== undefined ? { budgetStop: this.budgetStop } : {}),
       ready: this.blocking().length === 0,
       blocking: this.blocking(),
     }
@@ -568,6 +553,17 @@ export class ChatController {
    */
   private activeCost(): CostTable | undefined {
     return costTableFor(activeProvider(this.settings))
+  }
+
+  /**
+   * 表盘要用的金额与币种。**两者必须一起报**：只报数字的话界面只能用 `$`，
+   * 而人民币的价格表会显示成美元——账单对不上的那种错。
+   */
+  private costNow(): { costAmount: number; costCurrency: string } | undefined {
+    const table = this.activeCost()
+    const amount = this.meter.costOf(table)
+    if (amount === undefined) return undefined
+    return { costAmount: amount, costCurrency: currencyOf(table) }
   }
 
   private blocking(): string[] {
@@ -658,7 +654,6 @@ export class ChatController {
     this.nextId = this.messages.reduce((max, message) => Math.max(max, message.id), 0) + 1
     this.stopReason = undefined
     this.error = undefined
-    this.budgetStop = undefined
     this.resetStream()
     // 换了工程：上一个工程的对话不能带进新工程的请求里
     this.modelHistory = []
@@ -764,7 +759,6 @@ export class ChatController {
     this.stopRequested = false
     this.stopReason = undefined
     this.error = undefined
-    this.budgetStop = undefined
     this.emitView()
     void this.run({ text: goal, images: stored })
     return this.view()
@@ -1018,14 +1012,6 @@ export class ChatController {
         const message = this.newMessage('assistant', `[GATE] ${event.reason} (${event.pendingMutations})`)
         message.gate = true
         this.messages.push(message)
-        break
-      }
-      case 'budget': {
-        // 预算刹车：**不是错误**，界面要把它和"模型跑错了"区分开
-        const message = this.newMessage('assistant', `[BUDGET] ${event.detail}`)
-        message.gate = true
-        this.messages.push(message)
-        this.budgetStop = event.detail
         break
       }
       case 'context': {

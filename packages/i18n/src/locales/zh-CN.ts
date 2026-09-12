@@ -177,14 +177,11 @@ export const zhCN = {
     removeProvider: '删除',
     cancel: '取消',
     apply: '保存',
-    budget: '用量上限',
     language: '语言',
     /** 标题下面那句话：说清"填了密钥就能用"，而不是罗列字段。 */
     subtitle: '填入各提供方的 API 密钥即可使用其模型。',
     /** 列表里每个 provider 的名字（可改）。 */
     providerName: '名称',
-    inUse: '使用中',
-    use: '使用',
     edit: '编辑',
     collapse: '收起',
     ready: '已配置好，可以用',
@@ -203,11 +200,9 @@ export const zhCN = {
     priceIn: '输入',
     priceOut: '输出',
     priceCache: '缓存命中',
-    turns: '轮数',
+    currency: '货币',
     presets: {
       deepseek: 'DeepSeek',
-      openai: 'OpenAI',
-      ollama: 'Ollama（本地）',
       custom: '自定义',
     },
     llm: {
@@ -235,7 +230,7 @@ export const zhCN = {
   },
   cost: {
     cachedShare: '缓存命中 {{percent}}%',
-    usd: '${{amount}}',
+    amount: '{{amount}} {{currency}}',
     tokens: '{{in}} 入 / {{out}} 出',
     cached: '缓存命中 {{count}}（占输入 {{percent}}%）',
     noPrice: '未配置单价，只显示 token 数',
@@ -391,8 +386,6 @@ export const zhCN = {
         modelShort: '模型 id（deepseek 默认用 V4.1 Flash 档）',
         baseUrlShort: '接口地址',
         size: '工区尺寸，默认 32,32,32',
-        maxTurns: '最多几轮，默认 40',
-        maxUsd: '累计花费上限（美元）——触顶即停，需要价格表',
         maxOutputTokens: '单轮输出上限——**默认不发**，不设就是不限制（服务端思考模式默认 64K）',
         apiKeyNote: 'API key 只从环境变量读：ARCHITECT_API_KEY（绝不写文件、绝不进 .mcai）',
       },
@@ -517,7 +510,6 @@ export const zhCN = {
       assistant: '  [助手] {{text}}',
       images: '  [图] {{n}} 张（{{kb}} KB）',
       retry: '  [重试 {{attempt}}] {{reason}}',
-      budget: '  [预算] {{detail}}',
       truncated: '  [截断] 输出撞上上限（{{out}} token），正在要求模型收敛',
       stopReason: '结束原因：{{reason}}',
       stopReasonError: '（{{error}}）',
@@ -581,8 +573,6 @@ export const zhCN = {
       },
       presetNote: {
         deepseek: '前缀缓存命中便宜约 50 倍且写缓存免费，所以历史只追加、截图不剪（Regime A）。',
-        openai: '不同代的模型对 max_tokens / max_completion_tokens 的要求不同，适配层会自动试出能用的那个。',
-        ollama: '本地模型一般是 Regime B：没有前缀缓存，截图需要按需剪枝。视觉模型偏少，能力以探针为准。',
         custom: '任何 OpenAI 兼容端点（vLLM / LM Studio / 自建网关）都可以填这里。',
       },
     },
@@ -618,12 +608,6 @@ export const zhCN = {
       providerNotObject: '不是一个对象，已忽略',
       secretDiscarded: '检测到疑似明文密钥，已丢弃。密钥只放 env:NAME 或 safe:id 引用（D-13）',
       unknownField: '未知字段，已丢弃',
-    },
-    usage: {
-      maxTurns: '已达轮数上限 {{turns}}',
-      maxTokensOut: '已达输出 token 上限 {{tokens}}',
-      noPriceTable: '设了美元上限但没有价格表，无法判断；请先补上单价或去掉上限',
-      maxUsd: '已达花费上限 ${{usd}}',
     },
     loop: {
       truncated:

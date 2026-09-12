@@ -5,8 +5,6 @@
  * 刻意不做"自动降级"——超预算时静默换便宜模型会让产出的质量无法解释。
  */
 
-import { t } from '@architect/i18n'
-
 import type { LlmUsage } from './types.js'
 import type { CostTable } from './providers/config.js'
 
@@ -28,24 +26,6 @@ export const emptyUsage = (): UsageTotals => ({
   toolCalls: 0,
   screenshots: 0,
 })
-
-export interface Budget {
-  /** 美元上限。 */
-  maxUsd?: number
-  /** 累计输出 token 上限。 */
-  maxTokensOut?: number
-  /** 轮数上限。 */
-  maxTurns?: number
-}
-
-export interface BudgetExceeded {
-  ok: false
-  reason: 'usd' | 'tokens' | 'turns'
-  /** 给用户看的一句话（走 i18n）。 */
-  detail: string
-}
-
-export type BudgetVerdict = { ok: true } | BudgetExceeded
 
 /**
  * 从一份 provider 配置里取出**当前模型**该用的价格表。
@@ -78,7 +58,18 @@ export function activeCostTable(cost: CostTable | undefined, at: Date = new Date
   const peak = cost.peak
   const hours = cost.peakHours
   if (peak === undefined || hours === undefined) return cost
-  return isPeakHour(hours, at) ? { ...peak, peakHours: hours } : cost
+  if (!isPeakHour(hours, at)) return cost
+  /**
+   * 换到高峰价时**要带上币种**：`peak` 是 `Omit<CostTable, 'peak'>`，但配置里
+   * 通常只在外层写一次 `currency`（"那一行三个数字只配一次货币"）。不显式带上，
+   * 高峰时段的价格就会丢币种、显示成默认的 USD——账单是人民币，数字却标美元。
+   */
+  return { ...peak, ...(cost.currency !== undefined ? { currency: cost.currency } : {}), peakHours: hours }
+}
+
+/** 金额显示用的币种代码。表里没写就按 USD。 */
+export function currencyOf(cost: CostTable | undefined): string {
+  return cost?.currency ?? 'USD'
 }
 
 /** 这个时刻算不算高峰时段。`Intl` 负责时区换算，不手写 UTC 偏移——夏令时会错。 */
@@ -131,31 +122,6 @@ export function costOf(
   )
 }
 
-/** 依次检查三重预算。返回第一个越界的那个——同时报三个只会让人不知道先改什么。 */
-export function checkBudget(totals: UsageTotals, budget: Budget, cost?: CostTable): BudgetVerdict {
-  if (budget.maxTurns !== undefined && totals.turns >= budget.maxTurns) {
-    return { ok: false, reason: 'turns', detail: t('agent.usage.maxTurns', { turns: budget.maxTurns }) }
-  }
-  if (budget.maxTokensOut !== undefined && totals.out >= budget.maxTokensOut) {
-    return {
-      ok: false,
-      reason: 'tokens',
-      detail: t('agent.usage.maxTokensOut', { tokens: budget.maxTokensOut }),
-    }
-  }
-  if (budget.maxUsd !== undefined) {
-    const usd = costOf(totals, cost)
-    if (usd === undefined) {
-      // 没价格表就没法判美元上限。**不静默放行**——那是"设了上限其实没生效"。
-      return { ok: false, reason: 'usd', detail: t('agent.usage.noPriceTable') }
-    }
-    if (usd >= budget.maxUsd) {
-      return { ok: false, reason: 'usd', detail: t('agent.usage.maxUsd', { usd: budget.maxUsd }) }
-    }
-  }
-  return { ok: true }
-}
-
 /** 累计器。UI 的表盘与 CLI 的收尾统计都读它。 */
 export class UsageMeter {
   private totals: UsageTotals = emptyUsage()
@@ -182,7 +148,7 @@ export class UsageMeter {
     return { ...this.totals }
   }
 
-  costUsd(cost?: CostTable, at?: Date): number | undefined {
+  costOf(cost?: CostTable, at?: Date): number | undefined {
     return costOf(this.totals, cost, at)
   }
 

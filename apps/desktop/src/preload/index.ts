@@ -158,7 +158,6 @@ export interface StudioBridge {
   removeProvider(id: string): Promise<unknown>
   addProvider(preset: string): Promise<unknown>
   setActive(id: string): Promise<unknown>
-  setBudget(budget: unknown): Promise<unknown>
   setLocale(locale: string): Promise<unknown>
   setUi(patch: unknown): Promise<unknown>
   testConnection(input: unknown): Promise<unknown>
@@ -212,7 +211,6 @@ const bridge: StudioBridge = {
   removeProvider: (id) => call('settings:removeProvider', id),
   addProvider: (preset) => call('settings:addProvider', preset),
   setActive: (id) => call('settings:setActive', id),
-  setBudget: (budget) => call('settings:setBudget', budget),
   setLocale: (locale) => call('settings:setLocale', locale),
   setUi: (patch) => call('settings:setUi', patch),
   testConnection: (input) => call('settings:test', input),

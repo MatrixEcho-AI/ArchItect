@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Flex, Input, Modal, Tooltip } from 'antd'
+import { Alert, Button, Flex, Input, Modal, Select, Tooltip } from 'antd'
 import {
   ArrowUpOutlined,
   CameraOutlined,
@@ -60,6 +60,13 @@ export interface ChatPanelProps {
   onGrabViewport: () => Promise<StagedImage>
   /** 一句提示（采集失败之类）。与 `notice` 是同一个出口，所以走 `App`。 */
   onNotice: (text: string) => void
+  /**
+   * 模型选择器要读的两样东西（用户的要求：像 DSH 那样**放在发送按钮左边**）。
+   * `undefined` 表示还没读到设置——那时候选择器不渲染，而不是渲染一个空的。
+   */
+  providers: Array<{ id: string; model: string }> | undefined
+  activeProviderId: string | undefined
+  onPickProvider: (id: string) => void
 }
 
 export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
@@ -349,6 +356,27 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
             />
 
             <span style={{ flex: 1 }} />
+
+            {/*
+              模型选择器。**在发送按钮左边**，与 DeepSeek harness 的输入框一致——
+              用户就是拿那张图对的。选它就是"接下来在这台模型上说话"，所以设置对话框
+              里不再有"使用中 / 使用"那一对概念。
+              模型名为空时显示 provider 的 id：只显示空白会让人以为选择器坏了。
+            */}
+            {props.providers !== undefined && props.providers.length > 0 && (
+              <Select
+                id="model-picker"
+                size="small"
+                variant="borderless"
+                className="model-picker"
+                value={props.activeProviderId}
+                onChange={(id: string) => props.onPickProvider(id)}
+                options={props.providers.map((provider) => ({
+                  value: provider.id,
+                  label: provider.model.trim().length > 0 ? provider.model : provider.id,
+                }))}
+              />
+            )}
 
             {chat?.running === true && (
               <Button type="text" size="small" id="btn-stop" onClick={props.onStop}>

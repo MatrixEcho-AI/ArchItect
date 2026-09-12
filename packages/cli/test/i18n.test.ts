@@ -137,7 +137,6 @@ describe('CLI i18n（D-01）', () => {
         '--api-key-env',
         '--no-probe',
         '--size',
-        '--max-turns',
         '--tasks',
         '--out-dir',
         '--record',

@@ -103,7 +103,9 @@ describe('标题行读数：短，且缓存只给百分比', () => {
   })
 
   it('这一行就四项：入、出、缓存、花费', () => {
-    expect(usageText({ usage, costUsd: 0.0123 })).toBe('2M 入 / 30k 出 · 缓存 98% · $0.0123')
+    expect(usageText({ usage, costAmount: 0.0123, costCurrency: 'USD' })).toBe(
+      '2M 入 / 30k 出 · 缓存 98% · 0.0123 USD',
+    )
   })
 
   it('新会话（还没有任何输入）不显示一串 0', () => {

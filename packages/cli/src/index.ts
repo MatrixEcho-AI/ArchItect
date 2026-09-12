@@ -28,6 +28,7 @@ import {
   AgentSession,
   costOf,
   costTableFor,
+  currencyOf,
   createProvider,
   discoverProvider,
   envKeyRef,
@@ -144,8 +145,6 @@ function usageText(): string {
     entry('--model <id>', t('cli.usage.provider.modelShort')),
     entry('--base-url <url>', t('cli.usage.provider.baseUrlShort')),
     entry('--size <x,y,z>', t('cli.usage.provider.size')),
-    entry('--max-turns <n>', t('cli.usage.provider.maxTurns')),
-    entry('--max-usd <n>', t('cli.usage.provider.maxUsd')),
     entry('--max-output-tokens <n>', t('cli.usage.provider.maxOutputTokens')),
     `  ${t('cli.usage.provider.apiKeyNote')}`,
     '',
@@ -182,8 +181,6 @@ interface Invocation {
   model?: string
   baseUrl?: string
   size?: string
-  maxTurns?: number
-  maxUsd?: number
   /** 单轮输出上限。**默认不设**——不设才是不限制（服务端思考模式默认 64K）。 */
   maxOutputTokens?: number
   apiKeyEnv?: string
@@ -228,8 +225,6 @@ async function main(argv: string[]): Promise<number> {
         model: { type: 'string' },
         'base-url': { type: 'string' },
         size: { type: 'string' },
-        'max-turns': { type: 'string' },
-        'max-usd': { type: 'string' },
         'max-output-tokens': { type: 'string' },
         'api-key-env': { type: 'string' },
         'no-probe': { type: 'boolean', default: false },
@@ -275,8 +270,6 @@ async function main(argv: string[]): Promise<number> {
     model?: string
     'base-url'?: string
     size?: string
-    'max-turns'?: string
-    'max-usd'?: string
     'max-output-tokens'?: string
     'api-key-env'?: string
     'no-probe'?: boolean
@@ -316,8 +309,6 @@ async function main(argv: string[]): Promise<number> {
   if (values.model !== undefined) inv.model = values.model
   if (values['base-url'] !== undefined) inv.baseUrl = values['base-url']
   if (values.size !== undefined) inv.size = values.size
-  if (values['max-turns'] !== undefined) inv.maxTurns = Number(values['max-turns'])
-  if (values['max-usd'] !== undefined) inv.maxUsd = Number(values['max-usd'])
   if (values['max-output-tokens'] !== undefined) inv.maxOutputTokens = Number(values['max-output-tokens'])
   if (values['api-key-env'] !== undefined) inv.apiKeyEnv = values['api-key-env']
   if (values.tasks !== undefined) inv.tasks = values.tasks
@@ -789,13 +780,9 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
       // 上下文策略由 provider 能力决定：有前缀缓存就不裁剪（剪了反而更贵），
       // 没有缓存或窗口很小就切到滑动窗口（§9.2）
       capabilities: config.capabilities,
-      ...(inv.maxTurns !== undefined ? { maxTurns: inv.maxTurns } : {}),
       // 用户在命令行给了美元上限就必须把预算**传进去**。
       // 不要在这里判"有没有价格表"——没有价格表时 `checkBudget` 会判为越界并说明原因；
       // 在这里悄悄丢掉，用户就会以为自己的上限生效了，那是最坏的失败模式。
-      ...(inv.maxUsd !== undefined
-        ? { budget: { maxUsd: inv.maxUsd }, ...(cost !== undefined ? { costTable: cost } : {}) }
-        : {}),
       onEvent: (event) => {
         // 记账、录制与打印合在同一条事件流上——事件只发一次，漏接就会让表盘骗人
         recorder.onEvent(event)
@@ -826,12 +813,6 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
             break
           case 'retry':
             out(t('cli.build.retry', { attempt: event.attempt, reason: truncate(event.reason, 100) }))
-            break
-          case 'budget':
-            out(t('cli.build.budget', { detail: event.detail }))
-            break
-          case 'truncated':
-            out(t('cli.build.truncated', { out: event.out }))
             break
           default:
             break
@@ -1177,8 +1158,7 @@ async function cmdBench(inv: Invocation): Promise<number> {
         ctx: session.ctx,
         system: session.buildSystem(),
         stateLine: session.buildStateLine(),
-        ...(inv.maxTurns !== undefined ? { maxTurns: inv.maxTurns } : {}),
-        onEvent: inv.quiet
+          onEvent: inv.quiet
           ? undefined
           : (event: AgentEvent) => {
               if (event.type === 'tool_call') process.stdout.write(`    → ${event.name}\n`)
@@ -1429,11 +1409,13 @@ function usageLine(usage: { in: number; out: number; cachedIn?: number }, cost?:
     usage.in > 0
       ? t('cli.common.cachedShare', { cached, percent: ((cached / usage.in) * 100).toFixed(0) })
       : ''
-  const usd = costOf({ in: usage.in, out: usage.out, cachedIn: cached }, cost)
+  const amount = costOf({ in: usage.in, out: usage.out, cachedIn: cached }, cost)
   return (
     t('cost.tokens', { in: usage.in, out: usage.out }) +
     (cached > 0 ? share : '') +
-    (usd !== undefined ? t('cli.build.cost', { amount: usd.toFixed(4) }) : '')
+    (amount !== undefined
+      ? t('cli.build.cost', { amount: amount.toFixed(4), currency: currencyOf(cost) })
+      : '')
   )
 }
 

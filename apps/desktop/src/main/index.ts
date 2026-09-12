@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { detectLocale, initI18n, setLocale, t } from '@architect/i18n'
-import type { Budget, LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
+import type { LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
 import { VIEW_PRESETS } from '@architect/render'
@@ -470,11 +470,6 @@ function registerIpc(): void {
   })
   handle('settings:setActive', (id: string) => {
     const view = studio.chat.setActive(id)
-    persistSettings()
-    return view
-  })
-  handle('settings:setBudget', (budget: Budget | undefined) => {
-    const view = studio.chat.setBudget(budget)
     persistSettings()
     return view
   })
@@ -1101,20 +1096,24 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         modal !== null &&
           cards.length > 0 &&
           document.querySelector('#btn-add-deepseek') !== null &&
-          document.querySelector('#btn-add-openai') !== null &&
-          document.querySelector('#btn-add-ollama') !== null &&
           document.querySelector('#btn-add-custom') !== null &&
+          document.querySelector('#btn-add-openai') === null &&
+          document.querySelector('#btn-add-ollama') === null &&
           document.querySelector('#btn-test') === null &&
           document.querySelector('#probe-log') === null,
         modal === null
           ? '对话框没打开'
           : cards.length + ' 个 provider 条目' +
-              ' / 四个添加按钮 ' +
-              (['btn-add-deepseek', 'btn-add-openai', 'btn-add-ollama', 'btn-add-custom'].every(
+              ' / 添加按钮 ' +
+              (['btn-add-deepseek', 'btn-add-custom'].every(
                 (id) => document.querySelector('#' + id) !== null,
               )
-                ? '在'
+                ? 'DeepSeek+自定义 在'
                 : '缺') +
+              (document.querySelector('#btn-add-openai') === null &&
+              document.querySelector('#btn-add-ollama') === null
+                ? '（OpenAI/Ollama 已删除）'
+                : '（OpenAI/Ollama 还在）') +
               ' / 测试连接按钮 ' + (document.querySelector('#btn-test') === null ? '已移除' : '还在') +
               ' / 探针日志 ' + (document.querySelector('#probe-log') === null ? '已移除' : '还在'),
       );
@@ -1143,9 +1142,15 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
           document.querySelector('#cfg-baseurl') !== null &&
           document.querySelector('#cfg-model') !== null &&
           document.querySelector('#btn-add-price') !== null &&
-          document.querySelector('#cfg-usd') !== null,
+          document.querySelector('#cfg-currency') !== null &&
+          document.querySelector('#cfg-usd') === null &&
+          document.querySelector('#cfg-turns') === null,
         openedAdvanced
-          ? '地址 / 模型名 / 加价格行 / 用量上限 都在'
+          ? '地址 / 模型名 / 加价格行 / 货币都在' +
+              ' / 用量上限 ' +
+              (document.querySelector('#cfg-usd') === null && document.querySelector('#cfg-turns') === null
+                ? '已移除'
+                : '还在')
           : '展开自定义设置后没读到价格表与地址字段',
       );
 
@@ -1153,6 +1158,41 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       if (cancel !== null) cancel.click();
       for (let i = 0; i < 8; i++) await frames();
     }
+
+    /**
+     * **模型选择器在输入框里、发送按钮左边**（用户拿 DeepSeek harness 的输入框对照的要求）。
+     *
+     * 判据是**几何位置**而不是"存在"：#model-picker 在 DOM 里存在很容易，
+     * 而"它在不在发送钮左边、在不在输入框内"才是这条要求的内容——顺序写反
+     * （放到发送钮右边）或者被挤到框外，都只有量位置才拦得住。
+     */
+    /**
+     * ⚠️ id 被 antd 放到了**内部那个 input** 上（role=combobox），不是组件根：
+     * 拿它读 textContent 永远是空的、innerHTML 也是空——第一版就是这么写的，
+     * 于是"选择器显示了什么"这条量出来是 ""，看着像模型名没渲染出来。
+     * 文本与几何都要读 .ant-select 那一层。
+     */
+    const pickerInput = document.querySelector('#model-picker');
+    const picker = pickerInput === null ? null : pickerInput.closest('.ant-select');
+    const sendBtn2 = document.querySelector('#btn-send');
+    const composerBox = document.querySelector('.composer');
+    const pickerOk =
+      picker !== null && sendBtn2 !== null && composerBox !== null
+        ? (() => {
+            const box = composerBox.getBoundingClientRect();
+            const p = picker.getBoundingClientRect();
+            const b = sendBtn2.getBoundingClientRect();
+            return p.right <= b.left && p.left >= box.left && p.right <= box.right;
+          })()
+        : false;
+    check(
+      'composer-model-picker',
+      pickerOk,
+      picker === null
+        ? '没有 #model-picker'
+        : '选择器 ' + (sendBtn2 === null ? '?' : pickerOk ? '在发送钮左侧且框内' : '位置不对') +
+            ' / 显示 "' + (picker.textContent ?? '').trim() + '"',
+    );
 
     // 挡住发送的时候，必须有一条**能直接解决问题的路**（不然新用户第一屏就卡住）
     const blocking = document.querySelector('#blocking');

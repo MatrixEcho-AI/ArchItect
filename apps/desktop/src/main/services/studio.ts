@@ -360,7 +360,6 @@ export class StudioService {
             // 用户随这句话附的图（插入的图片 / 采集的视口那一枪）。挂在本次需求那条
             // user 消息上，所以模型这一轮就能直接看到，不用先调 screenshot。
             ...(goal.images.length > 0 ? { images: goal.images } : {}),
-            ...(settings.budget !== undefined ? { budget: settings.budget } : {}),
             ...(cost !== undefined ? { costTable: cost } : {}),
             // 上下文策略由 provider 能力决定（§9.2）：本地模型没有前缀缓存，
             // 不切窗口的话每个请求都要把整段历史全价重算一遍

@@ -7,9 +7,6 @@ import { LlmError } from './types.js'
 import type { LlmDelta, LlmImage, LlmMessage, LlmProvider, LlmUsage } from './types.js'
 import { contextPolicyFor, DEFAULT_TOOL_RESULT_CHARS, windowMessages } from './context.js'
 import type { ContextPolicy } from './context.js'
-import { checkBudget, costOf } from './usage.js'
-import type { Budget } from './usage.js'
-import type { CostTable } from './providers/config.js'
 
 export type StopReason =
   | 'completed'
@@ -17,7 +14,6 @@ export type StopReason =
   | 'max_tool_calls'
   | 'max_tokens'
   /** 触到用户设的花费/预算上限——**主动刹车，不是故障**。 */
-  | 'budget'
   | 'stopped'
   /** 改了东西却始终不肯调 verify 读回——**不算完成**。 */
   | 'unverified'
@@ -57,7 +53,6 @@ export type AgentEvent =
   /** 输出撞上了 token 上限。`toolCalls` 为 0 表示这一轮**什么都没产出**。 */
   | { type: 'truncated'; turn: number; out: number; toolCalls: number }
   /** 预算触顶：带上原因与累计用量，界面据此解释为什么停下来。 */
-  | { type: 'budget'; reason: 'usd' | 'tokens' | 'turns'; detail: string; usage: Required<LlmUsage>; usd?: number }
   /** 完成闸门拒绝了模型的"我做完了"，要求它先读回。 */
   | { type: 'nudge'; reason: string; pendingMutations: number }
   /**
@@ -106,18 +101,6 @@ export interface AgentOptions {
   maxToolCalls?: number
   /** 累计输出 token 上限。 */
   maxTokens?: number
-  /**
-   * **花费预算**。触顶即停，停止原因是 `budget`。
-   *
-   * 与 `maxTurns` / `maxToolCalls` 的差别在于它是**用户的钱**，不是 harness 的防呆：
-   * 界面里填了 `$2` 就必须真的在 $2 停下来。只记账不刹车比不记账更糟——
-   * 用户会以为自己被保护着。
-   *
-   * `maxUsd` 需要 `costTable`；没有价格表时**不算通过**（见 `checkBudget`），
-   * 因为"设了上限其实没生效"是这里最坏的失败模式。
-   */
-  budget?: Budget
-  costTable?: CostTable
   maxTokensPerCall?: number
   temperature?: number
   onEvent?: (event: AgentEvent) => void
@@ -184,7 +167,7 @@ const MAX_TRUNCATION_CONTINUATIONS = 2
  * 1. **消息数组只 push、不 splice**（plan §9.2 Regime A）——回头改历史会让前缀缓存
  *    整段失效，而缓存读比全价便宜 50 倍。
  * 2. **工具异常不逃逸**：`registry.call` 永远返回结果，循环不会因为一个坏工具就崩。
- * 3. **预算三重上限**（轮数 / 工具调用数 / token）——任一触顶即停，并如实报告原因。
+ * 3. **三重上限**（轮数 / 工具调用数 / token）——任一触顶即停，并如实报告原因。
  */
 export async function runAgent(options: AgentOptions, goal: string): Promise<AgentState> {
   const {
@@ -301,37 +284,6 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
       state.finalText = response.text
       state.stopReason = 'max_tokens'
       break
-    }
-
-    // **花费预算在这里刹车。** 放在用量累加之后、处理工具调用之前——
-    // 已经花掉的钱收不回来，但下一步的请求可以不发出去。
-    if (options.budget !== undefined) {
-      const verdict = checkBudget(
-        {
-          in: usage.in,
-          out: usage.out,
-          cachedIn: usage.cachedIn,
-          turns: state.turn,
-          toolCalls: state.toolCalls,
-          screenshots: 0,
-        },
-        options.budget,
-        options.costTable,
-      )
-      if (!verdict.ok) {
-        const usd = costOf(usage, options.costTable)
-        state.finalText = response.text
-        state.stopReason = 'budget'
-        state.error = verdict.detail
-        emit({
-          type: 'budget',
-          reason: verdict.reason,
-          detail: verdict.detail,
-          usage: { ...usage },
-          ...(usd !== undefined ? { usd } : {}),
-        })
-        break
-      }
     }
 
     // ── 输出被 token 上限截断：**绝不能当成"说完了"** ──────────────────────────

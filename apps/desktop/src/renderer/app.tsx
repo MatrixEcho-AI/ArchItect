@@ -495,7 +495,7 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
           <div style={{ display: 'flex', alignItems: 'center', width: '100%', height: '100%' }}>
             <Toolbar
               state={studio.state}
-              costText={costText(studio.chat?.costUsd, studio.chat?.usage)}
+              costText={costText(studio.chat?.costAmount, studio.chat?.costCurrency, studio.chat?.usage)}
               statusText={status}
               onNew={() =>
                 void run(t('menu.new'), async () => {
@@ -750,6 +750,17 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
               state={studio.state}
               notice={studio.notice}
               onNoticeClose={() => studioRef.current?.setNotice(undefined)}
+              /* 模型选择器（在输入框里、发送按钮左边）。切换就是"接下来用它说话" */
+              providers={studio.settings?.providers.map((provider) => ({
+                id: provider.id,
+                model: provider.model,
+              }))}
+              activeProviderId={studio.settings?.activeId}
+              onPickProvider={(id) =>
+                void run(t('app.ready'), async () => {
+                  studioRef.current?.setSettings(await window.architect.setActive(id))
+                })
+              }
               onSend={(text, images) => {
                 void run(t('chat.send'), async () => {
                   studioRef.current?.setChat(await window.architect.send(text, images))

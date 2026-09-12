@@ -1133,3 +1133,22 @@ body,
 .add-provider:hover {
   border-style: solid;
 }
+
+/*
+ * 输入框里那个模型选择器（发送按钮左边）。
+ *
+ * 它必须在窄栏里**能缩**：`min-width: 0` 是 flex 项的下限开关，缺了它自定义端点的
+ * 长模型名会把发送按钮顶出输入框（`composer-holds-controls` 那条断言量得到）。
+ * antd 的 borderless 变体让它在框内不画第二层边框——一个盒子里套一个描边小框
+ * 看着像表单里的表单。
+ */
+.model-picker {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 190px;
+}
+
+.model-picker .ant-select-selection-item {
+  font-size: 12px;
+  text-align: center;
+}

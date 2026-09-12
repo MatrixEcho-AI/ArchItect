@@ -5,11 +5,9 @@ import type { MessageKey } from '@architect/i18n'
 
 import {
   AgentSession,
-  checkBudget,
   classifyHttpError,
   configFromPreset,
   discoverProvider,
-  emptyUsage,
   evaluateTask,
   exchangesFromJsonl,
   GOLDEN_TASKS,
@@ -145,12 +143,12 @@ describe('agent i18n（D-01 / plan §10.4-2）', () => {
 
   it('预设 note 跟随语言，而不是 import 时刻的快照', () => {
     initI18n({ locale: 'zh-CN' })
-    expect(CJK.test(PROVIDER_PRESETS.ollama.note ?? '')).toBe(true)
+    expect(CJK.test(PROVIDER_PRESETS.custom.note ?? '')).toBe(true)
 
     initI18n({ locale: 'en-US' })
-    const en = PROVIDER_PRESETS.ollama.note ?? ''
+    const en = PROVIDER_PRESETS.custom.note ?? ''
     expect(CJK.test(en), en).toBe(false)
-    expect(en).toContain('Regime B')
+    expect(en.length).toBeGreaterThan(0)
   })
 
   it('redactSecret 的占位标签跟随语言，且仍然不泄露前缀', () => {
@@ -184,27 +182,6 @@ describe('agent i18n（D-01 / plan §10.4-2）', () => {
     })
     expect(CJK.test(zhResult.error ?? '')).toBe(true)
     expect(zhResult.error).toContain('超时')
-  })
-
-  it('预算越界说明跟随语言，reason 是协议不翻译', () => {
-    initI18n({ locale: 'zh-CN' })
-    const zh = checkBudget({ ...emptyUsage(), turns: 40 }, { maxTurns: 40 })
-    expect(zh).toMatchObject({ ok: false, reason: 'turns' })
-    expect(CJK.test((zh as { detail: string }).detail)).toBe(true)
-
-    initI18n({ locale: 'en-US' })
-    const en = checkBudget({ ...emptyUsage(), turns: 40 }, { maxTurns: 40 })
-    expect(en).toMatchObject({ ok: false, reason: 'turns' })
-    const detail = (en as { detail: string }).detail
-    expect(CJK.test(detail), detail).toBe(false)
-    expect(detail).toContain('Turn limit reached')
-  })
-
-  it('没有价格表时的美元上限说明跟随语言', () => {
-    initI18n({ locale: 'en-US' })
-    expect((checkBudget(emptyUsage(), { maxUsd: 5 }) as { detail: string }).detail).toContain('no price table')
-    initI18n({ locale: 'zh-CN' })
-    expect((checkBudget(emptyUsage(), { maxUsd: 5 }) as { detail: string }).detail).toContain('没有价格表')
   })
 
   it('黄金任务的 name / check label 跟随语言，id 不变', () => {

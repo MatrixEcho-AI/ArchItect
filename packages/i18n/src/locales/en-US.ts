@@ -173,12 +173,9 @@ export const enUS = {
     removeProvider: 'Remove',
     cancel: 'Cancel',
     apply: 'Save',
-    budget: 'Limits',
     language: 'Language',
     subtitle: 'Fill in an API key for a provider to use its models.',
     providerName: 'Name',
-    inUse: 'in use',
-    use: 'Use',
     edit: 'Edit',
     collapse: 'Collapse',
     ready: 'Configured and ready',
@@ -196,11 +193,9 @@ export const enUS = {
     priceIn: 'in',
     priceOut: 'out',
     priceCache: 'cached',
-    turns: 'turns',
+    currency: 'Currency',
     presets: {
       deepseek: 'DeepSeek',
-      openai: 'OpenAI',
-      ollama: 'Ollama (local)',
       custom: 'Custom',
     },
     llm: {
@@ -229,7 +224,7 @@ export const enUS = {
   },
   cost: {
     cachedShare: '{{percent}}% cached',
-    usd: '${{amount}}',
+    amount: '{{amount}} {{currency}}',
     tokens: '{{in}} in / {{out}} out',
     cached: '{{count}} cached ({{percent}}% of input)',
     noPrice: 'No unit prices configured — token counts only',
@@ -372,8 +367,6 @@ export const enUS = {
         modelShort: 'Model id (deepseek defaults to the V4.1 Flash tier)',
         baseUrlShort: 'Endpoint URL',
         size: 'Build volume size, default 32,32,32',
-        maxTurns: 'Max turns, default 40',
-        maxUsd: 'Spending cap in USD — stops when reached; requires a price table',
         maxOutputTokens: 'Per-call output cap — **not sent by default**; omitting it means unlimited (thinking mode defaults to 64K)',
         apiKeyNote:
           'The API key comes only from the env var ARCHITECT_API_KEY (never written to a file, never into .mcai)',
@@ -501,7 +494,6 @@ export const enUS = {
       assistant: '  [assistant] {{text}}',
       images: '  [image] {{n}} tile(s) ({{kb}} KB)',
       retry: '  [retry {{attempt}}] {{reason}}',
-      budget: '  [BUDGET] {{detail}}',
       truncated: '  [TRUNCATED] output limit hit ({{out}} tokens), asking the model to converge',
       stopReason: 'Stop reason: {{reason}}',
       stopReasonError: ' ({{error}})',
@@ -568,10 +560,6 @@ export const enUS = {
       presetNote: {
         deepseek:
           'Prompt-cache hits cost about 50x less and cache writes are free, so history is append-only and screenshots are never trimmed (Regime A).',
-        openai:
-          'Different model generations want max_tokens vs max_completion_tokens; the adapter tries both and remembers which one works.',
-        ollama:
-          'Local models are usually Regime B: no prompt cache, so screenshots are pruned on demand. Vision models are rare; trust the probe.',
         custom: 'Any OpenAI-compatible endpoint (vLLM / LM Studio / a self-hosted gateway) goes here.',
       },
     },
@@ -610,13 +598,6 @@ export const enUS = {
       secretDiscarded:
         'A plaintext secret was detected and discarded. Keys belong only in env:NAME or safe:id references (D-13)',
       unknownField: 'Unknown field; discarded',
-    },
-    usage: {
-      maxTurns: 'Turn limit reached ({{turns}})',
-      maxTokensOut: 'Output token limit reached ({{tokens}})',
-      noPriceTable:
-        'A USD cap is set but there is no price table, so it cannot be evaluated; add unit prices or remove the cap',
-      maxUsd: 'Spend limit reached (${{usd}})',
     },
     loop: {
       truncated:

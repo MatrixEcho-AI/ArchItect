@@ -66,8 +66,6 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
           model.url,
           '--model',
           'mock-v4.1-flash',
-          '--max-turns',
-          '12',
           ...extraArgs,
         ],
         {
@@ -201,19 +199,6 @@ describe('端到端：真实 HTTP 下的 build（v0 验收口径）', () => {
     }
   }, 120_000)
 
-  it('**美元上限在真实链路上真的刹住车**（不是只记账）', async () => {
-    const out = join(dir, 'budget.mcai')
-    // 上限设得极小：第一轮之后就该触顶。`custom` 预设没有价格表，
-    // 所以这里验的正是那句"设了美元上限但没有价格表就判为越界"——
-    // 静默忽略用户的上限才是真正需要防的。
-    const { stdout, code } = await build(out, ['--max-usd', '0.000001'], { allowFailure: true })
-    expect(code).toBe(1) // 预算触顶不是成功，退出码如实反映
-    expect(stdout).toContain('结束原因：budget')
-    expect(stdout).toContain('价格表')
-    // 触顶前的产物照样写出来了，不是"什么都没得到"
-    expect(statSync(out).size).toBeGreaterThan(500)
-  }, 180_000)
-
   it('**显式设了输出上限时，max_tokens 被 400 顶回来会改用 max_completion_tokens**', async () => {
     // 这条只有在真实 HTTP 下才验得到——`ScriptedProvider` 根本不经过序列化。
     // 默认是不发这个字段（服务端默认 64K），所以要验自适应就得显式设一个。
@@ -276,8 +261,6 @@ describe('端到端：无缓存 provider 的上下文窗口', () => {
         model.url,
         '--model',
         'mock-v4.1-flash',
-        '--max-turns',
-        '12',
       ],
       {
         cwd: root,

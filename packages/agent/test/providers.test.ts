@@ -6,7 +6,6 @@ import {
   addPreset,
   activeProvider,
   cacheHitRatio,
-  checkBudget,
   configFromPreset,
   costOf,
   costTableFor,
@@ -30,7 +29,6 @@ import {
   settingsFromEnv,
   upsertProvider,
   UsageMeter,
-  USD_PER_CNY,
   validateProviderConfig,
 } from '../src/index.js'
 import { LlmError } from '../src/types.js'
@@ -163,26 +161,21 @@ const DEEPSEEK_MODELS = {
 }
 
 describe('预置模板（D-14 四项）', () => {
-  it('四项预设齐全，键与 key 字段一致', () => {
-    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual(['custom', 'deepseek', 'ollama', 'openai'])
+  it('只剩两个预设：DeepSeek（https + 密钥）与自定义（地址留空）', () => {
+    expect(Object.keys(PROVIDER_PRESETS).sort()).toEqual(['custom', 'deepseek'])
     for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
       expect(preset.key, key).toBe(key)
     }
+    expect(PROVIDER_PRESETS.deepseek.baseURL).toMatch(/^https:\/\//)
+    expect(PROVIDER_PRESETS.deepseek.requiresApiKey).toBe(true)
+    expect(PROVIDER_PRESETS.deepseek.apiKeyEnv.length).toBeGreaterThan(0)
+    // 自定义那一项**不能**预填地址：填了就成了"假装知道你要连哪儿"
+    expect(PROVIDER_PRESETS.custom.baseURL).toBe('')
   })
 
-  it('云端预设都有 https 地址与密钥变量；本地 Ollama 不需要密钥', () => {
-    for (const key of ['deepseek', 'openai'] as const) {
-      expect(PROVIDER_PRESETS[key].baseURL).toMatch(/^https:\/\//)
-      expect(PROVIDER_PRESETS[key].requiresApiKey).toBe(true)
-      expect(PROVIDER_PRESETS[key].apiKeyEnv.length).toBeGreaterThan(0)
-    }
-    expect(PROVIDER_PRESETS.ollama.requiresApiKey).toBe(false)
-    expect(PROVIDER_PRESETS.ollama.baseURL).toContain('localhost')
-  })
-
-  it('DeepSeek 走 Regime A（有前缀缓存），Ollama 走 Regime B', () => {
+  it('DeepSeek 走 Regime A（有前缀缓存）', () => {
     expect(PROVIDER_PRESETS.deepseek.promptCache).toBe('auto')
-    expect(PROVIDER_PRESETS.ollama.promptCache).toBe('none')
+    expect(PROVIDER_PRESETS.custom.promptCache).toBe('none')
   })
 
   it('**不硬编码具体模型 id**：偏好必须能命中一个真实的列表项，兜底本身不是"事实"', () => {
@@ -242,16 +235,16 @@ describe('预置模板（D-14 四项）', () => {
     expect(PROVIDER_PRESETS.deepseek.compat?.thinking).toBe('enabled')
   })
 
-  it('DeepSeek 价格按官方价格页（元换算成美元），且高峰价单列', () => {
+  it('DeepSeek 价格按官方价格页**原样以人民币记**，且高峰价单列', () => {
     const cost = PROVIDER_PRESETS.deepseek.cost!
     // 官方：输入 1 元(低谷)/2 元(高峰)，输出 4/8，缓存命中 0.02/0.04
-    expect(cost.inPerMTok).toBeCloseTo(1 * USD_PER_CNY, 10)
-    expect(cost.outPerMTok).toBeCloseTo(4 * USD_PER_CNY, 10)
-    expect(cost.cacheReadPerMTok).toBeCloseTo(0.02 * USD_PER_CNY, 10)
+    expect(cost.inPerMTok).toBe(1)
+    expect(cost.outPerMTok).toBe(4)
+    expect(cost.cacheReadPerMTok).toBe(0.02)
     expect(cost.peak).toEqual({
-      inPerMTok: 2 * USD_PER_CNY,
-      outPerMTok: 8 * USD_PER_CNY,
-      cacheReadPerMTok: 0.04 * USD_PER_CNY,
+      inPerMTok: 2,
+      outPerMTok: 8,
+      cacheReadPerMTok: 0.04,
     })
     // 缓存命中必须比全价便宜得多，否则 Regime A 的整套设计（只追加、不剪图）就不成立
     expect(cost.cacheReadPerMTok!).toBeLessThan(cost.inPerMTok / 10)
@@ -275,7 +268,6 @@ describe('配置校验', () => {
 
   it('地址必须带协议', () => {
     expect(validateProviderConfig(configFromPreset('custom', { baseURL: 'api.foo.com' }))[0]?.field).toBe('baseURL')
-    expect(validateProviderConfig(configFromPreset('ollama', { baseURL: '' })).some((p) => p.field === 'baseURL')).toBe(true)
   })
 
   it('还没实现的协议要明确说，而不是到运行时才 400', () => {
@@ -437,7 +429,7 @@ describe('能力探针（D-12 运行时实测）', () => {
 
   it('单图 token 是"带图 / 不带图"两次 prompt_tokens 的差', async () => {
     const { impl } = stubFetch(idealHandler(117))
-    const result = await discoverProvider(configFromPreset('openai'), {
+    const result = await discoverProvider(configFromPreset('custom', { baseURL: 'https://api.openai.com/v1' }), {
       apiKey: 'sk-test',
       fetchImpl: impl,
       model: 'gpt-4o-mini',
@@ -447,7 +439,7 @@ describe('能力探针（D-12 运行时实测）', () => {
 
   it('网关不把图算进 prompt_tokens 时**不报数**（报 0 会让成本表盘骗人）', async () => {
     const { impl } = stubFetch(idealHandler(0))
-    const result = await discoverProvider(configFromPreset('openai'), {
+    const result = await discoverProvider(configFromPreset('custom', { baseURL: 'https://api.openai.com/v1' }), {
       apiKey: 'sk-test',
       fetchImpl: impl,
       model: 'gpt-4o-mini',
@@ -516,7 +508,7 @@ describe('能力探针（D-12 运行时实测）', () => {
       if (hasTools(call)) return chatOk('', 60)
       return chatOk('Blue', 30)
     })
-    const result = await discoverProvider(configFromPreset('ollama'), { fetchImpl: impl })
+    const result = await discoverProvider(configFromPreset('custom', { baseURL: 'http://localhost:11434/v1' }), { fetchImpl: impl })
     expect(result.config.model).toBe('mistral:latest')
     const step = result.steps.find((s) => s.type === 'model')
     expect(step).toMatchObject({ guessed: true })
@@ -559,7 +551,7 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
     })
     // 只有**配了上限**才会发这个字段，所以这条自适应逻辑也必须配上限才走得到
     const provider = createProvider(
-      { ...configFromPreset('openai', { model: 'o4-mini' }), maxOutputTokens: 8192 },
+      { ...configFromPreset('custom', { baseURL: 'https://api.openai.com/v1', model: 'o4-mini' }), maxOutputTokens: 8192 },
       { apiKey: 'k', fetchImpl: impl },
     )
     const first = await provider.chat(base)
@@ -732,7 +724,7 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
     expect('reasoning_effort' in (calls[0]?.body ?? {})).toBe(false)
 
     // OpenAI 预设不带 thinking（它是 DeepSeek 的字段，别人收到会 400）
-    const openai = createProvider(configFromPreset('openai', { model: 'gpt-4o-mini' }), {
+    const openai = createProvider(configFromPreset('custom', { baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }), {
       apiKey: 'k',
       fetchImpl: impl,
     })
@@ -750,7 +742,7 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
 
   it('**不相干**的 400 不会触发重试（否则会白打一次请求还盖掉真错误）', async () => {
     const { impl, calls } = stubFetch(() => ({ status: 400, text: '{"error":{"message":"model not found"}}' }))
-    const provider = createProvider(configFromPreset('openai', { model: 'nope' }), { apiKey: 'k', fetchImpl: impl })
+    const provider = createProvider(configFromPreset('custom', { baseURL: 'https://api.openai.com/v1', model: 'nope' }), { apiKey: 'k', fetchImpl: impl })
     await expect(provider.chat(base)).rejects.toMatchObject({ code: 'BAD_REQUEST' })
     expect(calls).toHaveLength(1)
   })
@@ -779,7 +771,7 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
 
   it('reasoningContent=auto：从没给过思维链的模型不会被塞未知字段（OpenAI 会因此 400）', async () => {
     const { impl, calls } = stubFetch(() => chatOk('答', 10))
-    const provider = createProvider(configFromPreset('openai', { model: 'gpt-4o-mini' }), {
+    const provider = createProvider(configFromPreset('custom', { baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }), {
       apiKey: 'k',
       fetchImpl: impl,
     })
@@ -1011,36 +1003,26 @@ describe('设置文件读写（D-13 两条红线）', () => {
     expect(issues.some((i) => i.field === 'activeId')).toBe(true)
   })
 
-  it('预算必须是正数', () => {
-    const { settings, issues } = parseSettings({
-      version: 1,
-      activeId: 'DeepSeek',
-      providers: defaultSettings().providers,
-      budget: { maxUsd: 2.5, maxTurns: -1, maxTokensOut: 'many' },
-    })
-    expect(settings.budget).toEqual({ maxUsd: 2.5 })
-    expect(issues.filter((i) => i.field.startsWith('budget.'))).toHaveLength(2)
-  })
-
   it('addPreset 不覆盖同名实例', () => {
     const settings = defaultSettings()
-    addPreset(settings, 'ollama', 'Ollama')
-    addPreset(settings, 'ollama', 'Ollama')
-    expect(settings.providers.map((p) => p.id)).toEqual(['DeepSeek', 'Ollama', 'Ollama 2'])
+    addPreset(settings, 'custom', '本地')
+    addPreset(settings, 'custom', '本地')
+    expect(settings.providers.map((p) => p.id)).toEqual(['DeepSeek', '本地', '本地 2'])
   })
 
   it('upsertProvider 让新增的实例成为当前实例', () => {
     const settings = defaultSettings()
-    const ollama: ProviderConfig = configFromPreset('ollama', { id: '本地' })
-    const next = upsertProvider(settings, ollama)
+    const local: ProviderConfig = configFromPreset('custom', { id: '本地' })
+    const next = upsertProvider(settings, local)
     expect(next.activeId).toBe('本地')
     expect(next.providers).toHaveLength(2)
   })
 
-  it('presetFromEnv 认用户 export 的是哪个 key', () => {
-    expect(presetFromEnv({ OPENAI_API_KEY: 'sk-x' })).toBe('openai')
+  it('presetFromEnv：只剩 DeepSeek 与自定义两种去处', () => {
     expect(presetFromEnv({ ARCHITECT_API_KEY: 'sk-x' })).toBe('deepseek')
-    expect(presetFromEnv({ ARCHITECT_PROVIDER: 'ollama' })).toBe('ollama')
+    expect(presetFromEnv({ ARCHITECT_PROVIDER: 'custom' })).toBe('custom')
+    // OPENAI_API_KEY 不再有任何特殊待遇（那个预设删了）——没有 ARCHITECT key 就落到 DeepSeek
+    expect(presetFromEnv({ OPENAI_API_KEY: 'sk-x' })).toBe('deepseek')
     expect(presetFromEnv({})).toBe('deepseek')
   })
 
@@ -1067,23 +1049,6 @@ describe('成本记账', () => {
     expect(costOf({ in: 1, out: 1, cachedIn: 0 })).toBeUndefined()
   })
 
-  it('三重预算各自能刹车，并给出具体原因', () => {
-    const totals = { ...emptyUsage(), turns: 40, out: 100 }
-    expect(checkBudget(totals, { maxTurns: 40 })).toMatchObject({ ok: false, reason: 'turns' })
-    expect(checkBudget(totals, { maxTokensOut: 100 })).toMatchObject({ ok: false, reason: 'tokens' })
-    expect(checkBudget({ ...totals, in: 1_000_000 }, { maxUsd: 0.01 }, cost)).toMatchObject({
-      ok: false,
-      reason: 'usd',
-    })
-    expect(checkBudget(totals, {})).toEqual({ ok: true })
-  })
-
-  it('设了美元上限却没有价格表 → 判为越界（"设了上限其实没生效"更糟）', () => {
-    const verdict = checkBudget(emptyUsage(), { maxUsd: 5 })
-    expect(verdict.ok).toBe(false)
-    expect((verdict as { detail: string }).detail).toContain('没有价格表')
-  })
-
   it('高峰 / 低谷价按**供应商时区**切换，高峰正好贵一倍', () => {
     const table = PROVIDER_PRESETS.deepseek.cost!
     // 北京时间周三 10:00 → 高峰
@@ -1091,8 +1056,8 @@ describe('成本记账', () => {
     // 北京时间周三 20:00 → 低谷
     const off = new Date('2026-03-04T12:00:00Z')
     const totals = { in: 1_000_000, out: 0, cachedIn: 0 }
-    expect(costOf(totals, table, peak)).toBeCloseTo(2 * USD_PER_CNY, 10)
-    expect(costOf(totals, table, off)).toBeCloseTo(1 * USD_PER_CNY, 10)
+    expect(costOf(totals, table, peak)).toBeCloseTo(2, 10)
+    expect(costOf(totals, table, off)).toBeCloseTo(1, 10)
     expect(costOf(totals, table, peak)! / costOf(totals, table, off)!).toBeCloseTo(2, 10)
   })
 
@@ -1149,7 +1114,7 @@ describe('成本记账', () => {
     const table = PROVIDER_PRESETS.deepseek.cost!
     // 北京时间周六 10:00
     const saturday = new Date('2026-03-07T02:00:00Z')
-    expect(costOf({ in: 1_000_000, out: 0, cachedIn: 0 }, table, saturday)).toBeCloseTo(1 * USD_PER_CNY, 10)
+    expect(costOf({ in: 1_000_000, out: 0, cachedIn: 0 }, table, saturday)).toBeCloseTo(1, 10)
   })
 
   it('没配时段的价格表不分时段——不给别的供应商瞎套北京时间', () => {
@@ -1179,7 +1144,7 @@ describe('成本记账', () => {
     meter.screenshot()
     const totals = meter.value
     expect(totals).toMatchObject({ in: 150, out: 30, cachedIn: 80, turns: 1, toolCalls: 2, screenshots: 1 })
-    expect(meter.costUsd(cost)).toBeGreaterThan(0)
+    expect(meter.costOf(cost)).toBeGreaterThan(0)
     expect(cacheHitRatio(totals)).toBeCloseTo(80 / 150, 10)
   })
 

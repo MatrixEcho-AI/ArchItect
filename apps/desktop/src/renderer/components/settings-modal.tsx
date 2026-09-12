@@ -37,8 +37,11 @@ import type { MessageKey } from '@architect/i18n'
  * 见下面 `probeCurrent`。
  */
 
-/** 内置预设（custom 走另一个按钮，因为它的字段空着、要用户自己填）。 */
-const BUILTIN_PRESETS = ['deepseek', 'openai', 'ollama'] as const
+/** 内置预设**只剩 DeepSeek**（OpenAI / Ollama 删了，要连它们就用"添加自定义提供方"）。 */
+const BUILTIN_PRESETS = ['deepseek'] as const
+
+/** 价格表的币种。**每个 provider 只配一次**，三个价格数字共用它。 */
+const CURRENCIES = ['CNY', 'USD', 'EUR'] as const
 
 export interface SettingsModalProps {
   open: boolean
@@ -73,8 +76,6 @@ interface CostRow {
 export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   const { settings } = props
   const [keyPlain, setKeyPlain] = useState('')
-  const [usd, setUsd] = useState<number | null>(null)
-  const [turns, setTurns] = useState<number | null>(null)
   const [locale, setLocale] = useState<Locale>('zh-CN')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
@@ -84,8 +85,9 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
     preset: string
     baseURL: string
     model: string
+    currency: string
     costs: CostRow[]
-  }>({ id: '', preset: 'custom', baseURL: '', model: '', costs: [] })
+  }>({ id: '', preset: 'custom', baseURL: '', model: '', currency: 'USD', costs: [] })
 
   const editing: ProviderView | undefined = settings?.providers.find((p) => p.id === props.activeId)
   const activeId = settings?.activeId
@@ -94,8 +96,6 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   useEffect(() => {
     if (!props.open || settings === undefined) return
     setKeyPlain('')
-    setUsd(settings.budget?.maxUsd ?? null)
-    setTurns(settings.budget?.maxTurns ?? null)
     setLocale(settings.locale)
     setShowAdvanced(false)
     setForm({
@@ -103,6 +103,7 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
       preset: editing?.preset ?? 'custom',
       baseURL: editing?.baseURL ?? '',
       model: editing?.model ?? '',
+      currency: currencyOf(editing),
       costs: costRowsOf(editing),
     })
   }, [props.open, props.activeId, settings, editing])
@@ -135,7 +136,7 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
         source: 'preset',
       },
     }
-    const costs = costsFromRows(form.costs)
+    const costs = costsFromRows(form.costs, form.currency)
     if (costs !== undefined) config['cost'] = costs
     if (editing?.compat !== undefined) config['compat'] = editing.compat
     return keyPlain.trim().length > 0 ? { config, plain: keyPlain } : { config }
@@ -190,13 +191,7 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
        * `onSaved` 会拿着探测前的快照刷新界面，`vision` 又被盖回旧值。
        */
       const chosen = await probeCurrent()
-      const budget: Record<string, number> = {}
-      if (usd !== null && Number.isFinite(usd) && usd > 0) budget['maxUsd'] = usd
-      if (turns !== null && Number.isFinite(turns) && turns > 0) budget['maxTurns'] = turns
-      const next = await window.architect.setBudget(
-        Object.keys(budget).length > 0 ? budget : undefined,
-      )
-      props.onSaved(next)
+      props.onSaved(await window.architect.settings())
       setKeyPlain('')
       // 挑到模型就说挑到了哪一个；没挑到就是没接上，说清楚，别让用户以为配好了
       props.onStatus(chosen.length > 0 ? 'settings.llm.chosen' : 'settings.llm.notChosen', {
@@ -273,20 +268,9 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                   <span className="provider-tag">{presetLabel(provider.preset)}</span>
                 )}
                 <span className={`provider-dot${ready ? ' is-ready' : ''}`} title={t(ready ? 'settings.ready' : 'settings.notReady')} />
-                {isActive && <span className="provider-active-tag">{t('settings.inUse')}</span>}
+                {/* **没有"使用中"这个状态**（用户的要求）：在哪台模型上说话，由输入框
+                    里那个选择器决定（DSH 就是这样）。这里只显示"配好了没有"。 */}
                 <span style={{ flex: 1 }} />
-                {!isActive && (
-                  <Button
-                    size="small"
-                    id={`btn-use-${provider.id}`}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      void window.architect.setActive(provider.id).then(props.onSaved)
-                    }}
-                  >
-                    {t('settings.use')}
-                  </Button>
-                )}
                 <Button
                   size="small"
                   id={`btn-edit-${provider.id}`}
@@ -342,7 +326,7 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                       style={{ flex: 1 }}
                       value={form.preset}
                       onChange={(preset: string) => setForm((c) => ({ ...c, preset }))}
-                      options={['deepseek', 'openai', 'ollama', 'custom'].map((preset) => ({
+                      options={['deepseek', 'custom'].map((preset) => ({
                         value: preset,
                         label: presetLabel(preset),
                       }))}
@@ -412,6 +396,20 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                       <div className="cost-table">
                         <div className="cost-head">
                           <span>{t('settings.pricing')}</span>
+                          {/* **货币只配一次**（用户的要求）：三个价格数字共用它，
+                              比每行都问一遍币种少三次选择。价格表存的是原币种金额，
+                              表盘按它显示——不折算，因为汇率是编的。 */}
+                          <span className="cost-currency">
+                            <span>{t('settings.currency')}</span>
+                            <Select
+                              id="cfg-currency"
+                              size="small"
+                              style={{ width: 84 }}
+                              value={form.currency}
+                              onChange={(currency: string) => setForm((c) => ({ ...c, currency }))}
+                              options={CURRENCIES.map((code) => ({ value: code, label: code }))}
+                            />
+                          </span>
                           <Button
                             size="small"
                             type="text"
@@ -522,26 +520,6 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                         <div className="cost-legend">{t('settings.pricingHint')}</div>
                       </div>
 
-                      <Field label={t('settings.budget')}>
-                        <InputNumber
-                          id="cfg-usd"
-                          min={0}
-                          step={0.5}
-                          placeholder="USD"
-                          style={{ width: 110 }}
-                          value={usd}
-                          onChange={setUsd}
-                        />
-                        <InputNumber
-                          id="cfg-turns"
-                          min={1}
-                          step={1}
-                          placeholder={t('settings.turns')}
-                          style={{ width: 110 }}
-                          value={turns}
-                          onChange={setTurns}
-                        />
-                      </Field>
                     </div>
                   )}
 
@@ -607,6 +585,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  * 后者没有模型名可对应，所以**用当前模型名当键**填进来——这样用户看到的是
  * "这个模型这个价"，而不是一个不知道该填什么名字的空行。
  */
+/** 这一份配置用的币种。取第一张价格表上的那个（同一个 provider 共用一种）。 */
+function currencyOf(provider: ProviderView | undefined): string {
+  const table =
+    provider?.costs !== undefined
+      ? Object.values(provider.costs)[0]
+      : provider?.cost
+  return table?.currency ?? 'USD'
+}
+
 function costRowsOf(provider: ProviderView | undefined): CostRow[] {
   if (provider === undefined) return []
   const toRow = (model: string, table: NonNullable<ProviderView['cost']>): CostRow => ({
@@ -630,7 +617,7 @@ function costRowsOf(provider: ProviderView | undefined): CostRow[] {
  * 变成编出来的数字，而那个数字是刹车依据。全空时返回 `undefined`，让调用方
  * 干脆不写 `cost` 字段——于是表盘照旧显示 token 数，而不是 $0.00。
  */
-function costsFromRows(rows: CostRow[]): Record<string, unknown> | undefined {
+function costsFromRows(rows: CostRow[], currency: string): Record<string, unknown> | undefined {
   const out: Record<string, unknown> = {}
   for (const row of rows) {
     const model = row.model.trim()
@@ -638,6 +625,7 @@ function costsFromRows(rows: CostRow[]): Record<string, unknown> | undefined {
     const outPrice = Number(row.outPerMTok)
     if (model.length === 0 || row.inPerMTok === '' || row.outPerMTok === '') continue
     out[model] = {
+      currency,
       inPerMTok: inPrice,
       outPerMTok: outPrice,
       ...(row.cacheReadPerMTok !== '' ? { cacheReadPerMTok: Number(row.cacheReadPerMTok) } : {}),

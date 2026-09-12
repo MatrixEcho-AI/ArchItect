@@ -145,15 +145,14 @@ describe('设置文件持久化', () => {
     expect(loaded.settings.providers[0]?.preset).toBe('deepseek')
   })
 
-  it('往返保持 provider 与预算', () => {
+  it('往返保持 provider', () => {
     const file = join(workspace, 'round', 'settings.json')
     const settings = deepseekWithKey()
-    settings.budget = { maxUsd: 3, maxTurns: 25 }
     saveSettings(file, settings)
     const loaded = loadSettings(file)
     expect(loaded.fresh).toBe(false)
     expect(loaded.settings.activeId).toBe('DeepSeek')
-    expect(loaded.settings.budget).toEqual({ maxUsd: 3, maxTurns: 25 })
+    expect(loaded.settings.providers[0]?.model).toBe(settings.providers[0]?.model)
   })
 
   it('**json 语法坏掉时退回默认值，但不覆盖用户的文件**', async () => {
@@ -335,7 +334,7 @@ describe('ChatController：跑一轮', () => {
     expect(usage.turns).toBe(1)
     expect(usage.in).toBeGreaterThan(0)
     // 预设里带了 DeepSeek 的单价，所以应该有金额
-    expect(chat.chatView().costUsd).toBeGreaterThan(0)
+    expect(chat.chatView().costAmount).toBeGreaterThan(0)
   })
 
   it('stop() 之后循环停下来并如实报告原因', async () => {
@@ -377,7 +376,7 @@ describe('ChatController：跑一轮', () => {
     expect(cleared.usage.in).toBe(0)
     expect(cleared.usage.turns).toBe(0)
     // 有价格表时零用量就是 $0，不是"未知"
-    expect(cleared.costUsd).toBe(0)
+    expect(cleared.costAmount).toBe(0)
   })
 })
 
@@ -417,7 +416,7 @@ describe('ChatController：设置的增删改', () => {
     const settings = deepseekWithKey()
     settings.providers.push({
       id: '本地',
-      preset: 'ollama',
+      preset: 'custom',
       kind: 'openai-compatible',
       baseURL: 'http://localhost:11434/v1',
       apiKeyRef: '',
@@ -435,14 +434,14 @@ describe('ChatController：设置的增删改', () => {
     expect(view.providers.find((p) => p.id === '本地')?.hasKey).toBe(true)
   })
 
-  it('addProvider 按四项预设之一加实例，并把它设为当前', () => {
+  it('addProvider 按预设加实例，并把它设为当前', () => {
     const controller = new ChatController({ settings: deepseekWithKey(), secrets: createMemorySecretStore() }, async () => ({
       stopReason: 'completed',
       usage: { in: 0, out: 0 },
     }))
-    const view = controller.addProvider('ollama')
+    const view = controller.addProvider('custom')
     expect(view.providers).toHaveLength(2)
-    expect(view.providers.find((p) => p.id === view.activeId)?.preset).toBe('ollama')
+    expect(view.providers.find((p) => p.id === view.activeId)?.preset).toBe('custom')
   })
 
   it('removeProvider 连带清掉密钥库里的条目', () => {
@@ -465,9 +464,8 @@ describe('ChatController：设置的增删改', () => {
     const seen: string[] = []
     controller.onEvent((event) => seen.push(event.type))
     controller.setLocale('en-US')
-    controller.setBudget({ maxUsd: 1 })
     controller.setUi({ view: 'front' })
-    expect(seen).toEqual(['settings', 'settings', 'settings'])
+    expect(seen).toEqual(['settings', 'settings'])
     expect(controller.settingsValue.locale).toBe('en-US')
   })
 })
@@ -748,43 +746,6 @@ describe('对话记录会跟着工程一起保存（需求原话："含对话记
     chat.clear()
     expect(chat.recording().transcript.messages).toEqual([])
     expect(chat.recording().captures.refs).toEqual([])
-  })
-})
-
-describe('桌面端的花费上限必须真的刹车（不能只记账）', () => {
-  it('设置了 maxUsd 时循环会停下来，并把原因带回界面', async () => {
-    const secrets = createMemorySecretStore()
-    secrets.set('DeepSeek', 'sk-x')
-    const settings = deepseekWithKey()
-    settings.budget = { maxUsd: 0.00001 }
-
-    const { AgentSession, runAgent, ScriptedProvider } = await import('@architect/agent')
-
-    // 直接验"设置里的预算会被送进循环"这条线：StudioService 的 runner 读的是
-    // chat.settingsValue.budget，所以只要 UI 存的预算能被读出来就够了。
-    const studio = new StudioService({ plain: true, chat: { settings, secrets } })
-    expect(studio.settingsView().budget).toEqual({ maxUsd: 0.00001 })
-
-    // 再用同样的预算跑一次真实的循环，确认它真的会停
-    const session = new AgentSession({ volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 15, y: 15, z: 15 } }, plain: true })
-    const provider = new ScriptedProvider(
-      Array.from({ length: 20 }, (_, i) => ({
-        toolCalls: [{ name: 'place_block', args: { pos: [i % 16, 0, 0], block: 'minecraft:stone' } }],
-      })),
-    )
-    const state = await runAgent(
-      {
-        provider,
-        registry: session.registry,
-        ctx: session.ctx,
-        system: session.buildSystem(),
-        budget: settings.budget,
-        costTable: settings.providers[0]!.cost,
-      },
-      '一直造下去',
-    )
-    expect(state.stopReason).toBe('budget')
-    expect(state.error).toContain('花费上限')
   })
 })
 

@@ -13,7 +13,6 @@ import { t } from '@architect/i18n'
 
 import { envKeyRef, configFromPreset, PROVIDER_PRESETS, validateProviderConfig } from './config.js'
 import type { CostTable, PresetKey, ProviderConfig } from './config.js'
-import type { Budget } from '../usage.js'
 
 export const SETTINGS_VERSION = 1
 
@@ -22,7 +21,6 @@ export interface ProviderSettings {
   /** 当前用哪个 provider 实例。 */
   activeId: string
   providers: ProviderConfig[]
-  budget?: Budget
   locale?: 'zh-CN' | 'en-US'
   /** UI 偏好（跟模型无关，但同一个文件里放省事）。 */
   ui?: {
@@ -134,17 +132,6 @@ export function parseSettings(raw: unknown): ParsedSettings {
     } else {
       issues.push({ field: 'providers', message: t('agent.settings.noProviders') })
     }
-  }
-
-  if (source['budget'] !== null && typeof source['budget'] === 'object') {
-    const budget = source['budget'] as Record<string, unknown>
-    const parsed: Budget = {}
-    for (const key of ['maxUsd', 'maxTokensOut', 'maxTurns'] as const) {
-      const value = budget[key]
-      if (typeof value === 'number' && Number.isFinite(value) && value > 0) parsed[key] = value
-      else if (value !== undefined) issues.push({ field: `budget.${key}`, message: t('agent.settings.positiveNumber') })
-    }
-    if (Object.keys(parsed).length > 0) settings.budget = parsed
   }
 
   const ui = source['ui']
@@ -281,7 +268,9 @@ export function normalizeProviderCosts(config: ProviderConfig): ProviderConfig {
  */
 function parseCostTable(raw: Record<string, unknown>): CostTable | undefined {
   if (typeof raw['inPerMTok'] !== 'number' || typeof raw['outPerMTok'] !== 'number') return undefined
+  const currency = raw['currency']
   return {
+    ...(currency === 'USD' || currency === 'CNY' || currency === 'EUR' ? { currency } : {}),
     inPerMTok: raw['inPerMTok'],
     outPerMTok: raw['outPerMTok'],
     ...(typeof raw['cacheReadPerMTok'] === 'number' ? { cacheReadPerMTok: raw['cacheReadPerMTok'] } : {}),
@@ -351,7 +340,6 @@ export function upsertProvider(settings: ProviderSettings, config: ProviderConfi
 export function presetFromEnv(env: Record<string, string | undefined>): PresetKey {
   const declared = env['ARCHITECT_PROVIDER']
   if (declared !== undefined && declared in PROVIDER_PRESETS) return declared as PresetKey
-  if (hasValue(env['OPENAI_API_KEY'])) return 'openai'
   if (hasValue(env['ARCHITECT_API_KEY'])) return 'deepseek'
   return 'deepseek'
 }

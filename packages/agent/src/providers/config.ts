@@ -16,17 +16,7 @@ import { t } from '@architect/i18n'
 /** 只做这两种协议适配。 */
 export type ProviderKind = 'openai-compatible' | 'anthropic'
 
-export type PresetKey = 'deepseek' | 'openai' | 'ollama' | 'custom'
-
-/**
- * 人民币 → 美元的换算率，**只用于把官方以元标价的价格表折进以美元记账的表盘**。
- *
- * 官方价格页（`api-docs.deepseek.com/zh-cn/quick_start/pricing`）报的是元/百万 token，
- * 而 `--max-usd`、成本表盘、`.mcai` 的记账都是美元。汇率本身是会动的，
- * 这里取一个固定的近似值并**写在一处**：汇率漂 5% 对"该不该刹车"没有影响，
- * 但把元当成美元用会差 7 倍——那才是真的会骗人的错误。
- */
-export const USD_PER_CNY = 0.14
+export type PresetKey = 'deepseek' | 'custom'
 
 /** 工具调用的实现方式。`prompted` 表示模型不支持原生 tool_calls，要靠提示词约定 JSON。 */
 export type ToolCallingMode = 'native' | 'json-mode' | 'prompted'
@@ -62,7 +52,17 @@ export interface ProviderCapabilities {
  * 恰好是低谷价的 2 倍，时段见 `peakHours`）。分开存而不是取一个平均值：
  * 平均值会让"什么时候跑"这件事在账面上消失，而它其实差一倍。
  */
+export type CurrencyCode = 'USD' | 'CNY' | 'EUR'
+
 export interface CostTable {
+  /**
+   * 这张表用哪种货币计价。省略按 `USD`。
+   *
+   * **为什么不统一折成美元**：官方价格页是分币种标的，而汇率会动——折算出来的数字
+   * 是编的。表盘要报的是"账单上会写多少"，所以原样存原币种，显示时带上币种代码。
+   * 货币上限（`maxUsd`）已经删掉了，所以跨币种比较这件事不存在了。
+   */
+  currency?: CurrencyCode
   inPerMTok: number
   outPerMTok: number
   cacheReadPerMTok?: number
@@ -184,10 +184,15 @@ export interface ProviderPreset {
 }
 
 /**
- * 内置预设四项（D-14）。**只预填协议层信息**，能力一律留给探针。
+ * 内置预设**只有两项**：DeepSeek 与自定义。
  *
- * DeepSeek 的价格是 §9.2 里实测记录下来的那份口径；其余不预填价格——
- * 报一个我没量过的数字比不报更糟，UI 会退化成只显示 token 数。
+ * OpenAI 与 Ollama 删掉了（用户定的）：这两个都是"另一个 OpenAI 兼容端点"，而自定义
+ * 那一项能填任意地址——留着它们只是让选择变多、让"该点哪个"变模糊。真要用它们，
+ * 用自定义填地址即可。
+ *
+ * **只预填协议层信息**，能力一律留给探针。DeepSeek 的价格是官方价格页那份口径
+ * （人民币，表自带币种）；自定义不预填价格——报一个我没量过的数字比不报更糟，
+ * UI 会退化成只显示 token 数。
  */
 export const PROVIDER_PRESETS: Readonly<Record<PresetKey, ProviderPreset>> = {
   deepseek: {
@@ -219,17 +224,19 @@ export const PROVIDER_PRESETS: Readonly<Record<PresetKey, ProviderPreset>> = {
     // 于是没有任何理由再压缩模型的输出——上限这个字段只留给"用户自己要压成本"的场合，
     // 由设置文件或 CLI 的 `--max-output-tokens` 显式给。
     // 用户可以在设置文件里按 provider 覆盖；`parseSettings` 会原样保留它。
-    // 官方价格页（元/百万 token），换算成美元见 `USD_PER_CNY`。
-    // 官方价格页（元/百万 token），换算成美元见 `USD_PER_CNY`。
+    // **官方价格页的数字原样写，单位是人民币**（元/百万 token）。
+    // 以前这里是"元 × 一个手写汇率"折成美元，那是个会漂的编造值；价格表现在自己带
+    // 币种，表盘直接按元显示，跟账单页对得上。
     // 高峰时段是北京时间周一至周五 9:00–12:00、14:00–18:00，高峰价正好是低谷的 2 倍。
     cost: {
-      inPerMTok: 1 * USD_PER_CNY,
-      outPerMTok: 4 * USD_PER_CNY,
-      cacheReadPerMTok: 0.02 * USD_PER_CNY,
+      currency: 'CNY',
+      inPerMTok: 1,
+      outPerMTok: 4,
+      cacheReadPerMTok: 0.02,
       peak: {
-        inPerMTok: 2 * USD_PER_CNY,
-        outPerMTok: 8 * USD_PER_CNY,
-        cacheReadPerMTok: 0.04 * USD_PER_CNY,
+        inPerMTok: 2,
+        outPerMTok: 8,
+        cacheReadPerMTok: 0.04,
       },
       peakHours: {
         timeZone: 'Asia/Shanghai',
@@ -251,37 +258,6 @@ export const PROVIDER_PRESETS: Readonly<Record<PresetKey, ProviderPreset>> = {
     // note 用 getter 按需取：这样切语言时不会停留在 import 时刻的语言
     get note() {
       return t('agent.config.presetNote.deepseek')
-    },
-  },
-  openai: {
-    key: 'openai',
-    kind: 'openai-compatible',
-    baseURL: 'https://api.openai.com/v1',
-    requiresApiKey: true,
-    apiKeyEnv: 'OPENAI_API_KEY',
-    modelPreference: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'o4-mini'],
-    fallbackModel: 'gpt-4o-mini',
-    promptCache: 'auto',
-    compat: { maxTokensField: 'auto', reasoningContent: 'auto' },
-    get note() {
-      return t('agent.config.presetNote.openai')
-    },
-  },
-  ollama: {
-    key: 'ollama',
-    kind: 'openai-compatible',
-    // Ollama 的 OpenAI 兼容端点在 /v1 下
-    baseURL: 'http://localhost:11434/v1',
-    requiresApiKey: false,
-    apiKeyEnv: 'OLLAMA_API_KEY',
-    // 本地模型没有可猜的命名，一律以 GET /models 的实际返回为准
-    modelPreference: ['qwen2.5-vl', 'llava', 'llama3.1', 'qwen2.5'],
-    fallbackModel: '',
-    // 本地推理没有前缀缓存 → Regime B（保守剪枝）
-    promptCache: 'none',
-    compat: { maxTokensField: 'max_tokens', reasoningContent: 'auto' },
-    get note() {
-      return t('agent.config.presetNote.ollama')
     },
   },
   custom: {

@@ -77,7 +77,9 @@ function format1(value: number): string {
  *
  * 只剩四项：入 / 出 / 缓存 / 花费。见下面关于轮次与截图那一段为什么被删掉。
  */
-export function usageText(chat: { usage: ChatUsageView; costUsd?: number } | undefined): string {
+export function usageText(
+  chat: { usage: ChatUsageView; costAmount?: number; costCurrency?: string } | undefined,
+): string {
   if (chat === undefined) return ''
   const parts: string[] = []
   // 还没有任何输入（新会话）时别显示一串 0
@@ -101,7 +103,9 @@ export function usageText(chat: { usage: ChatUsageView; costUsd?: number } | und
    */
   const cache = cacheShare(chat.usage)
   if (cache !== undefined) parts.push(t('cost.compactCache', { percent: cache.percent }))
-  if (chat.costUsd !== undefined) parts.push(t('cost.usd', { amount: chat.costUsd.toFixed(4) }))
+  if (chat.costAmount !== undefined) {
+    parts.push(t('cost.amount', { amount: chat.costAmount.toFixed(4), currency: chat.costCurrency ?? 'USD' }))
+  }
   return parts.join(' · ')
 }
 
@@ -112,12 +116,19 @@ export function usageText(chat: { usage: ChatUsageView; costUsd?: number } | und
  * （元素本身带 `hidden`），而 `usageText` 是给人扫一眼的短标签。合起来写会得出
  * "要么太长、要么信息不全"的折中。
  */
-export function costText(costUsd: number | undefined, usage: ChatUsageView | undefined): string {
+export function costText(
+  costAmount: number | undefined,
+  currency: string | undefined,
+  usage: ChatUsageView | undefined,
+): string {
   if (usage === undefined) return ''
   const cache = cacheShare(usage)
-  const usd = costUsd !== undefined ? t('cost.usd', { amount: costUsd.toFixed(4) }) : ''
-  if (cache === undefined || usd.length === 0) return usd
-  return `${usd} · ${t('cost.cachedShare', { percent: cache.percent })}`
+  const amount =
+    costAmount !== undefined
+      ? t('cost.amount', { amount: costAmount.toFixed(4), currency: currency ?? 'USD' })
+      : ''
+  if (cache === undefined || amount.length === 0) return amount
+  return `${amount} · ${t('cost.cachedShare', { percent: cache.percent })}`
 }
 
 /** 方块名的短形式：`minecraft:` 前缀与状态属性在人眼里是噪音。 */

@@ -300,7 +300,17 @@ export class AgentSession {
     // **合并结果同时用来算标签**：只按原始请求算的话，"机位来自会话相机"的那几张
     // 会全部记成 `iso_ne`，事后在档案里根本认不出它们其实是同一个自定义机位。
     const merged = { ...this.ctx.camera, ...request, view: request.view }
-    const camera = cameraForShot(bounds, merged)
+    /**
+     * 宿主给了一整份相机就**原样用**（桌面端的"采集当前视口"）。
+     *
+     * 为什么不能顺手 `cameraForShot` 解算一遍：那条路会把相机重新"取景"到内容包围盒，
+     * 而且只认角度/eye+lookAt，**`perspective` 会被整个丢掉**——用户在第一人称下
+     * 看到的是透视画面，解算出来却是一张正交等轴测图。采"当前画面"就必须原样用。
+     */
+    const camera =
+      request.camera !== undefined
+        ? (request.camera as CameraSpec)
+        : cameraForShot(bounds, merged)
     const overlays: OverlayOptions = {
       ruler: true,
       axisGizmo: true,

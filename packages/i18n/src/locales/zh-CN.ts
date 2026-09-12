@@ -119,6 +119,21 @@ export const zhCN = {
     placeholder: '描述你想建造的建筑…（⌘/Ctrl + Enter 发送）',
     send: '发送',
     stop: '停止',
+    /**
+     * 插图（两个入口）。
+     *
+     * 文案刻意说清"图会进这一条消息"，而不是只说"插入图片"：这两张图是**随消息**
+     * 发给模型的，不是存到工程里的素材——用户以为后者的话，下一轮发现模型不再提它
+     * 就会觉得功能坏了（其实附图是长期保留的，但"素材库"这层预期本身是错的）。
+     */
+    attachImage: '插入图片',
+    attachImageTip: '从磁盘选图片，随这条消息一起发给模型',
+    grabViewport: '采集视口',
+    grabViewportTip: '把你此刻看到的画面作成一张图，随这条消息发给模型',
+    attachRemove: '移除这张图',
+    attachCount: '已附 {{count}} 张图',
+    attachRejected: '有 {{count}} 个文件没能加进来：{{detail}}',
+    grabFailed: '采集视口失败：{{error}}',
     clear: '清空',
     thinking: '思考中…',
     thinkingLatest: '思考中：{{text}}',
@@ -235,9 +250,21 @@ export const zhCN = {
     importSkipped: '有 {{count}} 种方块认不出来，共 {{cells}} 格没有写入（其余正常导入）',
     importRenamed: '按改名表迁移了 {{count}} 种方块',
   },
+  /**
+   * 插图（`image-input.ts` 与文件选择框）。
+   *
+   * 与 `chat.attach*` 分开：那几个是按钮与提示条上的文案，这几个是**文件本身**
+   * 出问题时的说明（读不了 / 不是图片 / 太大）——出问题的东西是文件，不是对话。
+   */
+  image: {
+    pickTitle: '选择要插入的图片',
+    pickButton: '插入',
+    unreadable: '读不了这个文件（{{error}}）',
+    tooLarge: '太大了（{{mb}} MB，上限 {{max}} MB）',
+    notAnImage: '不是认得出的图片格式（扩展名 {{ext}}；只认 PNG / JPEG / WebP / GIF）',
+  },
   recovery: {
-    title: '上次会话有没保存的改动',
-    detail: '{{ops}} 步改动还没写进工程（基准：{{project}}）。',
+    title: '上次会话有没保存的改动',    detail: '{{ops}} 步改动还没写进工程（基准：{{project}}）。',
     apply: '恢复草稿',
     discard: '丢掉',
     noBase: '基准工程不在原处，恢复不了——只能丢掉。',

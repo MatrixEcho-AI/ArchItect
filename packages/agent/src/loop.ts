@@ -143,6 +143,14 @@ export interface AgentOptions {
   capabilities?: { promptCache: 'auto' | 'explicit' | 'none'; contextWindow?: number }
   /** 覆盖窗口参数（默认 K=6 轮 / M=3 图）。只对 `windowed` 有意义。 */
   contextWindow?: { keepTurns?: number; keepImages?: number }
+  /**
+   * **用户随这句话一起给的图**（桌面端"插入图片"与"采集视口"两个入口）。
+   *
+   * 挂在本次需求那条 user 消息上，与 `goal` 一起构成这一轮的最新输入。
+   * 与工具截图**分开**：那些是模型自己看回来的，这些是人给的，两者的语义与
+   * 生命周期都不同（人的图不会被 `retainHistory` 当成过期截图剪掉）。
+   */
+  images?: readonly LlmImage[]
 }
 
 const UNVERIFIED_NUDGE =
@@ -206,7 +214,11 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
   if (options.stateLine !== undefined && options.stateLine.length > 0) {
     messages.push({ role: 'user', content: options.stateLine })
   }
-  messages.push({ role: 'user', content: goal })
+  messages.push({
+    role: 'user',
+    content: goal,
+    ...(options.images !== undefined && options.images.length > 0 ? { images: [...options.images] } : {}),
+  })
   const tools = registry.toToolSchemas()
   const usage: Required<LlmUsage> = { in: 0, out: 0, cachedIn: 0 }
   const seenImages = new Set<string>()

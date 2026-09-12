@@ -681,9 +681,9 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
               state={studio.state}
               notice={studio.notice}
               onNoticeClose={() => studioRef.current?.setNotice(undefined)}
-              onSend={(text) => {
+              onSend={(text, images) => {
                 void run(t('chat.send'), async () => {
-                  studioRef.current?.setChat(await window.architect.send(text))
+                  studioRef.current?.setChat(await window.architect.send(text, images))
                 })
               }}
               onStop={() =>
@@ -691,6 +691,47 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
                   studioRef.current?.setChat(await window.architect.stop())
                 })
               }
+              /* 插图之一：**文件选择框在主进程**（`dialog.showOpenDialog`）。
+                 渲染进程的 `<input type="file">` 拿得到内容但拿不到路径，而"哪个
+                 文件"这件事要留在原生对话框那边才符合桌面应用的习惯——所以走 IPC。 */
+              onPickImages={async () => {
+                const picked = await window.architect.pickImages()
+                // 被拒的文件**如实说出来**：静默丢掉会让用户以为"选上了但没显示"。
+                if (picked.rejected.length > 0) {
+                  studioRef.current?.setNotice(
+                    t('chat.attachRejected', {
+                      count: String(picked.rejected.length),
+                      detail: picked.rejected.map((item) => `${item.name}：${item.reason}`).join('；'),
+                    }),
+                  )
+                }
+                return picked.images
+              }}
+              /* 插图之二：采集当前视口。**相机从 shell 拿**——用户拖到哪儿、WASD 走到
+                 哪儿只存在于渲染进程；主进程单独截图只能给出一个预设机位。 */
+              onGrabViewport={async () => {
+                const shell = shellRef.current
+                // 抛出的是**裸原因**：包一层 `chat.grabFailed` 的那一步在面板里做，
+                // 两边都包就会得到"采集视口失败：采集视口失败：…"。
+                if (shell === undefined) throw new Error('viewport is not ready')
+                const { width, height } = shell.resizeToCurrent()
+                const shot = await window.architect.grabViewport({
+                  camera: shell.viewportCamera(),
+                  view: 'free',
+                  width,
+                  height,
+                })
+                return {
+                  key: `viewport-${shot.id}-${Date.now()}`,
+                  // 采到的那张已经在主进程存好了（`shot.id`），缩略图按 id 取字节——
+                  // 不在这里再拼一份 data URL，那会平白多一次 base64 往返。
+                  dataUrl: '',
+                  mimeType: 'image/png',
+                  id: shot.id,
+                  label: `rev ${shot.revision}`,
+                }
+              }}
+              onNotice={(text) => studioRef.current?.setNotice(text)}
               onRecoveryApply={() =>
                 void run(t('recovery.apply'), async () => {
                   await afterState(await window.architect.applyRecovery())

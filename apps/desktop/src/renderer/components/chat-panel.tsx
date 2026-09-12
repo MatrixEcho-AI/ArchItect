@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Button, Flex, Input, Tooltip } from 'antd'
-import { DownOutlined, RightOutlined } from '@ant-design/icons'
+import { DownOutlined, CameraOutlined, PictureOutlined, RightOutlined } from '@ant-design/icons'
 import { t } from '@architect/i18n'
 
 import { usageText } from '../cost.js'
 import { Markdown } from './markdown.js'
-import type { ChatMessageView, ChatView, StudioState } from '../types.js'
+import type {
+  ChatImagePayload,
+  ChatMessageView,
+  ChatView,
+  PickedImage,
+  StagedImage,
+  StudioState,
+} from '../types.js'
 
 /**
  * 对话面板：标题行（含读数）+ 消息列表 + 输入框 + 三条横幅。
@@ -31,16 +38,30 @@ export interface ChatPanelProps {
   /** 一次性提示（导出成功、导入结果、软件视口降级…）。`undefined` = 不显示。 */
   notice: string | undefined
   onNoticeClose: () => void
-  onSend: (text: string) => void
+  /** 发送。`images` 是待发区里那几张（没有就是空数组）。 */
+  onSend: (text: string, images: ChatImagePayload[]) => void
   onStop: () => void
   onRecoveryApply: () => void
   onRecoveryDiscard: () => void
   onOpenSettings: () => void
+  /** 打开文件选择框选图片。回来的那几张由本组件加进待发区。 */
+  onPickImages: () => Promise<PickedImage[]>
+  /** 采集当前视口，返回可直接入待发区的一张。失败时抛错（调用方显示出来）。 */
+  onGrabViewport: () => Promise<StagedImage>
+  /** 一句提示（采集失败之类）。与 `notice` 是同一个出口，所以走 `App`。 */
+  onNotice: (text: string) => void
 }
 
 export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
   const { chat, state } = props
   const [draft, setDraft] = useState('')
+  /**
+   * **待发区**：已经选好、还没随消息发出去的图。
+   *
+   * 放在组件里而不是 `App` 里：它是"输入框的一部分"——发送之后清空、换工程也不该
+   * 留着。放上去只会让 `App` 多一份要跟着清的状态。
+   */
+  const [staged, setStaged] = useState<StagedImage[]>([])
   const messagesRef = useRef<HTMLOListElement>(null)
 
   // 两道闸叠加：运行中不能发，停在历史版本上也不能发。
@@ -54,9 +75,41 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
 
   const submit = (): void => {
     const text = draft.trim()
-    if (text.length === 0 || locked) return
+    // 只有图、没有字也允许发：用户完全可能只想问"这张图你怎么看"。
+    if ((text.length === 0 && staged.length === 0) || locked) return
+    const images: ChatImagePayload[] = staged.map((image) => ({
+      dataUrl: image.dataUrl,
+      mimeType: image.mimeType,
+    }))
     setDraft('')
-    props.onSend(text)
+    setStaged([])
+    props.onSend(text, images)
+  }
+
+  /** 追加一张到待发区。key 用递增序号而不是内容：同一张图选两次是两个条目（可以各删各的）。 */
+  const stage = (images: StagedImage[]): void => {
+    if (images.length > 0) setStaged((current) => [...current, ...images])
+  }
+
+  /** 采集视口。**失败必须说出来**：静默失败看上去就是"这个按钮没反应"。 */
+  const grab = async (): Promise<void> => {
+    try {
+      stage([await props.onGrabViewport()])
+    } catch (error) {
+      props.onNotice(t('chat.grabFailed', { error: error instanceof Error ? error.message : String(error) }))
+    }
+  }
+
+  const pick = async (): Promise<void> => {
+    const picked = await props.onPickImages()
+    stage(
+      picked.map((image, index) => ({
+        key: `${Date.now()}-${index}-${image.name}`,
+        dataUrl: image.dataUrl,
+        mimeType: image.mimeType,
+        label: image.name,
+      })),
+    )
   }
 
   return (
@@ -147,6 +200,26 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
           submit()
         }}
       >
+        {/* 待发区：**没有图时也渲染，只是带 `hidden`**。空的时候整块高度为 0，
+            与"删掉元素"在视觉上没差别，但 gui-smoke 能靠 `#pending-images` 判断
+            "这张图到底进没进待发区"——元素不在时那条断言就失去了对象。 */}
+        <div id="pending-images" className={staged.length === 0 ? 'hidden' : undefined}>
+          {staged.map((image) => (
+            <div className="pending-image" key={image.key}>
+              <StagedThumb image={image} />
+              <button
+                type="button"
+                className="pending-image-remove"
+                aria-label={t('chat.attachRemove')}
+                title={t('chat.attachRemove')}
+                onClick={() => setStaged((current) => current.filter((item) => item.key !== image.key))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+
         <Input.TextArea
           id="chat-input"
           rows={3}
@@ -173,6 +246,32 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
           >
             {t('chat.stop')}
           </Button>
+
+          <span style={{ flex: 1 }} />
+
+          {/* 插图的两个入口。放在**发送按钮那一行、靠右**：
+              它们改的是"这一条要发什么"，与发送是一组动作；
+              左上角那两个（清空对话之类）是另一组。 */}
+          <Tooltip title={t('chat.attachImageTip')}>
+            <Button
+              size="small"
+              id="btn-attach-image"
+              aria-label={t('chat.attachImage')}
+              disabled={locked}
+              icon={<PictureOutlined />}
+              onClick={() => void pick()}
+            />
+          </Tooltip>
+          <Tooltip title={t('chat.grabViewportTip')}>
+            <Button
+              size="small"
+              id="btn-grab-viewport"
+              aria-label={t('chat.grabViewport')}
+              disabled={locked}
+              icon={<CameraOutlined />}
+              onClick={() => void grab()}
+            />
+          </Tooltip>
         </div>
       </form>
     </div>
@@ -376,7 +475,109 @@ export function Message({ message }: { message: ChatMessageView }): React.JSX.El
           alt={`rev ${message.imageRevision ?? '?'} ${message.imageView ?? ''}`}
         />
       )}
+
+      {/* 用户给的图：画在**正文下面**，与工具截图同一个视觉族（都可点开放大），
+          但取字节走 `attachment` 而不是 `capture`——两张表。 */}
+      {message.userImageIds !== undefined && message.userImageIds.length > 0 && (
+        <div className="attached-shots">
+          {message.userImageIds.map((id, index) => (
+            <Attachment key={id} id={id} alt={t('chat.attachCount', { count: String(index + 1) })} />
+          ))}
+        </div>
+      )}
     </li>
+  )
+}
+
+/**
+ * 待发区里的一张缩略图。
+ *
+ * 两个来源走两条路，所以这里必须分派一次：
+ *  - **选文件**：字节就在手里（`dataUrl`），直接用；
+ *  - **采集视口**：主进程已经存好了，手里只有 `id`，按 id 取一次字节。
+ *
+ * 为什么不让采集那条也拼一份 data URL 塞进 `dataUrl`：那张图刚在**主进程**里被
+ * 编码成 PNG、算完哈希存好，再把它 base64 回传给渲染进程画一张小缩略图，是白绕
+ * 一大圈（一张 1024×768 的 PNG 有几百 KB）。取字节那条路本来就有（`attachment`）。
+ */
+function StagedThumb({ image }: { image: StagedImage }): React.JSX.Element {
+  const [fetched, setFetched] = useState<string | undefined>(undefined)
+  const [broken, setBroken] = useState(false)
+
+  useEffect(() => {
+    if (image.dataUrl.length > 0 || image.id === undefined) return
+    let revoked: string | undefined
+    let cancelled = false
+    void (async () => {
+      const found = await window.architect.attachment(image.id!)
+      if (found === undefined || cancelled) return
+      const next = URL.createObjectURL(
+        new Blob([found.png as unknown as BlobPart], { type: found.mimeType }),
+      )
+      revoked = next
+      setFetched(next)
+    })()
+    return () => {
+      cancelled = true
+      if (revoked !== undefined) URL.revokeObjectURL(revoked)
+    }
+  }, [image.dataUrl, image.id])
+
+  const src = image.dataUrl.length > 0 ? image.dataUrl : fetched
+  /**
+   * **解码失败就退回文字标签，不画一个碎图标。**
+   *
+   * `sniffImageMime` 认得出 GIF / WebP（网关也普遍收），但渲染进程的 `<img>`
+   * 对个别编码仍可能解不开。那不该表现成"用户选了张图、界面上是个破图"——
+   * 那看起来像功能坏了。退回标签至少还说得出"这是一张叫什么的图"。
+   */
+  if (src === undefined || broken) {
+    return <span className="pending-image-label">{image.label}</span>
+  }
+  return (
+    <img
+      src={src}
+      alt={image.label}
+      title={image.label}
+      onError={() => setBroken(true)}
+    />
+  )
+}
+
+/**
+ * 历史消息里的一张**用户附图**。
+ *
+ * 与 `Shot` 分开而不是复用一个组件：它们取的通道不同（`attachment` / `capture`），
+ * 而这两张表在主进程里是刻意分开的（附图不参与 `retainHistory` 剪枝）。
+ * 复用一个组件势必要在内部按 id 前缀分派，那就把一个数据边界藏进了一个 if 里。
+ */
+export function Attachment({ id, alt }: { id: string; alt: string }): React.JSX.Element {
+  const [url, setUrl] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    let revoked: string | undefined
+    let cancelled = false
+    const load = async (): Promise<void> => {
+      const found = await window.architect.attachment(id)
+      if (found === undefined || cancelled) return
+      const next = URL.createObjectURL(
+        new Blob([found.png as unknown as BlobPart], { type: found.mimeType }),
+      )
+      revoked = next
+      setUrl(next)
+    }
+    void load()
+    return () => {
+      cancelled = true
+      if (revoked !== undefined) URL.revokeObjectURL(revoked)
+    }
+  }, [id])
+
+  if (url === undefined) return <></>
+  return (
+    <Tooltip title={alt}>
+      <img className="shot" src={url} alt={alt} />
+    </Tooltip>
   )
 }
 

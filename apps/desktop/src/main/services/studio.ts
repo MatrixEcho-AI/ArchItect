@@ -2,7 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
-import type { DiscoveryResult, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
+import type { DiscoveryResult, LlmImage, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis, WorldStore } from '@architect/core'
 import {
@@ -329,8 +329,7 @@ export class StudioService {
     this.chat = new ChatController(
       options.chat ?? { secrets: createMemorySecretStore() },
       // 每轮都重新读 this.session：newProject/open 会把它换成新的
-      async (goal, provider, onEvent, shouldStop, history, pendingMutations) => {
-        // 用户设的花费上限要**真的刹车**，不能只记账。价格表来自当前 provider。
+      async (goal, provider, onEvent, shouldStop, history, pendingMutations) => {        // 用户设的花费上限要**真的刹车**，不能只记账。价格表来自当前 provider。
         const settings = this.chat.settingsValue
         const active = activeProvider(settings)
         const cost = active?.cost
@@ -347,13 +346,16 @@ export class StudioService {
             pendingMutations,
             onEvent,
             shouldStop,
+            // 用户随这句话附的图（插入的图片 / 采集的视口那一枪）。挂在本次需求那条
+            // user 消息上，所以模型这一轮就能直接看到，不用先调 screenshot。
+            ...(goal.images.length > 0 ? { images: goal.images } : {}),
             ...(settings.budget !== undefined ? { budget: settings.budget } : {}),
             ...(cost !== undefined ? { costTable: cost } : {}),
             // 上下文策略由 provider 能力决定（§9.2）：本地模型没有前缀缓存，
             // 不切窗口的话每个请求都要把整段历史全价重算一遍
             ...(active !== undefined ? { capabilities: active.capabilities } : {}),
           },
-          goal,
+          goal.text,
         )
         return {
           stopReason: state.stopReason,
@@ -547,7 +549,7 @@ export class StudioService {
    * 模型自己在运行中调 `undo` 造成的历史游标是另一回事：那一笔"撤销"是它自己做的，
    * 它接着改就是正常的"撤销后换个做法"。
    */
-  send(text: string): ChatView {
+  send(text: string, attachments?: readonly LlmImage[]): ChatView {
     const history = this.session.history
     if (!history.atTip) {
       this.notice = t('chat.behindTipDetail', {
@@ -559,7 +561,7 @@ export class StudioService {
       this.emit({ type: 'state', state: this.state() })
       return this.chat.chatView()
     }
-    return this.chat.send(text)
+    return this.chat.send(text, attachments)
   }
 
   stop(): ChatView {
@@ -572,6 +574,21 @@ export class StudioService {
 
   chatImage(id: string): Uint8Array | undefined {
     return this.chat.capture(id)
+  }
+
+  /**
+   * 用户附图的字节（界面画缩略图用）。
+   *
+   * 与 `chatImage` 分开一条：`chat:image` 走的是**截图**表，历史里那些用户附图
+   * 不在那一张表里（见 `ChatController.attachments` 的注释）。
+   */
+  chatAttachment(id: string): LlmImage | undefined {
+    return this.chat.attachment(id)
+  }
+
+  /** 收下一张用户附图，返回内容寻址的 id（`send` 与"插入图片"两条路都走它）。 */
+  storeChatAttachment(image: { png: Uint8Array; mimeType: string }): string {
+    return this.chat.storeAttachment(image)
   }
 
   settingsView(): SettingsView {
@@ -877,6 +894,45 @@ export class StudioService {
     const stats = measure(store)
     const bounds = stats.bounds
     const image = await this.session.ctx.shoot({
+      view: request.view,
+      width: request.width,
+      height: request.height,
+      ...(highlight !== undefined ? { highlight } : {}),
+      caption: [
+        `REV ${store.revision}  BLOCKS ${stats.blocks}`,
+        ...(bounds !== undefined
+          ? [`BOUNDS ${bounds.min.x},${bounds.min.y},${bounds.min.z}..${bounds.max.x},${bounds.max.y},${bounds.max.z}`]
+          : []),
+      ],
+    })
+    return { png: image.png, view: image.camera, revision: image.revision }
+  }
+
+  /**
+   * **采集当前视口**，作为用户附图交给模型。
+   *
+   * 相机由**渲染进程**给（`request.camera`）：拖到哪个角度、WASD 走到哪儿，采到的
+   * 就是那个机位。相机只活在渲染进程里，所以这一步必须由它发起——主进程单独去
+   * `studio.shoot()` 只能拿到一个预设机位，那不是用户屏幕上看到的东西。
+   *
+   * 与 `studio.shoot` 复用同一条链（`ctx.shoot` → 渲染进程的 three.js，拿不到才
+   * 回落软件光栅器），所以构图、标尺、高亮框与 `screenshot` 工具完全一致。
+   */
+  async grabViewport(request: {
+    camera: CameraSpec
+    view: string
+    width: number
+    height: number
+  }): Promise<{ png: Uint8Array; view: string; revision: number }> {
+    const store = this.session.store
+    const stats = measure(store)
+    const bounds = stats.bounds
+    const last = this.session.log.at(this.session.log.length - 1)
+    const highlight = last?.patch.bounds()
+    const image = await this.session.ctx.shoot({
+      // **原样透传**：渲染进程给的就是它此刻用的那份相机（可能带 perspective），
+      // 所以采到的画面和用户屏幕上的那一帧同源。
+      camera: request.camera,
       view: request.view,
       width: request.width,
       height: request.height,

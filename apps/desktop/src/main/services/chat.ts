@@ -16,6 +16,7 @@ import type {
   CostTable,
   DiscoveryResult,
   LlmMessage,
+  LlmImage,
   LlmProvider,
   PresetKey,
   ProviderConfig,
@@ -52,6 +53,15 @@ export interface ChatMessageView {
   imageRevision?: number
   /** 这张图当时用的机位。 */
   imageView?: string
+  /**
+   * **用户随这条消息给的图**（"插入图片"与"采集视口"两个入口）。
+   *
+   * 与 `imageId` 分开而不是复用一个字段：`imageId` 是**工具截图**的语义
+   * （模型自己看回来的，会随 revision 过期），这里是**人给的输入**。
+   * 界面上前者画在工具卡片里、后者画在用户消息下方；模型那边前者会被
+   * `retainHistory` 当过期截图剪掉，后者不会。
+   */
+  userImageIds?: string[]
   /** 完成闸门的提醒（§9.4）。 */
   gate?: boolean
   /**
@@ -134,8 +144,21 @@ export type StudioEvent =
   | { type: 'settings'; view: SettingsView }
   | { type: 'state'; state: unknown }
 
+/**
+ * **本轮要发给模型的东西**：一句话，外加用户随这句话给的图。
+ *
+ * 打包成一个对象而不是"给 `ChatRunner` 再加两个位置参数"：位置参数每加一个，
+ * 所有 runner 实现（真实的那个 + 测试里七八个）都要跟着改一遍，而且第 7 个
+ * `Uint8Array` 参数在调用点上完全看不出是什么。这里加字段是向后兼容的。
+ */
+export interface SendGoal {
+  text: string
+  /** 用户附的图（没有就是空数组）。 */
+  images: LlmImage[]
+}
+
 export type ChatRunner = (
-  goal: string,
+  goal: SendGoal,
   provider: LlmProvider,
   onEvent: (event: AgentEvent) => void,
   shouldStop: () => boolean,
@@ -169,6 +192,8 @@ export interface ChatOptions {
   secrets?: SecretStore
   /** 截图缓存上限。够了就丢掉最旧的——它只是界面上的一张缩略图，能重新渲染出来。 */
   maxCaptures?: number
+  /** 用户附图的上限。与截图分开算，理由见 `attachments` 字段。 */
+  maxAttachments?: number
   /** 测试注入用：替换 provider 构造。 */
   providerFactory?: (config: ProviderConfig, apiKey: string | undefined) => LlmProvider
 }
@@ -177,10 +202,19 @@ export class ChatController {
   private settings: ProviderSettings
   private readonly secrets: SecretStore
   private readonly maxCaptures: number
+  private readonly maxAttachments: number
   private readonly providerFactory: ChatOptions['providerFactory'] | undefined
 
   private messages: ChatMessageView[] = []
   private captures = new Map<string, { png: Uint8Array; revision: number; view: string }>()
+  /**
+   * **用户附图**（插入的图片 / 采集的视口那一枪）。
+   *
+   * 与 `captures` 分开两张表，因为生命周期不同：截图是"模型自己看回来的"，会被
+   * `retainHistory` 当过期截图剪掉；附图是"人给的输入"，剪掉它等于把用户的话删了。
+   * 存的是**字节**（与 `LlmImage` 同形），所以 `send` 里不用再找一次图。
+   */
+  private attachments = new Map<string, LlmImage>()
   private running = false
   private stopRequested = false
   private stopReason: string | undefined
@@ -234,6 +268,7 @@ export class ChatController {
     this.settings = options.settings ?? defaultSettings()
     this.secrets = options.secrets ?? { location: t('desktop.secretLocation.unconfigured'), encrypted: false, get: () => undefined, set: () => false, has: () => false, remove: () => {} }
     this.maxCaptures = options.maxCaptures ?? 60
+    this.maxAttachments = options.maxAttachments ?? 24
     this.providerFactory = options.providerFactory
     this.runner = runner
     this.recorder = new TranscriptRecorder({ title: t('desktop.untitledSession') })
@@ -651,15 +686,32 @@ export class ChatController {
   }
 
   /** 开始一轮。**立刻返回**，过程通过事件推给界面。 */
-  send(text: string): ChatView {
+  send(text: string, attachments?: readonly LlmImage[]): ChatView {
     if (this.running) throw new Error(t('desktop.chatBlocking.running'))
     const goal = text.trim()
-    if (goal.length === 0) throw new Error(t('desktop.chatBlocking.emptyGoal'))
+    // 只有图、没有字也允许发：用户完全可能只想问"这张图你怎么看"。
+    // 但两者都空就是空操作，直接拦住（原来是只看字）。
+    const images = [...(attachments ?? [])]
+    if (goal.length === 0 && images.length === 0) {
+      throw new Error(t('desktop.chatBlocking.emptyGoal'))
+    }
 
     const blocking = this.blocking()
     if (blocking.length > 0) throw new Error(blocking.join('；'))
 
-    this.messages.push(this.newMessage('user', goal))
+    const message = this.newMessage('user', goal)
+    const stored: LlmImage[] = []
+    if (images.length > 0) {
+      for (const image of images) {
+        const id = this.storeAttachment(image)
+        message.userImageIds = [...(message.userImageIds ?? []), id]
+        // 回填**存起来的那一份**而不是入参：`LlmImage.id` 与预览用的 id 必须是同一个
+        // 值，否则界面拿到的缩略图 key 和模型请求里的去重键会对不上。
+        const kept = this.attachments.get(id)
+        if (kept !== undefined) stored.push(kept)
+      }
+    }
+    this.messages.push(message)
     this.recorder.add('user', goal)
     this.running = true
     this.stopRequested = false
@@ -667,8 +719,39 @@ export class ChatController {
     this.error = undefined
     this.budgetStop = undefined
     this.emitView()
-    void this.run(goal)
+    void this.run({ text: goal, images: stored })
     return this.view()
+  }
+
+  /**
+   * 收下一张用户附图，返回它的 id。
+   *
+   * id 与 `captures` 用同一个形状（内容寻址的 sha256 前 16 位），所以：
+   *  - 同一条消息里贴两次同一张图只会存一份；
+   *  - `storeAttachment` 产出的 id 直接就是 `LlmImage.id`，`send` 不用再转换。
+   */
+  storeAttachment(image: { png: Uint8Array; mimeType: string }): string {
+    // id 一律**自己算**，不接受调用方指定：内容是唯一的真相，认内容才能去重，
+    // 而认调用方给的键就等于把"同一张图存两份"和"不同图撞一个键"都放进来。
+    //
+    // `user:` 前缀不只是命名：`retainHistory` 靠它区分"用户给的输入"与"模型看回来的
+    // 截图"，前者不许剪。见那个函数的注释。
+    const hash = createHash('sha256').update(image.png).digest('hex').slice(0, 16)
+    const id = `user:${hash}`
+    if (!this.attachments.has(id)) {
+      this.attachments.set(id, { png: image.png, mimeType: image.mimeType, id })
+      while (this.attachments.size > this.maxAttachments) {
+        const oldest = this.attachments.keys().next().value
+        if (oldest === undefined) break
+        this.attachments.delete(oldest)
+      }
+    }
+    return id
+  }
+
+  /** 用户附图的字节（界面画缩略图、以及 `send` 回填 `LlmImage` 都走这里）。 */
+  attachment(id: string): LlmImage | undefined {
+    return this.attachments.get(id)
   }
 
   stop(): ChatView {
@@ -711,7 +794,7 @@ export class ChatController {
     return { id: this.nextId++, role, text, ts: new Date().toISOString() }
   }
 
-  private async run(goal: string): Promise<void> {
+  private async run(goal: SendGoal): Promise<void> {
     try {
       const config = activeProvider(this.settings)!
       const apiKey = await resolveApiKey(config.apiKeyRef, (ref) => this.resolveRef(ref))
@@ -1013,6 +1096,11 @@ function fullResult(result: ToolResult): string {
  * 是纯粹的钱（一张 800×800 的图要吃掉几千 token）。信息不丢：工具结果里
  * 仍然留着"截了哪张图、哪个 revision"那一行。
  *
+ * **用户自己给的图不丢。** 判据是 `id` 上的 `user:` 前缀（见 `storeAttachment`）。
+ * 这一条踩过：原来这里是"有图就丢"，于是用户贴的参考图只在当轮可见，
+ * 下一轮模型就忘了自己看过什么——而用户贴图的意思恰恰是"以后都按这张来"。
+ * 模型自己截的那些才是过期的，因为世界已经变了；人给的图不会因为改了几格就失效。
+ *
  * 为什么其余字段原样带：`reasoningContent` 必须回传（DeepSeek 要求带了 tools 的
  * 请求里历史每一轮的思维链原样回传，否则 400），`toolCalls` 与 `toolCallId`
  * 的配对关系也不能动。
@@ -1020,8 +1108,15 @@ function fullResult(result: ToolResult): string {
 function retainHistory(messages: readonly LlmMessage[]): LlmMessage[] {
   return messages.map((message) => {
     if (message.images === undefined || message.images.length === 0) return { ...message }
-    const { images, ...rest } = message
-    return { ...rest, content: `${message.content}\n(${images.length} screenshot(s) omitted from retained history)` }
+    const kept = message.images.filter((image) => (image.id ?? '').startsWith('user:'))
+    const dropped = message.images.length - kept.length
+    if (dropped === 0) return { ...message, images: kept }
+    const { images: _dropped, ...rest } = message
+    return {
+      ...rest,
+      ...(kept.length > 0 ? { images: kept } : {}),
+      content: `${message.content}\n(${dropped} screenshot(s) omitted from retained history)`,
+    }
   })
 }
 

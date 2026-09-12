@@ -1730,7 +1730,8 @@ secrets.bin
 > 于是 WAL 的长度只与**保存频率**有关，与工区大小无关。
 
 > **M8 里"文档"这一项有一个硬要求**：工具参考**不允许手写**。schema 是唯一真相，
-> `docs/tool-reference.md` 由 `packages/tools/src/docs.ts` 生成，`pnpm test` 在它过期时直接失败。
+> `docs/tool-reference.md`（与中文外壳的 `.zh-CN.md`）由 `packages/tools/src/docs.ts` 生成，
+> `pnpm test` 在它过期时直接失败。
 > 手写的工具文档一定会漂移，而读到错契约的人不会知道自己在读错的。
 
 > **M7 不做 `mineflayer` 连服务器施工**（已决策排除）。这一期的终点是**导出文件**，用户自己拿文件去游戏里粘贴。

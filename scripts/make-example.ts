@@ -27,10 +27,10 @@ async function buildHut(): Promise<void> {
     now: () => FIXED_NOW,
   })
 
-  const goal = 'Build a single-storey 9x9 forest hut: spruce plank walls, cobblestone foundation, pitched roof, door facing south'
+  const goal = '造一座 9x9 的单层林间小屋，云杉木板墙、圆石地基、斜坡屋顶，正门朝南开'
   const script = [
     {
-      text: 'Plan: a 9x9 spruce hut, a ring of cobblestone for the foundation, walls 4 blocks tall, a door on the south side, a hipped dark oak roof.',
+      text: '方案：9x9 云杉小屋，圆石地基一圈，四壁高 4 格，南面开门，深色橡木做四坡顶。',
       toolCalls: [{ name: 'measure', args: {} }],
     },
     {
@@ -113,7 +113,7 @@ async function buildHut(): Promise<void> {
 
   const recording = recorder.recording
   const bytes = packProject({
-    name: 'Forest hut (example)',
+    name: '林间小屋（示例）',
     projectId: '01EXAMPLEHUT',
     store: session.store,
     log: session.log,
@@ -128,9 +128,9 @@ async function buildHut(): Promise<void> {
   writeFileSync(target, bytes)
 
   const { store } = openProject(bytes)
-  console.log(`example project → examples/forest-hut.mcai (${(bytes.length / 1024).toFixed(1)} KB)`)
-  console.log(`  ${store.stats().blocks} blocks   op ${session.log.length}   revision ${state.stopReason}`)
-  console.log(`  ${recording.transcript.messages.length} messages   ${recording.captures.refs.length} capture(s)`)
+  console.log(`示例工程 → examples/forest-hut.mcai（${(bytes.length / 1024).toFixed(1)} KB）`)
+  console.log(`  ${store.stats().blocks} 方块   op ${session.log.length}   revision ${state.stopReason}`)
+  console.log(`  对话 ${recording.transcript.messages.length} 条   截图 ${recording.captures.refs.length} 张`)
 }
 
 await buildHut()

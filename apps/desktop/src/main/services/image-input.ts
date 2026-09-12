@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import { extname } from 'node:path'
+import { basename, extname } from 'node:path'
 
 import { t } from '@architect/i18n'
 
@@ -72,7 +72,9 @@ export async function readPickedImages(paths: readonly string[]): Promise<PickRe
   const rejected: Array<{ name: string; reason: string }> = []
 
   for (const path of paths) {
-    const name = path.split('/').pop() ?? path
+    // `basename` 认得 `\` 和 `/` 两种分隔符：只用 `/` 拆的话，Windows 上挑进来的
+    // 文件会把整条路径当成名字显示出去。
+    const name = basename(path)
     let bytes: Buffer
     try {
       bytes = await readFile(path)

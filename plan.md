@@ -1468,7 +1468,8 @@ ArchItect/
 ├── plan.md                         # 本文档
 ├── docs/
 │   ├── mcai-format.md              # .mcai 格式正式规范（手写，但路径/版本/字段由测试核对）
-│   ├── tool-reference.md           # 完整工具参考——**从 JSON Schema 生成**，过期即测试失败
+│   ├── tool-reference.md           # 完整工具参考（英文外壳）——**从 JSON Schema 生成**，过期即测试失败
+│   ├── tool-reference.zh-CN.md     # 同一份，中文外壳（正文两种语言里都是英文：那是给 LLM 的 prompt）
 │   └── prompt-library.md           # 建筑风格 prompt 模板（给用户的输入模板）
 ├── examples/
 │   ├── forest-hut.mcai             # 示例工程：含方块、编辑记录、对话记录、截图

@@ -28,7 +28,13 @@ let ready = false
 const missing: Array<{ key: string; locale: string }> = []
 let onMissing: I18nOptions['onMissingKey']
 
-function normalize(input: string | undefined): Locale | undefined {
+/**
+ * 把一个语言标记收成受支持的语言（`zh-Hans-CN` → `zh-CN`）。认不出来返回 `undefined`。
+ *
+ * 导出是给渲染进程用的：它的 i18next 是**自己一份**，主进程初始化过不代表它初始化过，
+ * 而 `navigator.language` 在 Electron 里就是 app locale（与 `app.getLocale()` 同源）。
+ */
+export function normalizeLocale(input: string | undefined): Locale | undefined {
   if (input === undefined || input.length === 0) return undefined
   const lower = input.toLowerCase()
   if (lower.startsWith('zh')) return 'zh-CN'
@@ -48,11 +54,11 @@ function normalize(input: string | undefined): Locale | undefined {
  */
 export function detectLocale(env: Record<string, string | undefined>, system?: string): Locale {
   return (
-    normalize(env['ARCHITECT_LANG']) ??
-    normalize(env['LC_ALL']) ??
-    normalize(env['LC_MESSAGES']) ??
-    normalize(env['LANG']) ??
-    normalize(system) ??
+    normalizeLocale(env['ARCHITECT_LANG']) ??
+    normalizeLocale(env['LC_ALL']) ??
+    normalizeLocale(env['LC_MESSAGES']) ??
+    normalizeLocale(env['LANG']) ??
+    normalizeLocale(system) ??
     DEFAULT_LOCALE
   )
 }
@@ -130,7 +136,7 @@ export function initI18n(options: I18nOptions = {}): void {
 /** 当前语言。 */
 export function getLocale(): Locale {
   const current = i18next.resolvedLanguage ?? i18next.language
-  return normalize(current) ?? DEFAULT_LOCALE
+  return normalizeLocale(current) ?? DEFAULT_LOCALE
 }
 
 /** 切换语言。UI 订阅后即时生效，不需要重启（plan §10.4-4）。 */

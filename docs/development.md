@@ -78,7 +78,7 @@ Ollama 那类本地 provider **没有前缀缓存**，harness 会自动切到保
 
 | 生成物 | 谁生成 | 谁守 |
 |--------|--------|------|
-| `docs/tool-reference.md` | `pnpm docs:gen`（从工具 JSON Schema） | `scripts/gen-docs.ts --check` + `pnpm test` |
+| `docs/tool-reference.md` 与 `docs/tool-reference.zh-CN.md` | `pnpm docs:gen`（从工具 JSON Schema，一种语言一份） | `scripts/gen-docs.ts --check` + `pnpm test` |
 | `packages/render/data/<版本>/*.json` | `pnpm bake:gen`（从 `minecraft-assets`） | `scripts/bake-render-data.ts --check` + `pnpm test` |
 | `packages/render/test/golden/*.png` | `ARCHITECT_UPDATE_GOLDEN=1` 重签 | golden 测试逐字节比对 |
 
@@ -230,7 +230,7 @@ Three **generated** files are committed, each with a gate that keeps it from goi
 
 | Generated | Produced by | Guarded by |
 |-----------|-------------|------------|
-| `docs/tool-reference.md` | `pnpm docs:gen` (from the tool JSON Schemas) | `scripts/gen-docs.ts --check` + `pnpm test` |
+| `docs/tool-reference.md` and `docs/tool-reference.zh-CN.md` | `pnpm docs:gen` (from the tool JSON Schemas, one per language) | `scripts/gen-docs.ts --check` + `pnpm test` |
 | `packages/render/data/<version>/*.json` | `pnpm bake:gen` (from `minecraft-assets`) | `scripts/bake-render-data.ts --check` + `pnpm test` |
 | `packages/render/test/golden/*.png` | re-signed with `ARCHITECT_UPDATE_GOLDEN=1` | the golden test, byte for byte |
 

@@ -14,7 +14,7 @@ const references = DOC_LOCALES.map((locale) => ({ locale, path: join(root, DOC_P
  * **工具文档不可能悄悄过期。**
  *
  * 手写的工具文档一定会漂移：改了 schema 忘了改文档，读到的人看到的是错的契约。
- * 这一条测试把 `docs/tool-reference.md` 与生成结果逐字节对比——不一致就失败，
+ * 这一条测试把两份 `docs/tool-reference*.md` 与生成结果逐字节对比——不一致就失败，
  * 并直接告诉你缺了哪个工具、多了哪个工具。
  *
  * 重新生成：`pnpm docs:gen`

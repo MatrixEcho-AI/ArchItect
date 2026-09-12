@@ -3,7 +3,7 @@ import type { JsonSchema } from './schema.js'
 import type { ToolDefinition } from './types.js'
 
 /**
- * **从工具定义生成参考文档**（plan §11 的 `docs/tool-reference.md`）。
+ * **从工具定义生成参考文档**（plan §11 的 `docs/tool-reference.md` 与 `.zh-CN.md`）。
  *
  * 手写的工具文档一定会漂移：改了 schema 忘了改文档，读者看到的就是错的契约。
  * 这里换成单向生成——schema 是唯一真相，文档是它的一个视图。

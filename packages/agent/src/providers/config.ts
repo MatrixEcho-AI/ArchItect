@@ -361,6 +361,7 @@ export function redactSecret(value: string | undefined): string {
   return '***'
 }
 
+
 /** 把配置里的敏感部分抹掉，用于日志 / 错误报告 / `.mcai` 的 settings 副本。 */
 export function redactConfig(config: ProviderConfig): ProviderConfig {
   // `apiKeyRef` 本身就是**指针**（`env:NAME` / `safe:id`），不含密钥，
@@ -368,6 +369,10 @@ export function redactConfig(config: ProviderConfig): ProviderConfig {
   // 这个函数存在的意义是：所有出口都走它，将来配置里真加了密钥字段也不会漏。
   return { ...config }
 }
+
+// 从一整段文本里抹掉密钥的那一层，实现放在 `../redact.ts`（`openai.ts` 要用它，
+// 而直接让它 import 这个文件会绕出循环）。这里转出来，让脱敏工具只有一个入口。
+export { scrubSecrets } from '../redact.js'
 
 /** 恰好是密钥的长相就拒绝——防止用户把 `sk-...` 粘进本该放引用的字段。 */
 const LOOKS_LIKE_SECRET = /^(sk-|sk_|Bearer\s|eyJ)[A-Za-z0-9._-]{8,}$/

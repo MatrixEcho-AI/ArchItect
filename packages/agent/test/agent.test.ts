@@ -222,6 +222,23 @@ describe('Agent 循环', () => {
     )
     expect(state.stopReason).toBe('max_tool_calls')
     expect(state.toolCalls).toBeGreaterThan(5)
+
+    // **配对完整性**：assistant 消息里挂着的每一个 `tool_call_id`，都必须有对应的
+    // `role:'tool'` 回复。预算是在一条 assistant 消息的多个调用**中间**用尽的，
+    // 而这条历史会被原样留到下一轮——少一条回复，下一次请求就会被 400 顶回来，
+    // 并且之后每一次发送都会 400。
+    const called = new Set<string>()
+    const answered = new Set<string>()
+    for (const message of state.messages) {
+      if (message.role === 'assistant' && message.toolCalls !== undefined) {
+        for (const call of message.toolCalls) called.add(call.id)
+      }
+      if (message.role === 'tool' && message.toolCallId !== undefined) answered.add(message.toolCallId)
+    }
+    expect(
+      [...called].filter((id) => !answered.has(id)),
+      '有 tool_call 没拿到对应的 tool 回复——下一轮请求会被 400',
+    ).toEqual([])
   })
 
   it('预算：token 上限', async () => {

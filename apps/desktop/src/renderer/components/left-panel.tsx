@@ -322,7 +322,7 @@ function projectRows(state: StudioState | undefined): Array<{ key: string; label
     rows.push({
       key: 'file',
       label: t('panel.info.file'),
-      children: state.projectPath.split('/').pop() ?? '',
+      children: state.projectPath.split(/[/\\]/).pop() ?? '',
     })
   }
   return rows

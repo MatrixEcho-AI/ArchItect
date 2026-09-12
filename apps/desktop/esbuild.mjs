@@ -85,6 +85,16 @@ const shared = {
   // 一律用绝对路径：这样 `node apps/desktop/esbuild.mjs` 从仓库根跑也不会把
   // 入口找成 `./src/...` 然后 ENOENT（cwd 与脚本目录是两回事）
   absWorkingDir: here,
+  logOverride: {
+    // `packages/render/src/baked.ts` 的 `moduleDir()` 刻意同时支持 ESM 与 CJS 两种
+    // 模块格式，所以源码里必须出现 `import.meta`；打进 CJS 产物时它必然为空，
+    // esbuild 于是每次构建都提醒一句「要设成 esm」。那对本工程是**反建议**——
+    // 桌面端主进程刻意用 CJS，见 baked.ts 那段注释里记录的「启动即报错」事故。
+    // 实测 esbuild 会把那支直接当死代码删掉，`__dirname` 那支照常工作
+    // （`dist/main.cjs` 里 `moduleDir()` 只剩 `__dirname` 一行），所以这条警告
+    // 没有信息量，留着只会稀释真正该看的警告。
+    'empty-import-meta': 'silent',
+  },
 }
 
 /** React 的自动 JSX 运行时（省掉每份文件顶上的 `import React`）。 */

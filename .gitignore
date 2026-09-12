@@ -70,6 +70,9 @@ web_modules/
 .env.*
 !.env.example
 
+# npm/pnpm 的 registry 凭据就存在这里（//registry/:_authToken=...），别让它进库
+.npmrc
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

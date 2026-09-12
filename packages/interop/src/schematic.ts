@@ -1,3 +1,5 @@
+import { DEFAULT_HARD_LIMIT } from '@architect/core'
+
 import {
   asByteArray,
   asCompound,
@@ -167,6 +169,16 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
 
   // v3 是 VarInt，v2 是定宽 2 字节大端。版本号缺失时按 v2 试——
   // 老文件里 Version 字段本来就可能没有。
+  // **在展开 Data 之前**先卡体积。否则一个声明 1×1×1、却塞了一大坨 Data 的文件会先被
+  // 整段解码出来——`importSchematicInto` 里那道守卫是之后才走到的，而且解码出来的
+  // 数值数组比输入本身更占内存。上限与那一道用同一个：单次写入的硬上限。
+  const expected = width * height * length
+  if (expected > DEFAULT_HARD_LIMIT) {
+    throw new Error(
+      `.schem 声明了 ${width}x${height}x${length} = ${expected} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+    )
+  }
+
   const indices = version >= 3 ? decodeVarints(data) : decodeFixed16(data)
 
   const offsetRaw = asIntArray(schematic['Offset'])
@@ -177,7 +189,6 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
   ]
 
   const blocks: SchematicBlock[] = []
-  const expected = width * height * length
   const limit = Math.min(indices.length, expected)
   for (let i = 0; i < limit; i++) {
     const index = indices[i]!

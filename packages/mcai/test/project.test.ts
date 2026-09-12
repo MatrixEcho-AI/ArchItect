@@ -386,3 +386,46 @@ describe('格式版本策略：可选字段可以随便加，破坏性改动必�
     expect(() => unpackProject(zipSync(entries))).toThrow(/minecraftVersion/)
   })
 })
+
+describe('不按文件声明的尺寸解压', () => {
+  it('**条目声明解压后超大时拒绝**，而不是照着分配', () => {
+    // `.mcai` 里的条目是压缩的，全零数据的压缩比约 1000×：实测 **1 MB** 的工程文件
+    // 能让 `unpackProject` 吃掉 1 GB 内存，5 MB 就是 5 GB——V8 致命 OOM，不是可捕获
+    // 的异常，而这条跑在桌面端**主进程**里（应用直接消失、未保存的编辑一起没）。
+    //
+    // 这里把中央目录里**声明**的解压尺寸改大：fflate 按它预分配，而 filter 在解压前
+    // 就能看到它。
+    const bytes = Uint8Array.from(zipSync({ 'chat/messages.jsonl': strToU8('[]') }))
+    const signature = [0x50, 0x4b, 0x01, 0x02]
+    let at = -1
+    outer: for (let i = 0; i + 4 <= bytes.length; i++) {
+      for (let k = 0; k < 4; k++) if (bytes[i + k] !== signature[k]) continue outer
+      at = i
+      break
+    }
+    expect(at, '没找到中央目录项——这个夹具需要跟着 zip 布局更新').toBeGreaterThanOrEqual(0)
+    // 中央目录项里「解压后大小」在签名后第 24 字节
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(at + 24, 0x7fffffff, true)
+    expect(() => unpackProject(bytes)).toThrow(/超过上限/)
+  })
+
+  it('**快照声明了超大的正文长度时拒绝**，而不是照着分配', () => {
+    // 快照正文是 zlib，头里的 `columnCount` 决定期望长度，而期望长度决定分配。
+    // 头部布局：magic[8] | version | minY | worldHeight | paletteSize | **columnCount** | reserved
+    const bytes = encodeSnapshot({ minY: 0, worldHeight: 384, paletteSize: 2, columns: [] })
+    new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).setUint32(24, 3_000_000, true)
+    expect(() => decodeSnapshot(bytes)).toThrow(/超过上限/)
+  })
+
+  it('对照：正常尺寸的快照编解码不受影响', () => {
+    const snapshot = {
+      minY: 0,
+      worldHeight: 16,
+      paletteSize: 2,
+      columns: [{ chunkX: 0, chunkZ: 0, indices: new Uint16Array(16 * 256) }],
+    }
+    const back = decodeSnapshot(encodeSnapshot(snapshot))
+    expect(back.worldHeight).toBe(16)
+    expect(back.columns).toHaveLength(1)
+  })
+})

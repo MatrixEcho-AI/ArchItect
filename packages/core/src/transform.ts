@@ -97,6 +97,24 @@ export function isMirroring(transform: Transform): boolean {
   return determinant(matrixOf(transform)) < 0
 }
 
+/**
+ * **水平面内**的手性是否翻转。
+ *
+ * 这里不能用 3×3 的行列式。`hinge`（门轴在左还是在右）、`type=left/right`（双箱）、
+ * `shape=inner_left/outer_left`（楼梯）、以及告示牌那 16 档 `rotation`，全都是
+ * **水平面内**的量：它们关心的是 (x,z) 平面被翻转了没有。
+ *
+ * 竖直翻转 `mirror:'y'` 在 (x,z) 上的诱导映射是**恒等**（这些量一个都不该变），
+ * 而它的 3×3 行列式是 -1。用 3×3 判就会把门轴左右互换、把告示牌 yaw 取反——
+ * 竖直翻转只该换 `half=lower/upper` 那一类上下量，那个另外由 `isVerticalFlipped` 管。
+ *
+ * 取 (x,z) 子块的行列式 `m00·m22 − m02·m20`。x/z 镜像与全部旋转在这个判据下
+ * 与 3×3 一致，只有含 `mirror:'y'` 的那几组不同。
+ */
+function flipsHorizontalHandedness(m: Mat3): boolean {
+  return m[0]! * m[8]! - m[2]! * m[6]! < 0
+}
+
 export function isIdentity(transform: Transform): boolean {
   return matrixOf(transform).every((value, index) => value === IDENTITY[index])
 }
@@ -234,7 +252,7 @@ function mapRotationValue(text: string, m: Mat3): string {
   if (!Number.isFinite(start)) return text
   // "南"在变换后落在哪一档 → 仿射映射的常数项
   const offset = rotationIndexOf(applyMatrix(m, [0, 0, 1]))
-  const sign = determinant(m) < 0 ? -1 : 1
+  const sign = flipsHorizontalHandedness(m) ? -1 : 1
   const next = (((sign * start + offset) % ROTATION_STEPS) + ROTATION_STEPS) % ROTATION_STEPS
   return String(next)
 }
@@ -313,7 +331,7 @@ export function remapStateId(registry: BlockRegistry, stateId: number, transform
   if (block === undefined) throw new Error(`未知 state id ${stateId}`)
   if (block.states.length === 0) return stateId
 
-  const mirrored = determinant(m) < 0
+  const mirrored = flipsHorizontalHandedness(m)
   const vertical = isVerticalFlipped(m)
   const source = stateIdToProperties(block, stateId)
   const target: Properties = {}

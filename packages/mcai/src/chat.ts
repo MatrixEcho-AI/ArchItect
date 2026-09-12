@@ -248,12 +248,21 @@ export function collectCaptures(
   refs: readonly CaptureRef[],
 ): { bundle: CaptureBundle; problems: string[] } {
   const files = new Map<string, Uint8Array>()
+  const problems: string[] = []
   for (const [path, data] of Object.entries(entries)) {
     if (!path.startsWith('captures/') || !path.endsWith('.png')) continue
     const id = path.slice('captures/'.length, -'.png'.length)
+    // **只收像内容寻址 id 的条目名**。id 是从**不可信的 zip 条目名**里切出来的，
+    // 而重新打包时会按它生成 `captures/<id>.png`——放行 `../../../x` 就等于把穿越
+    // 条目名原样交给下一个解压这份工程的人（打开 → 另存 → 分享，恶意条目就这么
+    // 传下去）。真正的 id 是 sha256 的前缀，所以只认十六进制。
+    if (!/^[0-9a-f]{8,64}$/.test(id)) {
+      problems.push(`截图条目名不像内容寻址 id，已丢弃：${path}`)
+      continue
+    }
     files.set(id, data)
   }
   const bundle: CaptureBundle = { refs: [...refs], files }
   // 图丢了不影响方块数据可用，所以**只报告、不阻断打开**
-  return { bundle, problems: validateCaptures(bundle) }
+  return { bundle, problems: [...problems, ...validateCaptures(bundle)] }
 }

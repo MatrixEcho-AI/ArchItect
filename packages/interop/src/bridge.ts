@@ -1,3 +1,4 @@
+import { DEFAULT_HARD_LIMIT } from '@architect/core'
 import type { Bounds, Pos, WorldStore } from '@architect/core'
 
 import { migrateState } from './migrate.js'
@@ -131,6 +132,22 @@ export function importSchematicInto(
   const max: Pos = { x: at.x + data.size[0] - 1, y: at.y + data.size[1] - 1, z: at.z + data.size[2] - 1 }
   const filter = options.region
 
+  // 目标盒子完全由**文件里声明的尺寸**推出，所以必须先自己卡一道。
+  //
+  // 下面那个三重循环会为盒子里的**每一格**建一条 `plan` 记录（`clear` 默认开），
+  // 而 `writeBlocks` 的硬上限要到它自己把 `changes` 攒完、已经开始分配之后才生效——
+  // 中间没有任何东西挡着。于是几百字节的文件只要声明 4096×4096×1，就能在分配阶段
+  // 把进程打死（实测 V8 致命 OOM，不是可捕获的异常；桌面端这条跑在主进程里，
+  // 等于整个应用消失、未保存的编辑一起没）。
+  //
+  // 合法导入本来就该在这个上限之内：超了 `writeBlocks` 也只会静默截断。
+  const targetVolume = data.size[0] * data.size[1] * data.size[2]
+  if (targetVolume > DEFAULT_HARD_LIMIT) {
+    throw new Error(
+      `导入目标盒 ${data.size.join('x')} = ${targetVolume} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+    )
+  }
+
   const unknown = new Map<string, UnknownBlock>()
   const renamed = new Map<string, RenamedBlock>()
   /** 目标格 → 方块下标。后写的覆盖先写的，所以先铺空气再铺内容。 */
@@ -171,8 +188,13 @@ export function importSchematicInto(
         skipped++
         continue
       }
+      // `exact` 与 `renamed` 的 `state` 都是**规范化之后**的串：`migrateState`
+      // 内部走 `canonicalize`，会排序属性、补齐缺失项、把目标方块不接受的取值
+      // 换成声明默认值。只有 `renamed` 采用它是不够的——`exact` 时继续用**原始串**，
+      // 而原始串未必是合法状态（`half=1` 就是），于是 `palette.indexOf` 抛错，
+      // 那一格被记成「未知方块」丢掉，方块凭空消失。
+      state = outcome.state
       if (outcome.kind === 'renamed') {
-        state = outcome.state
         const toName = /^(?:minecraft:)?([a-z0-9_]+)/.exec(outcome.state)?.[1] ?? outcome.state
         const entry = renamed.get(outcome.from) ?? { from: outcome.from, to: toName, count: 0 }
         entry.count++

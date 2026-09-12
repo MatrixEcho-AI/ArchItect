@@ -155,16 +155,34 @@ export interface ReadNbtOptions {
 const GZIP_MAGIC = 0x1f
 
 /**
+ * 解压后允许的最大字节数。
+ *
+ * `gunzipSync` 不传 `maxOutputLength` 时按 `buffer.kMaxLength` 兜底（等于不限制），
+ * 而 `.schem` / `.litematic` 都是压缩过的：全零数据的压缩比约 1000×，一个几百 KB
+ * 的文件就能解出几百 MB，撑死进程（V8 致命 OOM，不可捕获）。
+ *
+ * 这个值远大于任何真实原理图：单次写入的硬上限是 400 万格，密排也就十几 MB。
+ */
+const MAX_DECOMPRESSED_BYTES = 256 * 1024 * 1024
+
+/**
  * 解析 NBT。**自动识别 gzip**——`.schem` 与 `.litematic` 都是 gzip 过的，
  * 但用户手动 `gunzip` 过、或者从某些工具里导出的未压缩版本也时常见到。
  */
 export function readNbt(bytes: Uint8Array): Promise<NBT> {
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const compressed = bytes.length > 1 && bytes[0] === GZIP_MAGIC && bytes[1] === 0x8b
+  // 未压缩这条路也要有同一个天花板：压缩那条由 `maxOutputLength` 兜着，这条没有
+  // 就等于形同虚设——而它下面同样要按结构分配。
+  if (buffer.length > MAX_DECOMPRESSED_BYTES) {
+    return Promise.reject(
+      new Error(`NBT 输入 ${buffer.length} 字节，超过上限 ${MAX_DECOMPRESSED_BYTES}`),
+    )
+  }
   if (compressed) {
     // 先解压再按未压缩解析：`parse()` 对未压缩输入会猜错格式的地方，
     // 明确走这条路更可控
-    return parseUncompressedResult(gunzipSync(buffer))
+    return parseUncompressedResult(gunzipSync(buffer, { maxOutputLength: MAX_DECOMPRESSED_BYTES }))
   }
   return parseUncompressedResult(buffer)
 }

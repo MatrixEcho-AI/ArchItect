@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { drainMissingKeys, enUS, getLocale, initI18n, t, zhCN } from '@architect/i18n'
 import type { MessageKey } from '@architect/i18n'
 
+import { TSX_CLI } from './run-cli.js'
+
 /** 深比较键路径（与 packages/i18n 的测试同口径）。 */
 function keyPaths(value: unknown, prefix = ''): string[] {
   if (typeof value === 'string') return [prefix]
@@ -42,7 +44,7 @@ const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url))
  * 单测 `t()` 只能证明资源表里有键。
  */
 function runHelp(locale: string): string {
-  return execFileSync('npx', ['--no-install', 'tsx', CLI_ENTRY, '--help'], {
+  return execFileSync(process.execPath, [TSX_CLI, CLI_ENTRY, '--help'], {
     cwd: REPO_ROOT,
     env: { ...process.env, ARCHITECT_LANG: locale, LANG: undefined, LC_ALL: undefined, LC_MESSAGES: undefined },
     encoding: 'utf8',

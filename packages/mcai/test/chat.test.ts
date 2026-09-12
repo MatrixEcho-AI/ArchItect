@@ -2,7 +2,14 @@ import { EditLog, forEachBox, WorldStore } from '@architect/core'
 import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
-import { buildCaptureBundle, makeCaptureRef, transcriptFromJsonl, transcriptToJsonl, validateCaptures } from '../src/chat.js'
+import {
+  buildCaptureBundle,
+  collectCaptures,
+  makeCaptureRef,
+  transcriptFromJsonl,
+  transcriptToJsonl,
+  validateCaptures,
+} from '../src/chat.js'
 import type { ChatMessageRecord } from '../src/chat.js'
 import { openProject, packProject, unpackProject } from '../src/project.js'
 import { TranscriptRecorder } from '../src/transcript.js'
@@ -400,5 +407,21 @@ describe('档案自带的用量计数（打开工程时界面不能靠猜）', (
     recorder.onEvent({ type: 'turn', turn: 1 })
     const totals = recorder.recording.transcript.sessions[0]!.totals!
     expect(totals).toMatchObject({ in: 0, out: 0, turns: 1, toolCalls: 0, screenshots: 0 })
+  })
+
+  it('**截图 id 只收内容寻址的样子**，条目名里的路径不会被传下去', () => {
+    // id 是从**不可信的 zip 条目名**里切出来的，而重新打包时会按它拼
+    // `captures/<id>.png`。放行 `../../x` 就等于把穿越条目名原样交给下一个解压这份
+    // 工程的人（打开 → 另存 → 分享，恶意条目就这么传下去）。
+    const { bundle, problems } = collectCaptures(
+      {
+        'captures/../../../../../../tmp/evil.png': new Uint8Array([1]),
+        'captures/abcdef0123456789.png': new Uint8Array([2]),
+        'chat/messages.jsonl': new Uint8Array([3]),
+      },
+      [],
+    )
+    expect([...bundle.files.keys()], '穿越条目名被收下了').toEqual(['abcdef0123456789'])
+    expect(problems.join(' ')).toContain('已丢弃')
   })
 })

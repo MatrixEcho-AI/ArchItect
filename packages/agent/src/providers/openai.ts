@@ -1,5 +1,6 @@
 import { t } from '@architect/i18n'
 
+import { scrubSecrets } from '../redact.js'
 import { LlmError } from '../types.js'
 import type { LlmDelta, LlmMessage, LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from '../types.js'
 
@@ -323,7 +324,13 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         chunk = JSON.parse(payload) as StreamChunk
       } catch {
         // 服务端真的回了个坏 JSON：重试只会重复同一个错误
-        throw new LlmError(t('agent.openai.chunkInvalid', { chunk: payload.slice(0, 200) }), 'PARSE', false)
+        // 与 `classifyHttpError` 同一条规矩：这段正文同样会进界面、进日志、随
+        // `retry` 进 `.mcai` 档案，所以先脱敏。
+        throw new LlmError(
+          t('agent.openai.chunkInvalid', { chunk: scrubSecrets(payload.slice(0, 200)) }),
+          'PARSE',
+          false,
+        )
       }
       const choice = chunk.choices?.[0]
       // `delta` 可能是 `{}`、也可能是 `null`（收尾那一帧），两种都要当"没有内容"处理
@@ -500,7 +507,10 @@ function isUsageOptionRejection(error: unknown): boolean {
 }
 
 export function classifyHttpError(status: number, body: string): LlmError {
-  const detail = body.slice(0, 400)
+  // 正文来自服务端，未必可信。**先脱敏再进消息**：这条消息会进界面、进日志，
+  // 还会随 `retry` 事件进 `.mcai` 的对话档案，而 `.mcai` 是要分享的。
+  // 会回显整个请求（含 `Authorization`）的中转站是现实存在的。
+  const detail = scrubSecrets(body.slice(0, 400))
   if (status === 401 || status === 403) {
     return new LlmError(t('agent.openai.authFailed', { status, detail }), 'AUTH', false)
   }

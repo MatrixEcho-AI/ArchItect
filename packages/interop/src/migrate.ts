@@ -135,9 +135,23 @@ export function migrateState(
 function canonicalize(block: NonNullable<ReturnType<BlockRegistry['blockByName']>>, properties: Properties): string {
   const declared = new Set(block.states.map((property) => property.name))
   const filtered: Properties = {}
+  // 目标方块的**默认状态**：属性值对不上时从这里取。
+  const defaults = stateIdToProperties(block, block.defaultState)
   for (const [key, value] of Object.entries(properties)) {
     if (!declared.has(key)) continue
-    filtered[key] = coerce(block, key, value)
+    const coerced = coerce(block, key, value)
+    if (coerced !== undefined) {
+      filtered[key] = coerced
+      continue
+    }
+    // `coerce` 说「目标方块不接受这个值」时，按它的注释应当**让它从默认状态继承**。
+    // 「不传」在编码层表达不出来（`propertiesToStateId` 要一份完整的属性表），所以
+    // 这里显式补上——但补的必须是**默认状态里的值**，不是声明表的第一项：楼梯的
+    // `half` 声明表里 `top` 在前，而默认状态是 `bottom`，用前者会把楼梯整个翻个面。
+    // 默认状态里没有这一项才退回声明表第一项（最后手段，只为让属性表完整）。
+    const property = block.states.find((entry) => entry.name === key)
+    const fallback = defaults[key] ?? (property === undefined ? undefined : propertyValueAt(property, 0))
+    if (fallback !== undefined) filtered[key] = fallback
   }
   const stateId = propertiesToStateId(block, filtered)
   const full = stateIdToProperties(block, stateId)
@@ -152,12 +166,17 @@ function canonicalize(block: NonNullable<ReturnType<BlockRegistry['blockByName']
  * 跨版本时同一个属性名可能换了取值域（`facing` 基本都是那六个，但
  * `half` 在门上是 `upper/lower`、在楼梯上是 `top/bottom`）。对不上就**不传**，
  * 让它从默认状态继承——这比塞一个非法值然后抛错好。
+ *
+ * 返回 `undefined` 就是「不传」那个信号。以前这个函数的返回类型表达不了它，
+ * 于是枚举那一条只能写成 `allowed.has(v) ? v : v`——一个恒等式，注释许诺的行为
+ * 从来没发生过：越域的值会一路走到 `propertiesToStateId` 抛 `StateError`，
+ * 让整次导入失败。
  */
 function coerce(
   block: NonNullable<ReturnType<BlockRegistry['blockByName']>>,
   key: string,
   value: PropertyValue,
-): PropertyValue {
+): PropertyValue | undefined {
   const property = block.states.find((entry) => entry.name === key)
   if (property === undefined) return value
   if (property.type === 'bool') {
@@ -166,7 +185,8 @@ function coerce(
   }
   if (property.type === 'int') {
     const numeric = typeof value === 'number' ? value : Number(value)
-    if (!Number.isFinite(numeric)) return value
+    // 不是数字就别传：塞下去 `propertiesToStateId` 会抛，整次导入跟着失败
+    if (!Number.isFinite(numeric)) return undefined
     // 取值域可能不是 0..n-1（`oak_leaves.distance` 是 1..7），越界就夹到区间里
     const known = new Set<number>()
     for (let i = 0; i < property.num_values; i++) {
@@ -178,7 +198,8 @@ function coerce(
   }
   const allowed = new Set<string>()
   for (let i = 0; i < property.num_values; i++) allowed.add(String(propertyValueAt(property, i)))
-  return allowed.has(String(value)) ? value : value
+  // 取值域对不上 → 不传（枚举没有「夹到区间里」这种说法，`int` 那条才有）
+  return allowed.has(String(value)) ? value : undefined
 }
 
 /**

@@ -1,4 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { AgentSession, runAgent, ScriptedProvider } from '@architect/agent'
 import { measure } from '@architect/core'
 import { openProject, packProject, TranscriptRecorder } from '@architect/mcai'
@@ -68,10 +71,14 @@ async function main(): Promise<void> {
   const bytes = packProject({ name: '海边灯塔', projectId: '01LIGHTHOUSE', store: session.store,
     log: session.log, settings: { volume: session.store.volume },
     chat: recording.transcript, captures: recording.captures, now: '2026-01-01T00:00:00.000Z' })
+  // 走系统临时目录，不要写死 `/tmp`：Windows 上 `/tmp/x` 会被解析成**当前盘符
+  // 根目录**下的 `tmp\x`（例如 `D:\tmp\x`），凭空在盘根建出目录来。
+  const outDir = join(tmpdir(), 'v0demo')
   // 目标目录可能还不存在（换台机器、换了 tmp 清理策略）——写文件前先建好
-  mkdirSync('/tmp/v0demo', { recursive: true })
-  writeFileSync('/tmp/v0demo/lighthouse.mcai', bytes)
-  console.log(`\n已写出 lighthouse.mcai（${(bytes.length/1024).toFixed(1)} KB）`)
+  mkdirSync(outDir, { recursive: true })
+  const outFile = join(outDir, 'lighthouse.mcai')
+  writeFileSync(outFile, bytes)
+  console.log(`\n已写出 ${outFile}（${(bytes.length/1024).toFixed(1)} KB）`)
   console.log(`对话 ${recording.transcript.messages.length} 条   截图存档 ${recording.captures.refs.length} 张`)
 
   const { store: re, project } = openProject(bytes)

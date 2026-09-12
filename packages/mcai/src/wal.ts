@@ -92,13 +92,19 @@ export class WriteAheadLog {
    */
   append(op: EditOp): void {
     const lines: string[] = []
-    if (!this.started) {
+    const writingHeader = !this.started
+    if (writingHeader) {
       mkdirSync(dirname(this.file), { recursive: true })
       lines.push(JSON.stringify(this.header))
-      this.started = true
     }
     lines.push(JSON.stringify(encodeEditOp(op)))
     appendFileSync(this.file, `${lines.join('\n')}\n`, 'utf8')
+    // **落盘成功之后**才算写过表头。原来这一句在 `appendFileSync` 之前：第一次写盘
+    // 失败（磁盘满，或 Windows 上文件被索引器/杀软占着）之后，每次都只追加 op 行，
+    // 表头永远不会再写；而 `read()` 会把第一行 op 当成表头、因 `version !== 1`
+    // 判掉**整卷**——连已经成功落盘的那些 op 一起丢。桌面端是 5 秒一次的定时写入，
+    // 失败只写一行 stderr，用户要等到崩溃才发现什么都没恢复。
+    if (writingHeader) this.started = true
     this.count++
   }
 
@@ -106,13 +112,15 @@ export class WriteAheadLog {
   appendAll(ops: readonly EditOp[]): void {
     if (ops.length === 0) return
     const lines: string[] = []
-    if (!this.started) {
+    const writingHeader = !this.started
+    if (writingHeader) {
       mkdirSync(dirname(this.file), { recursive: true })
       lines.push(JSON.stringify(this.header))
-      this.started = true
     }
     for (const op of ops) lines.push(JSON.stringify(encodeEditOp(op)))
     appendFileSync(this.file, `${lines.join('\n')}\n`, 'utf8')
+    // 同上：写成功才认表头已经写过
+    if (writingHeader) this.started = true
     this.count += ops.length
   }
 

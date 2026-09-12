@@ -21,7 +21,7 @@ import { sanitizeForFont } from '@architect/render'
 import type { ViewPreset } from '@architect/render'
 import { readFile as readTextFile } from 'node:fs/promises'
 import { mkdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import {
   activeProvider,
@@ -988,8 +988,6 @@ async function cmdExport(inv: Invocation): Promise<number> {
   return 2
 }
 
-const basename = (path: string): string => path.split('/').pop() ?? path
-
 function inferFormat(path: string): string {
   const lower = path.toLowerCase()
   if (lower.endsWith('.litematic')) return 'litematic'
@@ -1032,6 +1030,12 @@ async function cmdImport(inv: Invocation): Promise<number> {
 
   const session = new AgentSession({ volume, plain: inv.plain })
   const result = importSchematicInto(session.store, data, { at: { x: 0, y: 0, z: 0 } })
+  // 导入的内容是**基准状态**，不在 op 流里：把游标拉回 0，让「世界的版本」与
+  // 「日志长度」从第一笔编辑起就一致。少了这一行，写出的 .mcai 会带着
+  // revision=1 而 edits.jsonl 是空的——打开后撤销会读到不存在的 op（TypeError），
+  // 之后每一笔编辑都会因为「游标与日志脱节」抛错，而方块其实已经写进世界了。
+  // 桌面端的同一条路径一直是这么收尾的（见 studio.ts 里 import 那段）。
+  session.store.setRevision(0)
 
   out(t('cli.import.header', { name: basename(inv.file!) }))
   out(

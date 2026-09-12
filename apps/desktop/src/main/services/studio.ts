@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { rm, rename, readFile, writeFile } from 'node:fs/promises'
 
 import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
@@ -490,7 +490,12 @@ export class StudioService {
   /** 保存成功后推进 WAL 基准。 */
   private commitAutosave(): void {
     if (this.autosave === undefined) return
-    this.autosave.onSaved(this.session.log.length, this.projectPath, this.session.log.length)
+    // 基准必须是**世界游标**，不是日志长度。撤销之后游标会退到日志长度之前
+    // （`log.length` 仍是 10，而 `store.revision` 已经回到 5），两者不再相等。
+    // 写成 log.length 会让 journal() 的 `op.rev > baseRevision` 把游标之后重放出来的
+    // op 整段漏掉——用户自这次保存之后的改动永远不会进 WAL，崩溃时静默丢失。
+    // 同一个文件里 state().revision、以及 retarget() 用的都是游标，只有这里不是。
+    this.autosave.onSaved(this.session.store.revision, this.projectPath)
   }
 
   /**
@@ -737,8 +742,30 @@ export class StudioService {
     return this.state()
   }
 
-  /** 保存工程；省略路径时写回原位。 */
+  /** 保存的排队链，见 `save()`。 */
+  private saveChain: Promise<unknown> = Promise.resolve()
+
+  /**
+   * 保存工程；省略路径时写回原位。
+   *
+   * **串行化。** 两次保存撞在一起时它们共用同一个 `<目标>.tmp`：慢的那次会把快的
+   * 那次写好的临时文件盖掉，随后一次 rename 拿到的是别人的内容、另一次对着已经
+   * 不存在的临时文件报错——比不原子还糟。IPC 是异步的，界面也不会在保存期间禁用
+   * 按钮，所以这条路是可达的。
+   *
+   * 排队比「给临时文件起随机名」更贴合语义：连按两次保存，用户期望的是两次都存到、
+   * 后一次赢。排队链上挂了 `catch`，所以一次失败不会卡住后面的。
+   */
   async save(path?: string): Promise<string> {
+    const queued = this.saveChain.then(
+      () => this.saveNow(path),
+      () => this.saveNow(path),
+    )
+    this.saveChain = queued.catch(() => undefined)
+    return queued
+  }
+
+  private async saveNow(path?: string): Promise<string> {
     const target = path ?? this.projectPath
     if (target === undefined) throw new Error(t('desktop.noSavePath'))
     // 对话记录与截图一起进工程文件——`.mcai` 的价值有一半在这里
@@ -755,7 +782,24 @@ export class StudioService {
         ? { designNotes: this.session.currentDesignNotes }
         : {}),
     })
-    await writeFile(target, bytes)
+    // **原子写**：先写同目录的临时文件，再 rename 覆盖。
+    // 直接 `writeFile(target, …)` 会先以 `w` 截断旧文件，写到一半掉电/崩溃/磁盘满，
+    // 留下的就是一份被截断的 .mcai——而上一份完好的已经没了，WAL 也救不回来
+    // （它记的是相对这份基准的差分，基准坏了 `applyRecovery` 直接拒绝恢复）。
+    // `rename` 在 Windows 上走 MoveFileEx(MOVEFILE_REPLACE_EXISTING)，能覆盖已存在的
+    // 目标。`services/settings.ts` 用的就是这个模式，这里照抄。
+    const temp = `${target}.tmp`
+    try {
+      // **写入本身也要在 try 里**：写到一半失败（磁盘满、权限）同样会在工程文件
+      // 旁边留下半个临时文件，而下面那句注释许诺的是「失败的保存不留东西」。
+      await writeFile(temp, bytes)
+      await rename(temp, target)
+    } catch (error) {
+      // 清理自己失败也不能把原始错误吞掉——那一条才是用户需要看到的。
+      // 不用 `recursive`：这里该删的只是一个我们刚创建的文件。
+      await rm(temp, { force: true }).catch(() => undefined)
+      throw error
+    }
     this.projectPath = target
     // 保存成功 = 基准推进：WAL 里这一段已经进了工程文件，不必再留着
     this.commitAutosave()
@@ -1356,7 +1400,11 @@ export class StudioService {
     // `.obj`：用碰撞盒几何，颜色取自当前配色方案（plain 时是确定性兜底色）
     const resolve = this.session.colorResolver
     const result = exportObj(store, {
-      mtlName: `${stem}.mtl`,
+      // `mtllib` 按 OBJ 规范是**文件名** token，不是路径。`stem` 来自另存为对话框的
+      // 完整路径，直接用会让文件头写成 `mtllib C:\...\hut.mtl` —— 反斜杠不是路径
+      // 分隔符、`C:` 也不是文件名该有的东西，第三方工具（three.js OBJLoader、
+      // MeshLab）会把材质整个丢掉。压成本文件名。
+      mtlName: `${baseNameOf(stem)}.mtl`,
       colorOf: (state) => {
         const rgb = resolve(state)
         return rgb === undefined ? undefined : { r: rgb.r, g: rgb.g, b: rgb.b }
@@ -1417,8 +1465,19 @@ export class StudioService {
     this.session = session
     this.projectPath = undefined
     this.projectName =
-      path.split('/').pop()?.replace(/\.(schem|schematic|litematic)$/i, '') ?? t('desktop.importedProject')
+      // 用本文件已有的 `baseNameOf`：它按 `[/\\]` 切，Windows 路径也对。原来这里
+      // 单独写了一遍 `split('/')`，在 Windows 上切不开反斜杠，工程名会变成完整路径
+      // （`C:\Users\me\Downloads\house`）——而这个名字要写进 `manifest.name`，
+      // `.mcai` 又是拿来分享的，路径里带着用户名不合适。
+      // 兜底同时从 `??` 改成 `||`：`split` 永远返回非空数组，`??` 那一支是死代码。
+      baseNameOf(path).replace(/\.(schem|schematic|litematic)$/i, '') || t('desktop.importedProject')
     this.chat.clear()
+    // 导入 = 换了一个工程，而且基准是 rev 0，WAL 必须跟着换过来。
+    // 少了这一步，WAL 里还留着上一个工程的基准（比如 rev 7），而新世界的第一笔编辑
+    // 是 rev 1——`op.rev > baseRevision` 不成立，改动**永远不进 WAL**，崩溃时静默
+    // 丢失。`studio:open` / `studio:new` / 恢复那几条路都在 main 里 retarget 过，
+    // 只有导入这条没有。
+    this.autosave?.retarget('active', this.projectName, undefined, 0)
 
     return {
       state: this.state(),

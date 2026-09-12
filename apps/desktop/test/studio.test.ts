@@ -1,8 +1,9 @@
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { measure } from '@architect/core'
+import { unpackProject } from '@architect/mcai'
 import type { ShotInput } from '@architect/agent'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -691,5 +692,53 @@ describe('StudioService：设计笔记的保存与恢复（模型重开工程不
     await reopened.open(path)
     expect(reopened.agentSession.currentDesignNotes).toContain('八角基座')
     expect(reopened.agentSession.buildSystem()).toContain('八角基座 17 格')
+  })
+})
+
+describe('StudioService：保存是原子替换', () => {
+  it('覆盖已有工程：内容更新，且不留临时文件', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    const path = join(workspace, 'atomic.mcai')
+    await studio.save(path)
+    studio.editBlock({ pos: [1, 1, 1], block: 'minecraft:gold_block', mode: 'place' })
+    await studio.save(path) // 这一次走的是覆盖已有文件的那条路
+    const bytes = new Uint8Array(await readFile(path))
+    // 第二次保存的内容真的落盘了（不是「存了个寂寞」）
+    expect(unpackProject(bytes).manifest.revision).toBe(studio.state().revision)
+    await expect(access(`${path}.tmp`), '临时文件没清掉').rejects.toThrow()
+  })
+
+  it('**两次保存撞在一起时都存得到**，不互相盖临时文件', async () => {
+    // 两次保存共用同一个 `<目标>.tmp`。不串行化的话，慢的那次会把快的那次写好的
+    // 临时文件盖掉：一次 rename 拿到别人的内容、另一次对着不存在的文件报错。
+    const studio = makeStudio()
+    studio.demo()
+    const path = join(workspace, 'concurrent.mcai')
+    const results = await Promise.all([studio.save(path), studio.save(path)])
+    expect(results).toEqual([path, path])
+    expect(unpackProject(new Uint8Array(await readFile(path))).manifest.revision).toBe(
+      studio.state().revision,
+    )
+    await expect(access(`${path}.tmp`), '临时文件没清掉').rejects.toThrow()
+  })
+
+  it('**写临时文件失败时不毁掉上一份工程**（保存是原子替换）', async () => {
+    // 关键：让**这一次**保存的内容与上一次不同，否则「目标没被改」这件事无法观察。
+    const studio = makeStudio()
+    studio.demo()
+    const path = join(workspace, 'kept.mcai')
+    await studio.save(path)
+    const before = await readFile(path)
+    studio.editBlock({ pos: [1, 1, 1], block: 'minecraft:gold_block', mode: 'place' })
+
+    // 在临时文件该出现的位置放一个**目录**：`writeFile(temp, …)` 必然失败。
+    await mkdir(`${path}.tmp`)
+
+    await expect(studio.save(path)).rejects.toThrow()
+    expect(
+      (await readFile(path)).equals(before),
+      '一次失败的保存把上一份工程改掉了——说明它是直接覆盖写的',
+    ).toBe(true)
   })
 })

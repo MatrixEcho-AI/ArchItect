@@ -17,7 +17,8 @@
  * 否则 `pnpm bake:check` 会一直报"过期"，而人会开始习惯性忽略它。
  * 所以：键排序、不写时间戳、不写绝对路径。
  */
-import { readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
 import assetsModule from 'minecraft-assets'
@@ -25,6 +26,15 @@ import assetsModule from 'minecraft-assets'
 import { BAKED_FORMAT } from './baked.js'
 import { averageColor, decodeDataUri } from './png.js'
 import type { RgbaImage } from './png.js'
+
+/**
+ * 实体模型表在 `prismarine-viewer` 里的位置。
+ *
+ * 它是 `packages/render` 的 **devDependency**（只在这一步用），所以不能写成顶层
+ * `import`——`bake.ts` 属于 `@architect/render/bake` 这个入口，被打进运行时 bundle
+ * 的话会把整个上游包一起拖进去。用 `createRequire` 在函数体里解析，运行时不碰。
+ */
+const ENTITY_MODELS_MODULE = 'prismarine-viewer/viewer/lib/entity/entities.json'
 
 /** `minecraft-assets` 里我们用得到的部分（它没有类型声明，这里窄化一次）。 */
 interface AssetsModule {
@@ -164,6 +174,32 @@ function textureTiles(assets: AssetsModule): string[] {
 }
 
 /** 这个版本能不能烘（`minecraft-assets` 有没有它）。 */
+/**
+ * **实体模型表**：从 `prismarine-viewer` 烘出来。
+ *
+ * 三件事值得写下来：
+ *
+ * 1. **它不是版本相关的数据。** 上游那张表是 1.16 时代整理的 94 个模型，对所有
+ *    Minecraft 版本都用同一份——这也是为什么实体名是旧写法（`boat` 而不是
+ *    `oak_boat`），映射由 `entity-models.ts` 那张手写表负责。
+ *    放进 `data/<版本>/` 只是为了让三份产物的读取路径一致；真要多版本时它会被
+ *    重复 600 KB，那时再挪到版本无关的位置。
+ * 2. **表里没有的实体不会消失**，它们在渲染侧退化成 AABB 兜底盒
+ *    （`minecraft-data` 有宽高）——展示框、画、chest_boat 都不在这张表里。
+ * 3. 输出**按键排序**且用紧凑格式：产出必须逐字节可复现（见文件头），而一张
+ *    600 KB 的几何表排成两倍大的缩进 JSON 也读不出 diff。
+ */
+export function bakeEntityModels(version: string): string {
+  const require = createRequire(import.meta.url)
+  const path = require.resolve(ENTITY_MODELS_MODULE)
+  const source = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+
+  const models: Record<string, unknown> = {}
+  for (const key of Object.keys(source).sort()) models[key] = source[key]
+
+  return `${JSON.stringify({ format: BAKED_FORMAT, version, models })}\n`
+}
+
 export function canBake(version: string): boolean {
   try {
     return loadAssets(version) !== undefined

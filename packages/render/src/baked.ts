@@ -44,6 +44,19 @@ export interface BakedBlockMap {
 }
 
 /**
+ * 实体模型表（从 `prismarine-viewer` 烘出来的 94 个模型）。
+ *
+ * 只有**几何与贴图名**，没有贴图字节——贴图和方块一样走 `TexturePack`，
+ * 我们不分发素材。
+ */
+export interface BakedEntityModels {
+  format: number
+  version: string
+  /** 模型键（`boat` / `minecraft`…）→ `{ identifier, textures, geometry }`。 */
+  models: Record<string, unknown>
+}
+
+/**
  * 本模块所在目录；**两种模块格式都要能算出来**。
  *
  * ⚠️ 不能直接写 `fileURLToPath(import.meta.url)`：桌面端主进程是 esbuild 打成 **CJS**
@@ -132,6 +145,7 @@ function readJson<T extends { format: number }>(version: string, file: string): 
  */
 const RENDER_CACHE = new Map<string, BakedRenderData>()
 const BLOCKMAP_CACHE = new Map<string, BakedBlockMap>()
+const ENTITY_CACHE = new Map<string, BakedEntityModels>()
 
 export function loadBakedRenderData(version: string): BakedRenderData {
   const cached = RENDER_CACHE.get(version)
@@ -149,8 +163,17 @@ export function loadBakedBlockMap(version: string): BakedBlockMap {
   return map
 }
 
+export function loadBakedEntityModels(version: string): BakedEntityModels {
+  const cached = ENTITY_CACHE.get(version)
+  if (cached !== undefined) return cached
+  const models = readJson<BakedEntityModels>(version, 'entitymodels.json')
+  ENTITY_CACHE.set(version, models)
+  return models
+}
+
 /** 测试用：清掉缓存，好让"第一次加载"的路径每次都能被走到。 */
 export function clearBakedCache(): void {
   RENDER_CACHE.clear()
   BLOCKMAP_CACHE.clear()
+  ENTITY_CACHE.clear()
 }

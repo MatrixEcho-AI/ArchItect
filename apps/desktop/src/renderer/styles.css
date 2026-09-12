@@ -670,12 +670,91 @@ body,
   margin-top: 6px;
 }
 
-.chat-actions {
+/*
+ * ── 输入区（一个盒子） ─────────────────────────────────────────────────────
+ *
+ * 结构：`.composer`（边框、圆角、底色）> 输入框 + `.composer-bar`（按钮那一行）。
+ * 用户拿 DeepSeek harness 的输入框对照过来的要求：按钮与输入框是**同一个控件**，
+ * 而不是"输入框下面另起一行"。所以边框只有一层，画在外层盒子上。
+ *
+ * 焦点环也搬到外层：输入框自己 `border: 0` 之后，只给 textarea 描边会画在盒子
+ * 中间，看着像个错位的方框。用 `:focus-within` 让整盒子响应——这也顺带修好了
+ * "点一下相机按钮盒子就不发光、焦点看着像丢了"。
+ */
+.composer {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 8px;
+  background: var(--ant-color-bg-container);
+  padding: 4px 4px 2px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.composer:focus-within {
+  border-color: var(--ant-color-primary);
+  box-shadow: 0 0 0 2px var(--ant-color-primary-border);
+}
+
+/*
+ * 输入框**自己不留边框、不参与尺寸**：它只是盒子里的一块文本区。
+ * `resize: none` 是"不可人工调节"的兜底——antd 的 `autoSize` 已经不渲染那个
+ * 拖拽角了，但这条属性是"手调"这件事在 CSS 层唯一的开关，写上以防回归。
+ */
+.composer .ant-input {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 4px 6px;
+  resize: none;
+  font-size: 13px;
+}
+
+.composer .ant-input:focus,
+.composer .ant-input-focused {
+  border: 0;
+  box-shadow: none;
+}
+
+/* 按钮那一行。左右分组靠中间那个 `flex: 1`，与顶栏同一套做法。 */
+.composer-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 2px;
+  padding: 0 2px 2px;
 }
+
+/*
+ * 发送按钮：圆形、主色、只有图标。
+ *
+ * 尺寸对齐 harness 那张图（28px 圆钮）。禁用态用淡色而不是降透明度——
+ * 降透明度会让它看着像"还能点，只是没加载完"，而这里是**真的不能点**。
+ */
+.send-button {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ant-color-primary);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.send-button:hover:not(:disabled) {
+  background: var(--ant-color-primary-hover);
+}
+
+.send-button:disabled {
+  background: var(--ant-color-fill-secondary);
+  color: var(--ant-color-text-quaternary);
+  cursor: not-allowed;
+}
+
 
 /*
  * 标题行右边的那一小串读数（token / 轮数 / 截图 / 缓存%）。

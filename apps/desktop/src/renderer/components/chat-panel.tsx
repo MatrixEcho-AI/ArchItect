@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Button, Flex, Input, Modal, Tooltip } from 'antd'
-import { DownOutlined, CameraOutlined, PictureOutlined, RightOutlined } from '@ant-design/icons'
+import {
+  ArrowUpOutlined,
+  CameraOutlined,
+  DownOutlined,
+  PictureOutlined,
+  RightOutlined,
+} from '@ant-design/icons'
 import { t } from '@architect/i18n'
 
 import { usageText } from '../cost.js'
@@ -25,6 +31,10 @@ import type {
  * 3. **挡住发送时必须给一条能直接解决问题的路**（`#blocking-settings`）。
  *    只说"到设置里去填"等于把新用户丢在一个需要自己找路的地方。
  * 4. 截图**点一下放大到 200%**：方块只有几个像素，看不清具体放了什么。
+ * 5. **输入区是一个盒子**（`.composer`）：发送钮与两个插图入口都画在框**里面**，
+ *    发送钮只有图标（用户拿 DeepSeek harness 的输入框对照过来的要求）。输入框
+ *    自动长高、不给手调——`autoSize` 与 CSS 的 `resize: none` 各守一半。
+ *    这几条由冒烟断言 `composer-holds-controls` 钉住（量的是几何包含，不是 JSX 结构）。
  *
  * 这一版新加的几件事，都与"别让对话被噪音淹掉"有关：
  *  - **思维链收成一行**（Codex 式）：一行里滚动显示最新的思考内容，点开才看全文；
@@ -278,68 +288,87 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
           ))}
         </div>
 
-        <Input.TextArea
-          id="chat-input"
-          rows={3}
-          disabled={locked}
-          value={draft}
-          placeholder={t('chat.placeholder')}
-          onChange={(event) => setDraft(event.target.value)}
-          onPaste={paste}
-          /**
-           * 一个**给冒烟测试看的**标记。
-           *
-           * 粘贴这条链没法在冒烟里合成事件去验（见 `main/index.ts` 那段注释：
-           * 假 `clipboardData` 会把渲染进程弄崩）。所以退一步断言"接线还在"——
-           * 这个属性在，就说明这段 JSX 仍然把这个输入框连到了 `paste`。
-           * 它是 DOM 上唯一能读到的证据，去掉它粘图这件事就没人盯着了。
-           */
-          data-paste-bound="1"
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault()
-              submit()
-            }
-          }}
-        />
-        <div className="chat-actions">
-          <Button type="primary" size="small" id="btn-send" htmlType="submit" disabled={locked}>
-            {t('chat.send')}
-          </Button>
-          <Button
-            size="small"
-            id="btn-stop"
-            className={chat?.running === true ? undefined : 'hidden'}
-            onClick={props.onStop}
-          >
-            {t('chat.stop')}
-          </Button>
-
-          <span style={{ flex: 1 }} />
-
-          {/* 插图的两个入口。放在**发送按钮那一行、靠右**：
-              它们改的是"这一条要发什么"，与发送是一组动作；
-              左边那个"停止"是另一组。
-
-              **不给 Tooltip**（用户的要求：那是过度说明）。图标认不认得出来靠形状：
-              图片与相机都是通用符号，而 `aria-label` 仍然给着——它服务的是无障碍与
-              自动化，不是给鼠标悬停看的。 */}
-          <Button
-            size="small"
-            id="btn-attach-image"
-            aria-label={t('chat.attachImage')}
+        {/* 输入区是**一个**带边框的盒子，输入框与下面那排按钮都在它里面。
+            以前是"输入框 + 框外一行按钮"，看着像两个控件捆在一起；用户拿
+            DeepSeek harness 的输入框对照，要的就是这种一体感。 */}
+        <div className="composer">
+          <Input.TextArea
+            id="chat-input"
+            /**
+             * **自动长高，不给手调**（`autoSize` 关掉了 antd 的拖拽角）。
+             *
+             * 上界是刻意的：不设的话，粘一大段东西进来会把消息列表挤成一条缝，
+             * 而那是这个面板真正的内容。到顶之后输入框自己滚。
+             */
+            autoSize={{ minRows: 2, maxRows: 8 }}
             disabled={locked}
-            icon={<PictureOutlined />}
-            onClick={() => void pick()}
+            value={draft}
+            placeholder={t('chat.placeholder')}
+            onChange={(event) => setDraft(event.target.value)}
+            onPaste={paste}
+            /**
+             * 一个**给冒烟测试看的**标记。
+             *
+             * 粘贴这条链没法在冒烟里合成事件去验（见 `main/index.ts` 那段注释：
+             * 假 `clipboardData` 会把渲染进程弄崩）。所以退一步断言"接线还在"——
+             * 这个属性在，就说明这段 JSX 仍然把这个输入框连到了 `paste`。
+             * 它是 DOM 上唯一能读到的证据，去掉它粘图这件事就没人盯着了。
+             */
+            data-paste-bound="1"
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                submit()
+              }
+            }}
           />
-          <Button
-            size="small"
-            id="btn-grab-viewport"
-            aria-label={t('chat.grabViewport')}
-            disabled={locked}
-            icon={<CameraOutlined />}
-            onClick={() => void grab()}
-          />
+
+          {/* 按钮行。左＝"这一条要发什么"（插图两个入口），右＝发出去。
+              与 harness 的输入框同构：图标贴右下角，发送是那个圆钮。 */}
+          <div className="composer-bar">
+            {/* **不给 Tooltip**（用户的要求：那是过度说明）。图标认不认得出来靠形状：
+                图片与相机都是通用符号，而 `aria-label` 仍然给着——它服务的是无障碍与
+                自动化，不是给鼠标悬停看的。 */}
+            <Button
+              type="text"
+              size="small"
+              id="btn-attach-image"
+              aria-label={t('chat.attachImage')}
+              disabled={locked}
+              icon={<PictureOutlined />}
+              onClick={() => void pick()}
+            />
+            <Button
+              type="text"
+              size="small"
+              id="btn-grab-viewport"
+              aria-label={t('chat.grabViewport')}
+              disabled={locked}
+              icon={<CameraOutlined />}
+              onClick={() => void grab()}
+            />
+
+            <span style={{ flex: 1 }} />
+
+            {chat?.running === true && (
+              <Button type="text" size="small" id="btn-stop" onClick={props.onStop}>
+                {t('chat.stop')}
+              </Button>
+            )}
+
+            {/* 发送。**没有文字**，只有图标——`aria-label` 用 `chat.send` 兜底。
+                `#btn-send` 这个 id 与 `htmlType="submit"` 都留着：前者是自动化认它的
+                依据，后者是回车提交那条路（表单里唯一的提交按钮就是它）。 */}
+            <button
+              type="submit"
+              id="btn-send"
+              className="send-button"
+              aria-label={t('chat.send')}
+              disabled={locked}
+            >
+              <ArrowUpOutlined />
+            </button>
+          </div>
         </div>
       </form>
     </div>

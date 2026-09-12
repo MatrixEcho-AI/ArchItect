@@ -800,6 +800,87 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check('chat-input', input !== null, input === null ? '没有 #chat-input' : '输入框在');
 
     /**
+     * **输入区是一个盒子：发送钮和两个插图入口都在它里面**（用户拿 DeepSeek harness
+     * 的输入框对照过来的要求）。以前发送是框外一行里带文字的按钮。
+     *
+     * 判据用**几何包含**而不是"DOM 里是不是兄弟节点"：#btn-send 是 .composer
+     * 的后代这件事，看一眼 JSX 就知道；真正会坏的是**视觉上掉出去**——盒子加了
+     * 内边距、那一行换行了、或者按钮被 margin 顶到框外，这时代码结构一切正常
+     * 而界面上按钮又回到了框外。所以量矩形。
+     *
+     * #chat-input 的 resize 必须是 none："不可人工调节"在 CSS 层只有这一个开关
+     * （antd 的 autoSize 已经不画拖拽角了，所以这条守的是回归）。
+     */
+    /**
+     * **输入框真的会自己长高。**
+     *
+     * 单独一条断言，因为 autoSize 是那种"看着配了、其实没生效"的东西：它靠 antd
+     * 量一次 scrollHeight 再写高度，任何一个环节断了都只表现为"高度不变"，而
+     * 界面上那一栏还是原样——没有任何报错。所以这里**真往里打字再量**。
+     *
+     * 写成 React 认的那种输入：textarea.value = x 不会触发 React 的 onChange
+     * （它有自己的值跟踪），必须走原型上的 setter 再补一个 input 事件。
+     * 测完清空恢复，免得影响后面几条断言。
+     */
+    let grewBy = NaN;
+    if (input !== null) {
+      const before = input.getBoundingClientRect().height;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        'value',
+      ).set;
+      setter.call(input, ('x' + String.fromCharCode(10)).repeat(12));
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await frames();
+      grewBy = Math.round((input.getBoundingClientRect().height - before) * 10) / 10;
+      setter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await frames();
+    }
+    const maxHeight = input === null ? NaN : parseFloat(getComputedStyle(input).maxHeight);
+    check(
+      'composer-autogrow',
+      Number.isFinite(grewBy) &&
+        grewBy > 0 &&
+        Number.isFinite(maxHeight) &&
+        input !== null &&
+        input.getBoundingClientRect().height <= maxHeight,
+      Number.isFinite(grewBy)
+        ? '打 12 行后长高 ' + grewBy + 'px / 上限 ' + (Number.isFinite(maxHeight) ? maxHeight + 'px' : '读不到')
+        : '没读到输入框',
+    );
+
+    const composer = document.querySelector('.composer');
+    const sendBtn = document.querySelector('#btn-send');
+    const inside =
+      composer !== null && sendBtn !== null
+        ? (() => {
+            const box = composer.getBoundingClientRect();
+            const btn = sendBtn.getBoundingClientRect();
+            return (
+              btn.left >= box.left && btn.right <= box.right && btn.top >= box.top && btn.bottom <= box.bottom
+            );
+          })()
+        : false;
+    check(
+      'composer-holds-controls',
+      inside &&
+        input !== null &&
+        getComputedStyle(input).resize === 'none' &&
+        sendBtn !== null &&
+        sendBtn.textContent === '' &&
+        sendBtn.querySelector('svg') !== null,
+      composer === null
+        ? '没有 .composer'
+        : sendBtn === null
+          ? '没有 #btn-send'
+          : '框 ' + Math.round(composer.getBoundingClientRect().width) + 'px 宽 / 发送钮在框内=' + inside +
+            ' / 钮 ' + Math.round(sendBtn.getBoundingClientRect().width) + 'px 圆形=' + (getComputedStyle(sendBtn).borderRadius === '50%') +
+            ' / 文字="' + sendBtn.textContent + '" 图标=' + (sendBtn.querySelector('svg') !== null) +
+            ' / 输入框 resize=' + (input === null ? 'n/a' : getComputedStyle(input).resize),
+    );
+
+    /**
      * **插图的两个入口。**
      *
      * 三条断言：在、带 aria-label、待发区那个容器在。

@@ -1,6 +1,14 @@
-# 示例工程
+# 示例工程 / Example project
 
-## `forest-hut.mcai`
+### [中文](#%E4%B8%AD%E6%96%87) | [English](#english)
+
+---
+
+<div lang="zh-CN">
+
+## 中文
+
+### `forest-hut.mcai`
 
 一座 9×9 的单层林间小屋。
 
@@ -11,7 +19,7 @@
 | 截图 | 1 张 |
 | 会话 | 模型与 provider 名，不含任何密钥 |
 
-## 查看
+### 查看
 
 ```bash
 pnpm architect info examples/forest-hut.mcai        # 清单与调色板
@@ -31,8 +39,57 @@ unzip -p examples/forest-hut.mcai chat/messages.jsonl | head -3
 unzip -p examples/forest-hut.mcai manifest.json
 ```
 
-## 重新生成
+### 重新生成
 
 ```bash
 pnpm example
 ```
+
+</div>
+
+---
+
+<div lang="en">
+
+## English
+
+### `forest-hut.mcai`
+
+A single-storey 9×9 forest hut.
+
+| Item | Contents |
+|------|----------|
+| Blocks | 330 cells over 7 edit records |
+| Conversation | 22 messages |
+| Screenshots | 1 |
+| Session | model and provider names, no keys |
+
+### Look at it
+
+```bash
+pnpm architect info examples/forest-hut.mcai        # manifest and palette
+pnpm architect ops examples/forest-hut.mcai         # edit log
+pnpm architect slice examples/forest-hut.mcai --axis y --index 1
+pnpm architect shoot examples/forest-hut.mcai --out hut.png --view iso_ne
+pnpm architect export examples/forest-hut.mcai --out hut.schem   # as a WorldEdit schematic
+```
+
+With the desktop app installed, double-clicking the file opens it too, as does “Open…”
+in the interface.
+
+`unzip` shows the structure inside; the format is specified in
+[`docs/mcai-format.md`](../docs/mcai-format.md).
+
+```bash
+unzip -l examples/forest-hut.mcai
+unzip -p examples/forest-hut.mcai chat/messages.jsonl | head -3
+unzip -p examples/forest-hut.mcai manifest.json
+```
+
+### Regenerate it
+
+```bash
+pnpm example
+```
+
+</div>

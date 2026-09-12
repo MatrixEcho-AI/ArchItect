@@ -14,6 +14,9 @@ importers:
       '@architect/core':
         specifier: workspace:*
         version: link:packages/core
+      '@architect/i18n':
+        specifier: workspace:*
+        version: link:packages/i18n
       '@architect/interop':
         specifier: workspace:*
         version: link:packages/interop

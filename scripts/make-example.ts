@@ -3,10 +3,16 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { AgentSession, runAgent, ScriptedProvider } from '@architect/agent'
+import { initI18n } from '@architect/i18n'
+import type { Locale } from '@architect/i18n'
 import { openProject, packProject, TranscriptRecorder } from '@architect/mcai'
 
 /**
  * 生成 `examples/` 里的示例工程。
+ *
+ * **一种语言一份。** 示例里装着对话记录，而对话是"内容"——它没法跟着界面语言走，
+ * 只能各生成一份，由加载方在**语言定下来之后**按语言挑（`loadExampleOrDemo`）。
+ * 命名与工具参考一致：不带后缀的是英文，`.zh-CN` 是中文。
  *
  * **完全确定性**（固定时间戳、固定会话 id、脚本 provider），所以：
  * 同样的代码必然产出逐字节相同的示例文件，`git diff` 能如实反映"我们改了导出逻辑"。
@@ -18,7 +24,28 @@ import { openProject, packProject, TranscriptRecorder } from '@architect/mcai'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const FIXED_NOW = '2026-01-01T00:00:00.000Z'
 
-async function buildHut(): Promise<void> {
+/** 跟着语言走的那几处：文件名、工程名、需求、模型那句话。其余全是坐标与方块名。 */
+const CONTENT: Record<Locale, { file: string; name: string; goal: string; plan: string }> = {
+  'en-US': {
+    file: 'forest-hut.mcai',
+    name: 'Forest hut (example)',
+    goal: 'Build a single-storey 9x9 forest hut: spruce plank walls, cobblestone foundation, pitched roof, door facing south',
+    plan: 'Plan: a 9x9 spruce hut, a ring of cobblestone for the foundation, walls 4 blocks tall, a door on the south side, a hipped dark oak roof.',
+  },
+  'zh-CN': {
+    file: 'forest-hut.zh-CN.mcai',
+    name: '林间小屋（示例）',
+    goal: '造一座 9x9 的单层林间小屋，云杉木板墙、圆石地基、斜坡屋顶，正门朝南开',
+    plan: '方案：9x9 云杉小屋，圆石地基一圈，四壁高 4 格，南面开门，深色橡木做四坡顶。',
+  },
+}
+
+async function buildHut(locale: Locale): Promise<void> {
+  const { file, name, goal, plan } = CONTENT[locale]
+  // 提示词里的 `[OUTPUT LANGUAGE]` 跟当前语言走，所以先把它定下来：
+  // 不定的话两份示例的用量数字都按缺省语言算，跟它自己的内容对不上
+  initI18n({ locale })
+
   const session = new AgentSession({
     volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 23, y: 23, z: 23 } },
     plain: true,
@@ -27,10 +54,9 @@ async function buildHut(): Promise<void> {
     now: () => FIXED_NOW,
   })
 
-  const goal = '造一座 9x9 的单层林间小屋，云杉木板墙、圆石地基、斜坡屋顶，正门朝南开'
   const script = [
     {
-      text: '方案：9x9 云杉小屋，圆石地基一圈，四壁高 4 格，南面开门，深色橡木做四坡顶。',
+      text: plan,
       toolCalls: [{ name: 'measure', args: {} }],
     },
     {
@@ -113,7 +139,7 @@ async function buildHut(): Promise<void> {
 
   const recording = recorder.recording
   const bytes = packProject({
-    name: '林间小屋（示例）',
+    name,
     projectId: '01EXAMPLEHUT',
     store: session.store,
     log: session.log,
@@ -124,13 +150,13 @@ async function buildHut(): Promise<void> {
   })
 
   mkdirSync(join(root, 'examples'), { recursive: true })
-  const target = join(root, 'examples', 'forest-hut.mcai')
+  const target = join(root, 'examples', file)
   writeFileSync(target, bytes)
 
   const { store } = openProject(bytes)
-  console.log(`示例工程 → examples/forest-hut.mcai（${(bytes.length / 1024).toFixed(1)} KB）`)
+  console.log(`示例工程 → examples/${file}（${(bytes.length / 1024).toFixed(1)} KB）`)
   console.log(`  ${store.stats().blocks} 方块   op ${session.log.length}   revision ${state.stopReason}`)
   console.log(`  对话 ${recording.transcript.messages.length} 条   截图 ${recording.captures.refs.length} 张`)
 }
 
-await buildHut()
+for (const locale of ['en-US', 'zh-CN'] as const) await buildHut(locale)

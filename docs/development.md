@@ -68,7 +68,7 @@ Ollama 那类本地 provider **没有前缀缓存**，harness 会自动切到保
 | `pnpm bench` | 跑黄金任务出评分表（真模型，五个任务约 $0.19）。`--record <f.jsonl>` 录下全部模型交互，`--replay <f.jsonl>` 之后**完全不联网**重跑同一遍——实测每个数字逐项相同，耗时从 359 s 降到 1.7 s |
 | `pnpm architect <命令>` | CLI：`info` / `ops` / `measure` / `slice` / `replay` / `shoot` / `build` / `export` / `import` |
 | `pnpm desktop` | 打开桌面端 |
-| `pnpm example` | 重新生成 `examples/forest-hut.mcai`（时间戳钉死，所以输出可复现） |
+| `pnpm example` | 重新生成 `examples/forest-hut.mcai` 与 `.zh-CN.mcai`（一种语言一份，时间戳钉死所以输出可复现） |
 | `pnpm icon` | 重新生成应用图标（代码画的等轴测方块，1024×1024 PNG） |
 | `pnpm --filter @architect/desktop package:dir` | 打一个不打签名、不做安装包的目录版（验打包用） |
 
@@ -220,7 +220,7 @@ orders of magnitude less than the cache it invalidates behind it. The decision l
 | `pnpm bench` | Runs the golden tasks and prints a score table (real model, about $0.19 for five tasks). `--record <f.jsonl>` records every interaction; `--replay <f.jsonl>` then reruns it **with no network at all** — every number matched and 359 s became 1.7 s |
 | `pnpm architect <command>` | CLI: `info` / `ops` / `measure` / `slice` / `replay` / `shoot` / `build` / `export` / `import` |
 | `pnpm desktop` | Opens the desktop app |
-| `pnpm example` | Regenerates `examples/forest-hut.mcai` (timestamps are pinned, so the output is reproducible) |
+| `pnpm example` | Regenerates `examples/forest-hut.mcai` and `.zh-CN.mcai` (one per language; timestamps are pinned, so the output is reproducible) |
 | `pnpm icon` | Regenerates the app icon (an isometric block drawn in code, 1024×1024 PNG) |
 | `pnpm --filter @architect/desktop package:dir` | Builds an unsigned, unpackaged directory build (to check packaging) |
 

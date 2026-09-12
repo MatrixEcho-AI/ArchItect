@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { initI18n, resolveLocale, setLocale, t } from '@architect/i18n'
+import { getLocale, initI18n, resolveLocale, setLocale, t } from '@architect/i18n'
 import type { LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
@@ -1575,9 +1575,12 @@ if (smokeIndex >= 0) {
  * 这是刻意的：演示数据不该进安装包。
  */
 async function loadExampleOrDemo(): Promise<void> {
+  // 示例里的对话是**内容**，它跟不了语言，所以一种语言一份。挑哪一份用**已经定下来的**
+  // 语言（`initStudio` 在这之前跑过），而不是临时再探测一次——两者可能不一致。
+  const file = getLocale() === 'zh-CN' ? 'forest-hut.zh-CN.mcai' : 'forest-hut.mcai'
   const candidates = [
-    join(__dirname, '..', '..', '..', 'examples', 'forest-hut.mcai'),
-    join(__dirname, '..', '..', 'examples', 'forest-hut.mcai'),
+    join(__dirname, '..', '..', '..', 'examples', file),
+    join(__dirname, '..', '..', 'examples', file),
   ]
   for (const candidate of candidates) {
     try {
@@ -1642,7 +1645,7 @@ void app.whenReady().then(async () => {
   /**
    * `--demo`：启动时先把界面填上东西，便于抓图/演示。
    *
-   * **优先载入仓库里的示例工程**（`examples/forest-hut.mcai`），载不到才退回
+   * **优先载入仓库里的示例工程**（`examples/forest-hut.mcai`，中文界面用 `.zh-CN` 那份），载不到才退回
    * "脚本化生成一座小屋"。这个顺序是有理由的：示例工程里带着**对话记录与截图**
    * （22 条消息、1 张图），而 `studio.demo()` 只造方块、对话列是空的——于是
    * "抓一张图看看对话渲染成什么样"这件事一直做不到（卡片配色、思维链折叠、

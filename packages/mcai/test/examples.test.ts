@@ -7,17 +7,19 @@ import { describe, expect, it } from 'vitest'
 import { openProject, unpackProject } from '../src/project.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
-const examplePath = join(root, 'examples', 'forest-hut.mcai')
-
 /**
  * 仓库里的示例工程是一份**活的端到端夹具**。
  *
  * 单元测试是拆开验的：格式一处、渲染一处、agent 一处。示例工程把它们串起来——
  * 它是真的用 `packProject` 写出来、真的能被 `openProject` 打开的一份文件。
  * 格式演进时它会先坏，而不是等用户打开示例才发现。
+ *
+ * **两份都验。** 示例里装着对话记录，而对话是内容、跟不了界面语言，所以它一种语言
+ * 一份（加载方按已确定的语言挑，见 `loadExampleOrDemo`）。两份走同一段脚本、同一批
+ * 坐标，只有需求与模型那句话不同，所以下面每一条对两边都该成立。
  */
-describe('examples/forest-hut.mcai 是一份真能用的工程', () => {
-  const bytes = new Uint8Array(readFileSync(examplePath))
+describe.each(['forest-hut.mcai', 'forest-hut.zh-CN.mcai'])('examples/%s 是一份真能用的工程', (file) => {
+  const bytes = new Uint8Array(readFileSync(join(root, 'examples', file)))
 
   it('能打开，方块数据完好', () => {
     const { store } = openProject(bytes)

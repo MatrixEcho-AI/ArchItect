@@ -1472,7 +1472,8 @@ ArchItect/
 │   ├── tool-reference.zh-CN.md     # 同一份，中文外壳（正文两种语言里都是英文：那是给 LLM 的 prompt）
 │   └── prompt-library.md           # 建筑风格 prompt 模板（给用户的输入模板）
 ├── examples/
-│   ├── forest-hut.mcai             # 示例工程：含方块、编辑记录、对话记录、截图
+│   ├── forest-hut.mcai             # 示例工程（英文）：含方块、编辑记录、对话记录、截图
+│   ├── forest-hut.zh-CN.mcai       # 同一座小屋的中文版——对话是内容，跟不了语言，所以一种语言一份
 │   └── README.md                   # 怎么看它、怎么重新生成
 ├── packages/
 │   ├── core/                       # 体素世界、调色板、EditOp、UndoStack、Replay
@@ -1623,7 +1624,7 @@ secrets.bin
 | **全量枚举测试** | 变换（旋转/镜像）在 **1.21.4 全部 27 866 个 state × 9 种变换**上：结果仍是同种方块的合法 state、在每个方块的区间上是**双射**、旋转四次/镜像两次回到原值。三条不变式用一次扫描同时验，约 1 秒 |
 | **文档一致性测试** | 工具参考与生成的版本**逐字节**对比（过期即失败）；格式规范里的路径常量、格式版本、manifest 字段名与代码核对 |
 | **协议级端到端** | 起一个按 DeepSeek/OpenAI 兼容协议回话的假端点，用真的 `architect build` 跑完整条链路，然后断言**服务器真正收到的字节**：鉴权头、`stream:true` + `stream_options.include_usage`、工具 schema、图像 part、思维链回传，以及 `max_tokens` 被 400 顶回后自动改用 `max_completion_tokens`。假端点回的是**切碎的 SSE**（正文与工具参数都分片），不拼就过不去 |
-| **示例工程夹具** | `examples/forest-hut.mcai` 每次跑测试都真的打开一次，核对方块数、对话条数、截图字节。单元测试是拆开验的，它把链路串起来 |
+| **示例工程夹具** | `examples/forest-hut*.mcai`（两份）每次跑测试都真的打开一次，核对方块数、对话条数、截图字节。单元测试是拆开验的，它把链路串起来 |
 | 格式测试 | `.mcai` 往返读写 hash 相等；确定性打包；版本迁移（构造旧版 fixture 打开）；WAL 崩溃恢复（杀进程模拟） |
 | 渲染测试 | 软件等轴测后端 **golden PNG 逐字节比对**（`packages/render/test/golden/`，4 张：纯色等轴测+叠加层 / 正视 / 俯视 / 纹理路径逐像素采样）；WebGL 后端只做“非空白 + 尺寸正确”的弱断言。基线只吃**确定性输入**（哈希配色或烘好的平均色），所以不依赖 `minecraft-assets`、CI 上逐字节一致；重新签：`ARCHITECT_UPDATE_GOLDEN=1 pnpm test packages/render/test/golden.test.ts` |
 | 工具测试 | 每个工具的正常/越界/非法方块/空区域/超大区域用例 |

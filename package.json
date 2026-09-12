@@ -30,6 +30,7 @@
   "devDependencies": {
     "@architect/agent": "workspace:*",
     "@architect/core": "workspace:*",
+    "@architect/i18n": "workspace:*",
     "@architect/interop": "workspace:*",
     "@architect/mcai": "workspace:*",
     "@architect/render": "workspace:*",

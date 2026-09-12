@@ -4,7 +4,7 @@ import { activeProvider, AgentSession, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
 import type { DiscoveryResult, LlmImage, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
-import type { Bounds, SliceAxis, WorldStore } from '@architect/core'
+import type { Bounds, Pos, SliceAxis, WorldStore } from '@architect/core'
 import {
   DATA_VERSION_1_21_4,
   exportLitematic,
@@ -49,6 +49,8 @@ export interface StudioState {
   blocks: number
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
+  /** 自动取景框住的范围（参考区域 ∪ 内容）。见 `frameBounds`。 */
+  frame: { min: [number, number, number]; max: [number, number, number] }
   paletteSize: number
   ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
@@ -189,6 +191,8 @@ export interface ScenePayload {
   indices: Uint32Array
   atlas: { size: number; data: Uint8Array }
   bounds?: { min: [number, number, number]; max: [number, number, number] }
+  /** 自动取景框住的范围（参考区域 ∪ 内容）。见 `frameBounds`。 */
+  frame: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
 }
 
@@ -779,6 +783,35 @@ export class StudioService {
     }
   }
 
+  /**
+   * **自动取景该框住的范围** = 项目参考区域 ∪ 内容包围盒。
+   *
+   * 为什么要并集而不是直接用内容包围盒：世界没有可写边界之后，内容包围盒可以被
+   * **一个远处的方块**撑到极大——实测往 (100,5,100) 放一块石头，相机为了把那一块和
+   * 32³ 的小屋一起框进去，把整座小屋缩成了一个绿点。"看得见全部"变成了"什么都看不清"。
+   *
+   * 参考区域是这个项目的**工作面**，它才是取景的主体；内容跑到区域之外时才把它
+   * 一起框进来（那时确实需要看全景，比如"我把东西建到外面去了，看看离得多远"）。
+   *
+   * 两个都没有（空世界）时给参考区域，保持"空世界画面上有一个 32³ 的框"这个既有观感。
+   */
+  private frameBounds(content: { min: Pos; max: Pos } | undefined): Bounds {
+    const volume = this.session.store.volume
+    if (content === undefined) return volume
+    return {
+      min: {
+        x: Math.min(volume.min.x, content.min.x),
+        y: Math.min(volume.min.y, content.min.y),
+        z: Math.min(volume.min.z, content.min.z),
+      },
+      max: {
+        x: Math.max(volume.max.x, content.max.x),
+        y: Math.max(volume.max.y, content.max.y),
+        z: Math.max(volume.max.z, content.max.z),
+      },
+    }
+  }
+
   /** 当前状态快照。 */
   state(): StudioState {
     const store = this.session.store
@@ -792,6 +825,7 @@ export class StudioService {
       totalOps: this.session.log.length,
       blocks: stats.blocks,
       volume: opTuple(store.volume),
+      frame: opTuple(this.frameBounds(stats.bounds)),
       paletteSize: store.palette.size,
       ops: this.session.log
         .all()
@@ -1165,6 +1199,7 @@ export class StudioService {
       ...(bounds !== undefined
         ? { bounds: { min: [bounds.min.x, bounds.min.y, bounds.min.z], max: [bounds.max.x, bounds.max.y, bounds.max.z] } }
         : {}),
+      frame: opTuple(this.frameBounds(bounds)),
       volume: {
         min: [store.volume.min.x, store.volume.min.y, store.volume.min.z],
         max: [store.volume.max.x, store.volume.max.y, store.volume.max.z],

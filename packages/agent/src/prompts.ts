@@ -30,7 +30,25 @@ export function buildSystemPrompt(context: PromptContext): string {
     `You are ArchItect, a design engine for Minecraft voxel architecture.`,
     ``,
     `[COORDINATES] +X = east, +Y = up, +Z = south. One block = one metre.`,
-    `[BUILD VOLUME] Writable region: ${context.volume}. Blocks outside are clipped and reported.`,
+    /**
+     * **世界没有可写边界**（原来这里写的是"Writable region: …，界外会被裁掉"）。
+     *
+     * 那句话现在是假的，而且是一种很坏的假：模型会以为自己必须挤在某个方框里，
+     * 于是把该铺开的东西硬塞进一角。所以这里如实说清——坐标任意，
+     * 唯一的硬边界是**世界高度**（Y），那是原版游戏的真实限制。
+     *
+     * 仍然报 `${context.volume}`，但换了名字和说法：它是**项目原点/参考工区**，
+     * 用来回答"从哪儿起算、地面在哪一层"，不是围墙。原点不动这一点很重要：
+     * 坐标都相对于它，模型不该把建筑挪到别处去"腾地方"。
+     *
+     * 高度写死成数字而不是从 `store.minY/maxY` 传进来：这个 prompt 属于缓存前缀，
+     * 而高度对钉死的版本是个常量（1.21.4 是 -64..319）——为一个常量多塞一个
+     * 上下文字段，只会让前缀多一处可能漂移的地方。
+     */
+    `[COORDINATES ARE UNBOUNDED] The world has no writable boundary — build at any X/Z. ` +
+      `Coordinates are absolute; the project's reference region is ${context.volume} ` +
+      `(its floor is the ground plane; keep using it as your origin rather than shifting the design). ` +
+      `The only hard limit is world height: Y outside -64..319 is clipped and reported.`,
   ]
 
   if (context.palette !== undefined && context.palette.length > 0) {

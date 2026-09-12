@@ -21,15 +21,29 @@ function rowAt(text: string, label: number): string {
 
 describe('ASCII 切片', () => {
   it('平面图：列是 x、行是 z，行号自上而下递增', () => {
+    // 显式给范围，这条测的是**坐标映射**（列 = x、行 = z、行号往下增），
+    // 与"默认范围取多大"无关——默认范围现在跟着内容走（见下面那条）。
     const store = makeStore()
     store.setBlock({ x: 3, y: 5, z: 7 }, 'minecraft:stone')
-    const result = renderSlice(store, { axis: 'y', index: 5 })
+    const result = renderSlice(store, { axis: 'y', index: 5, range: { x: [0, 15], z: [0, 15] } })
     expect(result.columnAxis).toBe('x')
     expect(result.rowAxis).toBe('z')
     expect(result.columns).toBe(16)
     expect(result.rows).toBe(16)
     expect(rowAt(result.text, 7)[3]).not.toBe('.')
     expect(rowAt(result.text, 6)).toBe('.'.repeat(16))
+  })
+
+  it('**默认范围跟着内容走**，而不是老工区', () => {
+    // 世界没有可写边界了，所以 X/Z 的默认范围不能再用 `store.volume`：
+    // 建在老工区之外的东西会被整片截掉。这里把方块放在工区之外，
+    // 默认切片必须把它画出来。
+    const store = makeStore({ min: { x: 0, y: 0, z: 0 }, max: { x: 15, y: 15, z: 15 } })
+    store.setBlock({ x: 100, y: 5, z: 120 }, 'minecraft:stone')
+    const result = renderSlice(store, { axis: 'y', index: 5 })
+    expect(result.columns).toBe(1)
+    expect(result.rows).toBe(1)
+    expect(result.legend.some((entry) => entry.block === 'minecraft:stone')).toBe(true)
   })
 
   it('立面图：行号自上而下递减，且**标号与实际取样一致**（回归）', () => {

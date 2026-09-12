@@ -281,11 +281,11 @@ export const enUS = {
       emptyExport: 'The world is empty — nothing to export',
     },
     edit: {
-      outsideBreak: 'That cell is outside the work area — nothing to break',
+      outsideBreak: 'That cell is outside the world height (Y is above or below the limit) — nothing to break',
       alreadyAir: 'That cell is already empty',
       noBlockSelected: 'No block selected yet',
       unknownBlock: 'Unknown block: {{name}}',
-      outsidePlace: 'That cell is outside the work area — cannot place there',
+      outsidePlace: 'That cell is outside the world height (Y is above or below the limit) — cannot place there',
     },
     export: {
       schemSummary: 'Sponge v3 · {{size}} · {{blocks}} blocks',

@@ -18,6 +18,11 @@ export interface StudioState {
   blocks: number
   bounds?: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
+  /**
+   * **自动取景框住的范围** = 参考区域 ∪ 内容包围盒。见 `ScenePayload.frame` 的注释：
+   * 裸内容包围盒会被一个远处的方块撑到极大，把主体缩成一个点。
+   */
+  frame: { min: [number, number, number]; max: [number, number, number] }
   paletteSize: number
   ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
@@ -240,7 +245,19 @@ export interface ScenePayload {
   uvs: Float32Array
   indices: Uint32Array
   atlas: { size: number; data: Uint8Array }
+  /** 内容包围盒（忽略空气）。空世界没有这一项。 */
   bounds?: { min: [number, number, number]; max: [number, number, number] }
+  /**
+   * **自动取景该框住的范围** = 项目参考区域 ∪ 内容包围盒。
+   *
+   * 为什么不是直接用 `bounds`：世界没有可写边界之后，内容包围盒可以被**一个远处的
+   * 方块**撑到极大。实测往 (100,5,100) 放一块石头，相机为了把那块和 32³ 的小屋一起
+   * 框进去，把整座小屋缩成了一个绿点——"看得见全部"变成"什么都看不清"。
+   *
+   * 参考区域是这个项目的**工作面**，它才是取景的主体；内容跑到区域之外时再把它
+   * 一起框进来（那时确实需要看全景）。两个都不在时（空世界）退回 `volume`。
+   */
+  frame: { min: [number, number, number]; max: [number, number, number] }
   volume: { min: [number, number, number]; max: [number, number, number] }
 }
 

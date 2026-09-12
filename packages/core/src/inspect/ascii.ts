@@ -154,8 +154,25 @@ function axisRange(
   axis: SliceAxis,
 ): [number, number] {
   const requested = range?.[axis]
+  /**
+   * 默认范围：**Y 仍是整个世界高度（那是真实上限），X/Z 跟着内容走**。
+   *
+   * 原来 X/Z 无条件回落到 `store.volume`，而世界已经没有可写边界了——建在老工区
+   * 之外的东西会被这个默认范围整片截掉（调用方不传 range 时就发生）。
+   * 内容包围盒回答的是"实际有什么"，而不是"当初声明允许在哪儿"。
+   *
+   * **没有任何内容时仍然回落到项目参考区域**：那时"跟内容走"没有意义（内容在
+   * 原点那一格），而调用方（`slice` 工具、测试）期望的是"把这片地方画成空的"
+   * ——包括"这片地方太大、拒绝渲染"那条提示。空世界给一张 1×1 的图反而是另一种错。
+   */
   const fallback: [number, number] =
-    axis === 'y' ? [store.minY, store.maxY] : [store.volume.min[axis], store.volume.max[axis]]
+    axis === 'y'
+      ? [store.minY, store.maxY]
+      : ((): [number, number] => {
+          const content = store.contentBounds()
+          if (content === undefined) return [store.volume.min[axis], store.volume.max[axis]]
+          return [content.min[axis], content.max[axis]]
+        })()
   if (requested === undefined) return fallback
   return [Math.min(requested[0], requested[1]), Math.max(requested[0], requested[1])]
 }

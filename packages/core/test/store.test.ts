@@ -95,8 +95,10 @@ describe('WorldStore 基本读写', () => {
   })
 })
 
-describe('WorldStore 工区约束', () => {
-  it('工区外的方块被裁剪并计数，而不是静默丢弃', () => {
+describe('WorldStore 的可写范围', () => {
+  it('**X/Z 没有可写边界**：声明工区之外照样写得进去', () => {
+    // 这一条是"无界世界"的核心契约。原来这里的断言是"越界被裁剪并计数"，
+    // 而裁剪是 32³ 工区时代的东西——存储本来就按区块惰性分配，X/Z 没有任何理由限制。
     const store = makeStore({ min: { x: 0, y: 0, z: 0 }, max: { x: 7, y: 7, z: 7 } })
     const result = store.write(
       box({ x: 0, y: 0, z: 0 }, { x: 15, y: 15, z: 15 }),
@@ -105,13 +107,44 @@ describe('WorldStore 工区约束', () => {
     )
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.changed).toBe(8 * 8 * 8)
-    expect(result.clipped).toBe(16 * 16 * 16 - 8 * 8 * 8)
+    expect(result.changed).toBe(16 * 16 * 16)
+    expect(result.clipped).toBe(0)
+    // 声明工区（0..7）之外的那个角上真的有方块
+    expect(store.getBlockString({ x: 15, y: 15, z: 15 })).toBe('minecraft:stone')
+  })
+
+  it('远到老工区之外、甚至负坐标也能写（原点不动，只是坐标延伸）', () => {
+    const store = makeStore({ min: { x: 0, y: 0, z: 0 }, max: { x: 7, y: 7, z: 7 } })
+    for (const pos of [
+      { x: 4000, y: 5, z: 4000 },
+      { x: -4000, y: 5, z: -4000 },
+      { x: 0, y: 5, z: 0 }, // 原点仍然是有意义的那一点
+    ]) {
+      expect(store.setBlock(pos, 'minecraft:stone').ok).toBe(true)
+    }
+    expect(store.getBlockString({ x: 4000, y: 5, z: 4000 })).toBe('minecraft:stone')
+    expect(store.getBlockString({ x: -4000, y: 5, z: -4000 })).toBe('minecraft:stone')
+    // 只为写过的那些列分配内存（惰性分配仍然成立）
+    expect(store.allocatedColumns).toBe(3)
+  })
+
+  it('**Y 仍然有界**：世界高度是真实存在的，越界的写入照样裁剪并计数', () => {
+    const store = makeStore({ min: { x: 0, y: 0, z: 0 }, max: { x: 3, y: 3, z: 3 } })
+    const result = store.write(
+      box({ x: 0, y: -80, z: 0 }, { x: 1, y: -75, z: 1 }),
+      store.palette.indexOf('minecraft:stone'),
+      { confirm: true },
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.changed).toBe(0)
+    // 2×6×2：y 从 -80 到 -75 是 6 层，整块都在世界下限（-64）以下
+    expect(result.clipped).toBe(2 * 6 * 2)
   })
 
   it('Y 超出世界高度也算裁剪', () => {
     const store = makeStore({ min: { x: 0, y: -80, z: 0 }, max: { x: 3, y: 400, z: 3 } })
-    // 世界高度是 -64..319，工区被夹到该范围
+    // 世界高度是 -64..319，工区被夹到该范围（`volume` 仍在，只是不再当写入门槛）
     expect(store.volume.min.y).toBe(-64)
     expect(store.volume.max.y).toBe(319)
   })
@@ -469,5 +502,45 @@ describe('writeBlocks：生产者中途扩充调色板', () => {
   it('越界的下标仍然如实报错', () => {
     const store = new WorldStore({ minecraftVersion: '1.21.4', volume })
     expect(() => store.writeBlocks((emit) => emit(0, 0, 0, 999))).toThrow(/Palette index 999/)
+  })
+})
+
+/**
+ * **整列写进来的那条路也要记段**（`.mcai` 打开 / 工程恢复）。
+ *
+ * 回归：`restoreColumns` 绕开了 `applyChangeSet`，早先没在它里面更新"哪些段有方块"，
+ * 于是网格化以为世界是空的。实测表现是**打开示例工程之后视口一片空白，而左栏
+ * 明明写着 330 个方块**——HUD 读的是 `measure()`（全量扫描），网格化读的是段记录，
+ * 两者不一致时就是这个症状。
+ */
+describe('restoreColumns 之后段记录必须跟上', () => {
+  it('**从整列恢复出来的世界，遍历得到它所在的段**', () => {
+    const source = makeStore()
+    source.setBlock({ x: 3, y: 5, z: 7 }, 'minecraft:stone')
+    source.setBlock({ x: 20, y: 9, z: 20 }, 'minecraft:oak_planks')
+
+    const target = makeStore()
+    // 快照里的方块索引是相对**调色板**编的，所以目标世界得先有同一张表。
+    // 真实路径上这是 `openProject` 干的（它把工程的调色板一起交出去）。
+    target.palette.indexOf('minecraft:stone')
+    target.palette.indexOf('minecraft:oak_planks')
+    target.restoreColumns(source.dumpColumns())
+
+    const sections = new Set<string>()
+    target.forEachPopulatedSection((sx, sy, sz) => sections.add(`${sx},${sy},${sz}`))
+    // x=3,z=7 与 x=20,z=20 分属不同的列，但 y 都在 0..15 这一段里
+    expect(sections).toEqual(new Set(['0,0,0', '16,0,16']))
+    // 方块本身也真的在那儿
+    expect(target.getBlockString({ x: 20, y: 9, z: 20 })).toBe('minecraft:oak_planks')
+  })
+
+  it('`clear()` 要连段记录一起清（否则旧段会一直被网格化）', () => {
+    const store = makeStore()
+    store.setBlock({ x: 1, y: 1, z: 1 }, 'minecraft:stone')
+    store.clear()
+    let sections = 0
+    store.forEachPopulatedSection(() => sections++)
+    expect(sections).toBe(0)
+    expect(store.stats().blocks).toBe(0)
   })
 })

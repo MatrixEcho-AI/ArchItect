@@ -253,7 +253,7 @@ export const runBatchTool = defineTool<{
         `run_batch applied ${plans.length} operation(s) as **one revision** (${result.revision}): ` +
         `${result.changed} cell(s) changed, bounds ${where}.` +
         (result.overwrittenNonAir > 0 ? ` Overwrote ${result.overwrittenNonAir} non-air cell(s).` : '') +
-        (result.clipped > 0 ? ` Clipped ${result.clipped} cell(s) outside the build volume.` : '') +
+        (result.clipped > 0 ? ` Clipped ${result.clipped} cell(s) outside the world height.` : '') +
         `\nOps: ${JSON.stringify(sources)}. Now read the result back with verify().`,
       data: {
         revision: result.revision,

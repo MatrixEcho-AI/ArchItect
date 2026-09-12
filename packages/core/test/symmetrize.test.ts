@@ -112,13 +112,16 @@ describe('symmetrize：沿平面镜像', () => {
     expect(store.getBlockString({ x: 10, y: 2, z: 6 })).toContain('half=top')
   })
 
-  it('镜像到工区外的部分被裁剪', () => {
+  it('镜像到老工区之外也会落下（没有可写边界了）', () => {
+    // 原来这一条叫"镜像到工区外的部分被裁剪"，断言 clipped > 0。
+    // 裁剪没有了，所以镜像的另一半应该真的落在 x=16 上。
     const store = makeStore({ min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 10, z: 10 } })
-    store.setBlock({ x: 0, y: 3, z: 3 }, 'minecraft:stone') // 镜像到 x=16，越界
+    store.setBlock({ x: 0, y: 3, z: 3 }, 'minecraft:stone') // 关于 x=8 镜像到 x=16
     const result = symmetrize(store, { axis: 'x', coordinate: 8, source: 'negative', confirm: true })
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.clipped).toBeGreaterThan(0)
-    expect(store.isAir({ x: 0, y: 3, z: 3 })).toBe(false) // 源仍保留，只是镜像落到了工区外
+    if (result.ok) expect(result.clipped).toBe(0)
+    expect(store.getBlockString({ x: 0, y: 3, z: 3 })).toBe('minecraft:stone')
+    expect(store.getBlockString({ x: 16, y: 3, z: 3 })).toBe('minecraft:stone')
   })
 
   it('y 轴镜像（左右对称 → 上下翻转）', () => {

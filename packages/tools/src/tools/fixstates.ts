@@ -28,7 +28,7 @@ export const fixStatesTool = defineTool<{
     'Repair block states that are locally inconsistent with their neighbours: fence / wall / glass-pane / iron-bars connection booleans (north, south, east, west), the wall post (up), and stair shape (straight / inner_* / outer_*). waterlogged is never touched.\n' +
     'Run it after symmetrize, paste_region, rotate or any bulk fill that placed connection blocks with their default side values.\n' +
     'Only cells that are actually inconsistent are rewritten, and the whole pass commits as exactly ONE revision, so a single undo removes it entirely. It is idempotent: running it a second time changes nothing.\n' +
-    'from and to optionally restrict the repair to a box (both must be given together); omit both to repair the whole volume. The result reports how many cells each rule fixed. Half-slabs or stairs that are completely enclosed by solid blocks are reported but NOT modified.',
+    'from and to optionally restrict the repair to a box (both must be given together); omit both to repair the whole world. The result reports how many cells each rule fixed. Half-slabs or stairs that are completely enclosed by solid blocks are reported but NOT modified.',
   parameters: obj(
     {
       from: vec3('Optional first corner [x,y,z] of the box to repair. Give it together with to, or omit both.'),
@@ -47,7 +47,7 @@ export const fixStatesTool = defineTool<{
       if (args.from === undefined || args.to === undefined) {
         return failure(
           'INVALID_ARGS',
-          'from and to must be provided together (or both omitted to repair the whole volume).',
+          'from and to must be provided together (or both omitted to repair the whole world).',
         )
       }
       region = normalizeBounds(toPos(args.from, 'from'), toPos(args.to, 'to'))

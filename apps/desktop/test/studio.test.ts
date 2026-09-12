@@ -588,11 +588,24 @@ describe('StudioService：人手接管（点哪儿改哪儿）', () => {
     expect(studio.agentSession.log.at(studio.agentSession.log.length - 1)!.tool).toBe('break_block')
   })
 
-  it('工区外**拒绝**而不是悄悄裁掉（悄悄裁掉的话用户只会觉得"点了没反应"）', () => {
+  it('**X/Z 任意坐标都能手改**（没有工区了），只有世界高度之外才拒绝', () => {
+    // 原来这一条断言的是"工区外拒绝"，而工区已经不存在了：
+    // 人手接管现在写哪儿都行——包括负坐标和老工区之外。
     const studio = makeStudio()
     studio.demo()
-    expect(() => studio.editBlock({ pos: [-1, 5, 5], block: 'minecraft:stone', mode: 'place' })).toThrow(/工区/)
-    expect(() => studio.editBlock({ pos: [-1, 5, 5], mode: 'break' })).toThrow(/工区/)
+    for (const pos of [
+      [-1, 5, 5],
+      [500, 5, 500],
+      [-500, 5, -500],
+    ] as Array<[number, number, number]>) {
+      expect(() => studio.editBlock({ pos, block: 'minecraft:stone', mode: 'place' })).not.toThrow()
+      expect(studio.agentSession.store.isAir({ x: pos[0], y: pos[1], z: pos[2] })).toBe(false)
+    }
+
+    // **世界高度之外仍然明确拒绝**（不是悄悄裁掉——那样用户只会觉得"点了没反应"）
+    expect(() =>
+      studio.editBlock({ pos: [2, 5000, 2], block: 'minecraft:stone', mode: 'place' }),
+    ).toThrow(/世界高度/)
   })
 
   it('挖空气、放认不出的方块名都被拒绝（后者会污染调色板）', () => {

@@ -296,11 +296,11 @@ export const zhCN = {
       emptyExport: '世界是空的，没有可导出的内容',
     },
     edit: {
-      outsideBreak: '这一格在工区之外，挖不动',
+      outsideBreak: '这一格在世界高度之外（Y 超出上下限），没有东西可挖',
       alreadyAir: '这一格本来就是空的',
       noBlockSelected: '还没选方块',
       unknownBlock: '认不出这个方块：{{name}}',
-      outsidePlace: '这一格在工区之外，放不下',
+      outsidePlace: '这一格在世界高度之外（Y 超出上下限），放不下',
     },
     export: {
       schemSummary: 'Sponge v3 · {{size}} · {{blocks}} 方块',

@@ -1,4 +1,4 @@
-import { boundsIntersect, normalizeBounds } from '../geometry/box.js'
+import { normalizeBounds } from '../geometry/box.js'
 import { AIR_STATE_ID } from '../palette.js'
 import { stateIdToProperties } from '../state.js'
 import type { Bounds, Pos } from '../types.js'
@@ -97,9 +97,22 @@ export function lintStructure(store: WorldStore, options: LintOptions = {}): Lin
   const minDoorClearance = normalizeInt(options.minDoorClearance, LINT_DEFAULT_MIN_DOOR_CLEARANCE, 1)
   const minHeadroom = normalizeInt(options.minHeadroom, LINT_DEFAULT_MIN_HEADROOM, 1)
 
-  // 指定了 region 就用它做扫描过滤；没指定时先按工区扫，扫完再用**扫描中顺路算出的**
-  // 内容包围盒收口。这样"默认分析全部内容"也不需要额外调一次 contentBounds()（那是一次全量扫描）。
-  const filterRegion = options.region !== undefined ? clampRegion(store, options.region) : store.volume
+  /**
+   * 扫描范围（决定**报告哪些格子**，不决定看到什么）。
+   *
+   * 给了 region 就用它（`clampRegion` 只做规范化与求交，不再往工区上夹）；
+   * 没给就按**内容包围盒**——世界没有可写边界了，继续用 `store.volume` 当默认会把
+   * 建在老工区之外的东西整片排除在分析之外（而它明明是真的方块）。
+   *
+   * 代价是多一次 `contentBounds()` 全量扫描。原来注释里说"顺手算出包围盒、省掉这一次"，
+   * 但那个省法是建立在"工区就是内容范围"之上的，现在不成立了。
+   *
+   * 下面 `columns` 的收集**刻意不受这个范围影响**：见那里的注释。
+   */
+  const filterRegion =
+    options.region !== undefined
+      ? clampRegion(store, options.region)
+      : (store.contentBounds() ?? store.volume)
 
   // ── 唯一的全量扫描 ────────────────────────────────────────────────
   // 顺路产出：每列 y 列表（悬空 / 悬挑 / 净高 / 门洞 / 漏水共用）、内容包围盒、
@@ -133,7 +146,10 @@ export function lintStructure(store: WorldStore, options: LintOptions = {}): Lin
     const previous = column.ys.length > 0 ? column.ys[column.ys.length - 1]! : Number.NaN
     const isColumnMin = column.ys.length === 0
     column.ys.push(y)
-
+    // **每列收集的是全部非空气方块，与 `filterRegion` 无关。**
+    // 悬空/悬挑/净高的判据要"这一列上面/下面还有没有别的东西"，那是整列的事实；
+    // 按范围裁掉一部分会让判定看到错误的邻域（一块在范围外、但在同一列里的楼板，
+    // 恰恰就是"它不悬空"的证据）。范围只决定**哪些格子被报告**，不决定看到什么。
     if (!insideRegion(filterRegion, x, y, z)) return
 
     blocks++
@@ -842,9 +858,19 @@ function normalizeInt(value: number | undefined, fallback: number, minimum: numb
   return Math.max(minimum, Math.floor(value))
 }
 
-/** 显式给定的分析范围：规范化并夹到工区内。与工区无交集时退化成一个点（blocks=0）。 */
-function clampRegion(store: WorldStore, requested: Bounds): Bounds {
-  const normalized = normalizeBounds(requested.min, requested.max)
-  const clamped = boundsIntersect(normalized, store.volume)
-  return clamped ?? { min: { ...store.volume.min }, max: { ...store.volume.min } }
+/**
+ * 显式给定的分析范围：**只做规范化，不裁剪**。
+ *
+ * 原来这里 `boundsIntersect(normalized, store.volume)`——"范围必须落在工区内"。
+ * 世界没有可写边界之后那个裁剪既没必要也有害：
+ *
+ * 1. 没必要：范围只是一个**过滤器**（"报告哪些格子"），越界的地方本来就没有方块，
+ *    不会多扫出东西来。
+ * 2. 有害：裁剪会把范围**缩小**，而范围的下边界是"地面层豁免"的判据
+ *    （`y <= region.min.y` 当那一层是地面）。`{region: volume}` 这种"分析整个工区"
+ *    的调用被裁到内容包围盒之后，min.y 会落到建筑中间，于是**连地面层一起被当成悬挑**。
+ *    实测就是这么红的：孤立方块那条用例的 cantilever 直接消失了。
+ */
+function clampRegion(_store: WorldStore, requested: Bounds): Bounds {
+  return normalizeBounds(requested.min, requested.max)
 }

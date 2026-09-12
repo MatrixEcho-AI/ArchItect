@@ -77,6 +77,19 @@ export interface WorldStoreOptions {
 const columnKey = (x: number, z: number): string => `${x >> 4},${z >> 4}`
 
 /**
+ * 段键：**世界坐标 → 段坐标**（`>> 4`，段 = 16³，与 mesher 的 SECTION 对齐）。
+ *
+ * 注意参数是**世界坐标**不是段坐标；`sectionHasBlock` 里传的是段的基坐标，
+ * 这里再 `>> 4` 一次得到同一个键。
+ *
+ * 为什么记这个：世界**没有可写边界**了（见 `write` 里的说明），所以网格化不能再按
+ * "声明的工区"去三重循环扫——那样要么扫整片空白，要么漏掉界外新建的东西。
+ * 记下"哪些段真的有方块"，网格化就只遍历这些段（及其邻域，见 `meshWorld`），
+ * 与世界长到多大无关。
+ */
+const sectionKeyOf = (x: number, y: number, z: number): string => `${x >> 4},${y >> 4},${z >> 4}`
+
+/**
  * 世界状态。**唯一允许写方块的地方**——工区约束、变更记录、撤销、dry-run 预算都在这一层。
  *
  * 底层是 `prismarine-chunk` 的 `ChunkColumn`（每格 uint16 全局 stateId），
@@ -91,6 +104,18 @@ export class WorldStore {
   readonly maxY: number
 
   private readonly columns = new Map<string, ChunkColumn>()
+  /**
+   * 哪些段**真的有方块**（键见 `sectionKeyOf`）。
+   *
+   * 与 `columns` 的区别：一条列里可能只有一格，而那一格所在的段才是网格化要处理的；
+   * 一条列还可能有整段是空的（挖空了）。维护成本是每次写入一次 `Set` 操作，
+   * 换来的是"网格化的工作量与非空方块所在的范围成正比，而不是与声明的工区成正比"。
+   *
+   * 记录是**近似**的，刻意只增不减：某段被挖空之后这里仍然留着它（多网格化一个空段，
+   * 结果是零顶点，无害）。不这么做的话每次写入都要判断"这一段还有没有别的方块"，
+   * 那是一次 16³ 扫描——为了省一个空段值得吗？不值得。
+   */
+  private readonly populatedSections = new Set<string>()
   private undoStack: ChangeSet[] = []
   private redoStack: ChangeSet[] = []
   private currentRevision = 0
@@ -213,7 +238,18 @@ export class WorldStore {
       }
       const writeStateId = mode === 'destroy' ? AIR_STATE_ID : targetStateId
 
-      if (!this.insideVolume(x, y, z)) {
+      /**
+       * **没有可写边界了，唯一剩下的是世界高度。**
+       *
+       * 原来这里判 `insideVolume(x, y, z)`，越界的写入被计进 `clipped` 并丢掉。
+       * 那是"32³ 工区"时代的事：存储本来就是按区块惰性分配的（没写过的列不占内存），
+       * 所以 X/Z 上没有任何存储理由去限制；而 Y 必须留一条，因为原版的世界高度
+       * 是真实存在的（`minY..maxY`，见构造函数），越界的方块渲染器和存档都表示不了。
+       *
+       * `clipped` 因此只可能因为 Y 越界而增加，语义没变（"有一部分没写进去"），
+       * 只是唯一的原因变成了高度而不是工区。
+       */
+      if (y < this.minY || y > this.maxY) {
         clipped++
         return
       }
@@ -329,6 +365,9 @@ export class WorldStore {
   /** 清空世界与历史。 */
   clear(): void {
     this.columns.clear()
+    // 段记录必须一起清：留着的话"清空之后又建东西"会连旧段一起网格化，
+    // 而 `restoreColumns` 正好是先 `clear()` 再整列写
+    this.populatedSections.clear()
     this.undoStack = []
     this.redoStack = []
     this.currentRevision = 0
@@ -464,7 +503,13 @@ export class WorldStore {
             if (stateId === undefined) {
               throw new RangeError(`Column (${chunkX},${chunkZ}) references a nonexistent palette index ${paletteIndex}`)
             }
-            if (stateId !== AIR_STATE_ID) column.setBlockStateId({ x, y, z }, stateId)
+            if (stateId !== AIR_STATE_ID) {
+              column.setBlockStateId({ x, y, z }, stateId)
+              // **这里也必须记段**：这条路径绕开了 `applyChangeSet`（`.mcai` 的
+              // 快照是整列写进来的），所以网格化看不到的段会整片漏掉——实测的
+              // 表现是"打开工程之后视口是空的，而左栏明明写着 330 个方块"。
+              this.populatedSections.add(sectionKeyOf(chunkX * 16 + x, y, chunkZ * 16 + z))
+            }
           }
         }
       }
@@ -533,24 +578,29 @@ export class WorldStore {
   }
 
   /**
-   * 这一格在工区里吗？
+   * 这一格在**世界高度**内吗？
    *
    * 公开出来是给**界面**用的：人手接管时"能不能放在这儿"要在点击那一刻就答出来
-   * （放在工区外会被 `write` 裁掉，而"点了没反应"是最难查的一种反馈）。
+   * （放到世界高度外会被 `write` 裁掉，而"点了没反应"是最难查的一种反馈）。
+   *
+   * 注意它**不再回答"在不在工区里"**——没有工区了，X/Z 任意坐标都能写。
+   * 名字保留是为了不动调用点；判据已经从"工区"换成"世界高度"。
    */
   contains(pos: Pos): boolean {
-    return this.insideVolume(pos.x, pos.y, pos.z)
+    return pos.y >= this.minY && pos.y <= this.maxY
   }
 
-  private insideVolume(x: number, y: number, z: number): boolean {
-    return (
-      x >= this.volume.min.x &&
-      x <= this.volume.max.x &&
-      y >= this.volume.min.y &&
-      y <= this.volume.max.y &&
-      z >= this.volume.min.z &&
-      z <= this.volume.max.z
-    )
+  /**
+   * **遍历所有真的有方块的段**（16³ 的段，与 mesher 对齐），回调段的基坐标。
+   *
+   * 网格化靠它决定要处理哪儿：世界没有边界，所以不能再按声明的工区去扫。
+   * 顺序不保证（`Set` 的插入序），调用方不要依赖。
+   */
+  forEachPopulatedSection(visit: (sx: number, sy: number, sz: number) => void): void {
+    for (const key of this.populatedSections) {
+      const parts = key.split(',')
+      visit(Number(parts[0]) * 16, Number(parts[1]) * 16, Number(parts[2]) * 16)
+    }
   }
 
   private applyChangeSet(changes: ChangeSet): void {
@@ -567,6 +617,9 @@ export class WorldStore {
         this.columns.set(key, column)
       }
       column.setBlockStateId({ x: toColumnLocal(x), y, z: toColumnLocal(z) }, to)
+      // 网格化的遍历依据。**只增不减**：挖空的段留着（多网格化一个空段 = 零顶点，
+      // 无害），换掉的是"每次写入都判这一段还有没有别的方块"那次 16³ 扫描。
+      if (to !== AIR_STATE_ID) this.populatedSections.add(sectionKeyOf(x, y, z))
     })
   }
 }

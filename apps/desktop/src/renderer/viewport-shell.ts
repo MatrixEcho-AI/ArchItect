@@ -276,7 +276,16 @@ export class ViewportShell {
    * 拿不到内容（空世界）时退到一个固定的站位。
    */
   private fittedEye(): [number, number, number] {
-    const bounds = this.current?.bounds ?? this.current?.volume
+    /**
+     * **取景框住的是 `frame`**（参考区域 ∪ 内容包围盒），不是裸的内容包围盒。
+     *
+     * 裸内容包围盒会被一个远处的方块撑到极大：往 (100,5,100) 放一块石头，相机为了把它
+     * 和 32³ 的小屋一起框进去，会把整座小屋缩成一个绿点。`frame` 由主进程算好送过来，
+     * 见 `StudioService.frameBounds`。
+     *
+     * 旧状态快照里没有这个字段（它是后加的），所以留 `bounds ?? volume` 兜底。
+     */
+    const bounds = this.current?.frame ?? this.current?.bounds ?? this.current?.volume
     const angles = {
       azimuth: this.camera.azimuth,
       elevation: clampFreeElevation(this.camera.elevation),

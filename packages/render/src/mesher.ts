@@ -191,71 +191,65 @@ export interface WorldGeometry {
 }
 
 /**
- * 把工区里所有非空段网格化。
+ * 把**所有含方块的段**网格化。
  *
- * 段范围按 `store.volume` 算——只网格化可能被写过的区域，而不是整个高度。
- * 之所以要按 16 对齐向外扩一格：mesher 的 AO 与剔除会读到段外的方块，
- * 而 `getBlock` 本来就按世界坐标查（跨段没问题），所以只要**遍历范围**覆盖到
- * 所有非空方块即可。
+ * 这里曾经是按 `store.volume` 三重循环扫的——那时世界有一个小的、声明的工区。
+ * 现在没有可写边界了（X/Z 想建多远建多远），那条路走不通：扫一个巨大的声明范围
+ * 会把时间全花在空白上，而扫原来的 32³ 又会漏掉界外新建的东西。
+ *
+ * 所以改成**由"哪些段真的有方块"驱动**（`WorldStore.forEachPopulatedSection`）。
+ * 工作量只与非空范围成正比，与坐标长到多大无关。
+ *
+ * 只需遍历非空段本身，**不需要再往外扩一圈**：mesher 是按世界坐标去读邻居的
+ * （`store.getBlockStateId`，跨段没问题），所以段边界的面剔除与 AO 本来就是对的，
+ * 而"只有邻居段里有方块"的那些面由邻居段自己产出（它也在非空段列表里）。
  */
 export function meshWorld(store: WorldStore, data: VersionData): WorldGeometry {
-  const { min, max } = store.volume
   const chunks: WorldGeometry[] = []
   let vertices = 0
   let indices = 0
 
-  for (let sy = floor16(min.y); sy <= max.y; sy += SECTION) {
-    for (let sz = floor16(min.z); sz <= max.z; sz += SECTION) {
-      for (let sx = floor16(min.x); sx <= max.x; sx += SECTION) {
-        // 整段都是空气就跳过。空世界（或只建了一角）时这一步省掉绝大部分工作。
-        if (!sectionHasContent(store, sx, sy, sz)) continue
+  // 段基坐标按 16 对齐去重：`populatedSections` 里存的是"含方块的段"，
+  // 同一个段只会出现一次，但对齐这一步仍然要做——键是按世界坐标 `>> 4` 算的，
+  // 回调回来的是段基坐标，两者必须对齐到同一个格子才不会重复网格化（重复 = z-fighting）。
+  const pending = new Map<string, { sx: number; sy: number; sz: number }>()
+  store.forEachPopulatedSection((sx, sy, sz) => {
+    const ax = floor16(sx)
+    const ay = floor16(sy)
+    const az = floor16(sz)
+    pending.set(`${ax},${ay},${az}`, { sx: ax, sy: ay, sz: az })
+  })
 
-        const view = createWorldView(store)
-        const g = getSectionGeometry(sx, sy, sz, view, data.blocksStates)
-        const count = g.positions.length / 3
-        if (count === 0) continue
+  for (const { sx, sy, sz } of pending.values()) {
+    const view = createWorldView(store)
+    const g = getSectionGeometry(sx, sy, sz, view, data.blocksStates)
+    const count = g.positions.length / 3
+    if (count === 0) continue
 
-        // mesher 的顶点以段中心为原点，`sx + 8` 才是它对应的世界偏移
-        const ox = sx + SECTION / 2
-        const oy = sy + SECTION / 2
-        const oz = sz + SECTION / 2
-        const positions = new Float32Array(count * 3)
-        for (let i = 0; i < count; i++) {
-          positions[i * 3] = g.positions[i * 3]! + ox
-          positions[i * 3 + 1] = g.positions[i * 3 + 1]! + oy
-          positions[i * 3 + 2] = g.positions[i * 3 + 2]! + oz
-        }
-
-        chunks.push({
-          positions,
-          normals: g.normals,
-          colors: g.colors,
-          uvs: g.uvs,
-          indices: Uint32Array.from(g.indices),
-          vertices: count,
-        })
-        vertices += count
-        indices += g.indices.length
-      }
+    // mesher 的顶点以段中心为原点，`sx + 8` 才是它对应的世界偏移
+    const ox = sx + SECTION / 2
+    const oy = sy + SECTION / 2
+    const oz = sz + SECTION / 2
+    const positions = new Float32Array(count * 3)
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = g.positions[i * 3]! + ox
+      positions[i * 3 + 1] = g.positions[i * 3 + 1]! + oy
+      positions[i * 3 + 2] = g.positions[i * 3 + 2]! + oz
     }
+
+    chunks.push({
+      positions,
+      normals: g.normals,
+      colors: g.colors,
+      uvs: g.uvs,
+      indices: Uint32Array.from(g.indices),
+      vertices: count,
+    })
+    vertices += count
+    indices += g.indices.length
   }
 
   return concat(chunks, vertices, indices)
-}
-
-/** 段里有没有非空气方块。 */
-function sectionHasContent(store: WorldStore, sx: number, sy: number, sz: number): boolean {
-  const x1 = Math.min(sx + SECTION - 1, store.volume.max.x)
-  const y1 = Math.min(sy + SECTION - 1, store.volume.max.y)
-  const z1 = Math.min(sz + SECTION - 1, store.volume.max.z)
-  for (let y = Math.max(sy, store.volume.min.y); y <= y1; y++) {
-    for (let z = Math.max(sz, store.volume.min.z); z <= z1; z++) {
-      for (let x = Math.max(sx, store.volume.min.x); x <= x1; x++) {
-        if (!store.isAir({ x, y, z })) return true
-      }
-    }
-  }
-  return false
 }
 
 function floor16(value: number): number {

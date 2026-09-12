@@ -186,7 +186,7 @@ export const verifyTool = defineTool<{ claims: Claim[] }>({
     'After any modification call it to read back the result before claiming completion — **it is forbidden to say "done" without reading back**.\n' +
     'Before calling it you must write down your expectations in claims; if you cannot, you have not thought through what you are doing.\n' +
     'Available checks: block_at (a cell is a given block — write properties in brackets to also constrain them, e.g. `minecraft:oak_stairs[facing=west]`; properties you omit are not constrained) / air_at (a cell is air) / count (the count of a block is within a range)' +
-    '/ supported (no floating blocks in a region — floating means the whole column below is empty down to the build-volume floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane).',
+    '/ supported (no floating blocks in a region — floating means the whole column below is empty down to the reference region floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane).',
   parameters: obj(
     {
       claims: arr(

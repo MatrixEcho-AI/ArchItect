@@ -107,7 +107,7 @@ export function writeResultToTool(
       : `(${bounds.min.x},${bounds.min.y},${bounds.min.z})..(${bounds.max.x},${bounds.max.y},${bounds.max.z})`
   const notes: string[] = []
   if (result.overwrittenNonAir > 0) notes.push(`overwrote ${result.overwrittenNonAir} non-air cells`)
-  if (result.clipped > 0) notes.push(`clipped ${result.clipped} cells outside the volume`)
+  if (result.clipped > 0) notes.push(`clipped ${result.clipped} cells (outside the world height)`)
   if (result.changed === 0) notes.push('no changes made')
 
   return {
@@ -202,7 +202,7 @@ export const fillBoxTool = defineTool<{
     'Fill an axis-aligned box. This is the most-used bulk tool: one call can change thousands of cells — do not place blocks one by one with place_block.\n' +
     'mode: replace (default, unconditional overwrite) / keep (only write where there is air, without destroying existing content) / overlay (only overwrite non-air, recolor a structure)' +
     '/ hollow (keep only the shell, hollow out the inside) / outline (keep only the 12 edges) / destroy (delete, ignores the block argument).\n' +
-    'from and to are two corners of a closed interval, in any order. Parts outside the volume are clipped and reported faithfully.',
+    'from and to are two corners of a closed interval, in any order. The world has no writable boundary, so any X/Z is accepted; only world height (Y) is clipped, and clipping is reported faithfully.',
   parameters: obj(
     {
       from: vec3('start coordinate [x,y,z]'),

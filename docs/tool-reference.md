@@ -141,7 +141,7 @@ Reads the world, so it cannot be nested inside run_batch.
 Repair block states that are locally inconsistent with their neighbours: fence / wall / glass-pane / iron-bars connection booleans (north, south, east, west), the wall post (up), and stair shape (straight / inner_* / outer_*). waterlogged is never touched.
 Run it after symmetrize, paste_region, rotate or any bulk fill that placed connection blocks with their default side values.
 Only cells that are actually inconsistent are rewritten, and the whole pass commits as exactly ONE revision, so a single undo removes it entirely. It is idempotent: running it a second time changes nothing.
-from and to optionally restrict the repair to a box (both must be given together); omit both to repair the whole volume. The result reports how many cells each rule fixed. Half-slabs or stairs that are completely enclosed by solid blocks are reported but NOT modified.
+from and to optionally restrict the repair to a box (both must be given together); omit both to repair the whole world. The result reports how many cells each rule fixed. Half-slabs or stairs that are completely enclosed by solid blocks are reported but NOT modified.
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
@@ -191,7 +191,7 @@ Allowed op tools: fill_box, fill_line, fill_plane, extrude, place_block, erase, 
 ```
 Fill an axis-aligned box. This is the most-used bulk tool: one call can change thousands of cells — do not place blocks one by one with place_block.
 mode: replace (default, unconditional overwrite) / keep (only write where there is air, without destroying existing content) / overlay (only overwrite non-air, recolor a structure)/ hollow (keep only the shell, hollow out the inside) / outline (keep only the 12 edges) / destroy (delete, ignores the block argument).
-from and to are two corners of a closed interval, in any order. Parts outside the volume are clipped and reported faithfully.
+from and to are two corners of a closed interval, in any order. The world has no writable boundary, so any X/Z is accepted; only world height (Y) is clipped, and clipping is reported faithfully.
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
@@ -282,7 +282,7 @@ World size and material histogram: bounding box, width/height/depth, total non-a
 **Structured self-check**: submit a set of "expectations"; the engine judges each one pass/fail and reports the actual value.
 After any modification call it to read back the result before claiming completion — **it is forbidden to say "done" without reading back**.
 Before calling it you must write down your expectations in claims; if you cannot, you have not thought through what you are doing.
-Available checks: block_at (a cell is a given block — write properties in brackets to also constrain them, e.g. `minecraft:oak_stairs[facing=west]`; properties you omit are not constrained) / air_at (a cell is air) / count (the count of a block is within a range)/ supported (no floating blocks in a region — floating means the whole column below is empty down to the build-volume floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane).
+Available checks: block_at (a cell is a given block — write properties in brackets to also constrain them, e.g. `minecraft:oak_stairs[facing=west]`; properties you omit are not constrained) / air_at (a cell is air) / count (the count of a block is within a range)/ supported (no floating blocks in a region — floating means the whole column below is empty down to the reference region floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane).
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |

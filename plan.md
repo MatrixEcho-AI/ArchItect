@@ -1902,8 +1902,9 @@ secrets.bin
 
 ## 18. 实体层（Entity Layer）
 
-> 状态：**P1、P2 已落地**（三层数据模型 · 记账 · `.mcai` 两个新条目 · `extra` 写回 ·
-> `.schem` 与 `.litematic` 的四个字段）。P3–P6 未实施。决策见 D-77…D-86。
+> 状态：**P1–P3 已落地**（三层数据模型 · 记账 · `.mcai` 两个新条目 · `extra` 写回 ·
+> 两种交换格式的四个字段 · 五个工具与闸门）。P4–P6 未实施（渲染还没跟上，
+> 所以模型放下的实体**还看不见**）。决策见 D-77…D-86。
 
 §4 到 §8 的全部设计都建立在一个假设上：**世界 = 整数格 × uint16 stateId**。
 实体打破这个假设——它是浮点位置、可重叠、带附加数据的对象。这一章说明怎么加第二层与第三层，
@@ -2035,6 +2036,30 @@ NBT 就叫这个），实体位置是 `Pos` = double 列表，而**方块实体�
 `compoundFromJson` 顺带改成**按键排序**：导出必须逐字节确定，而 JSON 对象的键序
 取决于它是怎么被写进去的（一次 `.mcai` 往返就可能改变它），于是导出字节跟着变。
 
+**P3 落地记录**（`packages/tools/src/tools/entities.ts`、`core/src/entity/`、`agent/src/prompts.ts`）：
+
+- 五个工具：`place_entity` / `remove_entity` / `list_entities` / `edit_block_entity` /
+  `get_block_entity`。**整批先校验再动世界**——一边校验一边 `set` 的话，第三条类型拼错时
+  前两条已经进去了，而那一笔**没有 op**（撤销撤不掉、日志里也看不见）。
+- **方块实体的种类由方块推出，模型不能自己写**：`oak_sign` 挂的是 `minecraft:sign`、
+  `white_banner` 是 `minecraft:banner`、`player_head` 是 `minecraft:skull`。让模型传这个
+  字段等于让这三样在导出文件里安静地错掉。而 `minecraft-data` 不提供"哪些方块带方块实体"
+  （1.21.4 的 `blocksByName[*].entity` 全空），所以那张表只能自己维护——
+  **表外的方块一律拒绝而不是猜**，猜错的症状是"方块在、附加数据没了"。
+- **白名单取消之后补上的是三条更窄的约束**：类型必须在这个 Minecraft 版本里存在
+  （认不出给候选）、负载必须在**写入时**就能变成 NBT（而不是导出时才发现）、两层各自的上限。
+  新增错误码 `UNKNOWN_ENTITY`——它的候选来源与自纠路径都不是方块那一条。
+- `verify` 加 `entity_at` / `entity_count` / `block_entity_at`：**这是 `place_entity` 之后
+  能过闸门的唯一途径**，方块级别的 claim 读不到实体层。
+- `slice` 把实体画在方块之上（字形从方块池里挖出来，且只在真有实体时才挖），
+  `erase` 报告"还有 N 个实体留在原地"。
+
+**一处需要记住的更正**：闸门是**一个计数器**（`pendingMutations`），任何
+`readback: true` 都会把它清零，与工具名、层无关（D-18「认标志不认工具名」）。
+所以"方块级别的 verify 不算读回实体"这句话是**错的**——我一度这么写进了 prompt，
+核对 loop.ts 之后改成了实话：方块检查**根本不看**实体层，所以它给的答复与
+你刚放下的船无关。"让闸门分层"是一件更大的改动，没有塞进这一期。
+
 **互操作的字段布局（已核对，不要再凭记忆写）**：`web_fetch` 在本机拒绝
 `github.com` / `raw.githubusercontent.com`，但 `curl` 可以——规范原文因此拿到了。
 三处与记忆不同，而且每一处都会产出"这里看着成功、游戏里是错的"文件：
@@ -2162,7 +2187,7 @@ NBT 就叫这个），实体位置是 `Pos` = double 列表，而**方块实体�
 |---|---|---|
 | **P1 内核** ✅ | 三层数据模型 + 七个记账点 + 两种差分 + `contentHash` 纳入两层 | ① 只放一条船 → 日志**真的**多一条 op；② 覆盖一个满箱子再撤销 → **内容还在**；③ `verifyReplay` 在"方块相同、实体不同"时**必须失败** |
 | **P2 容器与互操作** ✅ | 两个新条目 + `packProject` extra 写回 + WAL + `.schem` 与 `.litematic` 四个字段 | ④ 新条目工程被"不认识它们"的读方打开正常、保存后**还在**；⑤ 两种格式的往返都是**逐字节相同**（比逐字段更强——id 由格式不携带，见下） |
-| **P3 工具与闸门** | 五个工具 + `slice`/`verify`/`erase` 扩展 + prompt + 文档 | ⑥ 改东西不 verify → 闸门 nudge；⑦ `docs:check` 与 README 的"24"断言过 |
+| **P3 工具与闸门** ✅ | 五个工具 + `slice`/`verify`/`erase` 扩展 + prompt + 文档 | ⑥ 改东西不 verify → 闸门 nudge；⑦ `docs:check` 与 README 的工具数断言过（24 → 29） |
 | **P4 软件渲染** | 实体网格化 + 货架图集 + 两条软件路径 + 旗帜图案 + 告示牌近似文字 + golden | ⑧ 船的形状与朝向在预置机位下正确（golden 逐字节）；⑨ 不破坏既有 golden |
 | P5 视口与交互 | `ScenePayload` + three 路径 + `pickTriangle` + overlay 浮点盒 + 左栏列表 | ⑩ `--gui-smoke` 新断言；⑪ 点选选中实体 |
 | P6 打磨 | `paste_region`/`symmetrize` 带实体、linter 判据、打包、i18n | ⑫ linter 判据**写死**并配正反样例（附录 D 的教训） |

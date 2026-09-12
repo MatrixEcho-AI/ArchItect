@@ -29,6 +29,7 @@ export type NbtTree = Record<string, Tag>
 export const int = (value: number): Tags[TagType.Int] => ({ type: 'int', value: Math.trunc(value) })
 export const short = (value: number): Tags[TagType.Short] => ({ type: 'short', value: Math.trunc(value) })
 export const byte = (value: number): Tags[TagType.Byte] => ({ type: 'byte', value: Math.trunc(value) })
+export const float = (value: number): Tags[TagType.Float] => ({ type: 'float', value })
 export const double = (value: number): Tags[TagType.Double] => ({ type: 'double', value })
 export const string = (value: string): Tags[TagType.String] => ({ type: 'string', value })
 export const compound = (value: NbtTree): Compound =>
@@ -57,9 +58,14 @@ export const longArray = (values: readonly bigint[]): Tags[TagType.LongArray] =>
   }) as unknown as Tags[TagType.LongArray]
 
 /**
- * 标量列表（int / string / byte …）。元素是**裸值**，不是 `{type, value}` 包装。
+ * 标量列表（int / string / byte …）。
+ *
+ * ⚠️ 元素是**裸值**（`list('string', ['a', 'b'])`），不是 `{type, value}` 包装——
+ * 这是 `prismarine-nbt` 写入时的要求，和复合列表（`compoundList`）是同一类约定。
+ * 写成包装形状的话，`writeUncompressed` 会在 protodef 深处抛
+ * `The "string" argument must be of type string…`：错误指向序列化器，不指向这里。
  */
-export function list<T extends Tag>(type: string, value: readonly T[]): Tags[TagType.List] {
+export function list(type: string, value: readonly unknown[]): Tags[TagType.List] {
   return { type: 'list', value: { type: type as TagType, value: [...value] } } as Tags[TagType.List]
 }
 
@@ -126,6 +132,33 @@ export function asByteArray(tag: Tag | undefined): number[] | undefined {
 export function asIntArray(tag: Tag | undefined): number[] | undefined {
   if (tag === undefined || tag.type !== 'intArray') return undefined
   return [...tag.value]
+}
+
+/**
+ * 读一个数字列表：`intArray` 与 `list<数值类型>` 都认。
+ *
+ * `.schem` 里两种都有：实体的 `Pos` 是 `double[3]`（NBT 里是 **double 列表**），
+ * 方块实体的 `Pos` 是 `integer[3]`（**IntArray**）。按规范写死的读取器会在另一种上失效。
+ */
+export function asNumberList(tag: Tag | undefined): number[] | undefined {
+  if (tag === undefined) return undefined
+  if (tag.type === 'intArray') return [...tag.value]
+  if (tag.type !== 'list') return undefined
+  const elementType = tag.value.type as string
+  const out: number[] = []
+  for (const entry of tag.value.value as unknown[]) {
+    if (typeof entry === 'number') {
+      out.push(entry)
+      continue
+    }
+    // long 列表读出来是 [hi, lo] 对
+    if (elementType === 'long' && Array.isArray(entry)) {
+      out.push(Number(longToBigInt(entry as [number, number])))
+      continue
+    }
+    return undefined
+  }
+  return out
 }
 
 /** 读出来的 `[hi, lo]` → 有符号 64 位。 */

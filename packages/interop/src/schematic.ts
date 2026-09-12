@@ -1,16 +1,21 @@
 import { DEFAULT_HARD_LIMIT } from '@architect/core'
 
+import { compoundFromJson, compoundToJson } from './json-nbt.js'
 import {
   asByteArray,
   asCompound,
+  asCompoundList,
   asInt,
   asIntArray,
+  asNumberList,
   asString,
   byteArray,
   child,
   compound,
+  compoundList,
   int,
   intArray,
+  list,
   readNbt,
   short,
   string,
@@ -45,6 +50,40 @@ export interface SchematicBlock {
   state: string
 }
 
+/**
+ * 一个实体（Sponge 规范里的 `Entity Object`）。
+ *
+ * **位置与方块同一个口径**：相对原理图原点，不含 `Offset`（规范原文：
+ * "relative to the `[0, 0, 0]` position of the schematic (without the offset applied)"）。
+ */
+export interface SchematicEntity {
+  /** 实体类型，Resource Location（`minecraft:oak_boat`）。 */
+  id: string
+  /** `double[3]`。 */
+  pos: [number, number, number]
+  /**
+   * 附加数据，**已经是 JSON 形状**（NBT 类型用 `{"__nbt":…}` 标注保留，见 `json-nbt.ts`）。
+   *
+   * 读进来时 v3 的 `Data`、v2 的 `Extra` 与 v2 的内联写法会合并成这一个对象；
+   * 写出去时统一放在 v3 的 `Data` 下。`Rotation` 就在这里面——**它不是独立字段**。
+   */
+  data: Record<string, unknown>
+}
+
+/**
+ * 一个方块实体（`BlockEntity Object`）。
+ *
+ * `id` 是**方块实体**的类型，不是方块名：`oak_sign` 方块的方块实体是 `minecraft:sign`、
+ * `white_banner` 是 `minecraft:banner`、`player_head` 是 `minecraft:skull`。写错这个字段
+ * 的表现是"方块在、附加数据没了"。
+ */
+export interface SchematicBlockEntity {
+  /** `integer[3]`。 */
+  pos: [number, number, number]
+  id: string
+  data: Record<string, unknown>
+}
+
 export interface SchematicData {
   /** `[宽度(x), 高度(y), 长度(z)]`。 */
   size: [number, number, number]
@@ -52,6 +91,12 @@ export interface SchematicData {
   offset: [number, number, number]
   /** **只含非空气格**。空气占绝大多数，稀疏存省内存也省时间。 */
   blocks: SchematicBlock[]
+  /**
+   * `Entities`。老文件没有这个字段——那时候也没有实体层，缺失与空数组是同一件事。
+   */
+  entities?: SchematicEntity[]
+  /** `BlockEntities`（v3 在 `Blocks` 里、v2 在根上）。缺失同样当空。 */
+  blockEntities?: SchematicBlockEntity[]
   /** 源文件的 `DataVersion`。缺失表示不是 Sponge 格式或没写。 */
   dataVersion?: number
   /** 源文件的 `Version`（2 或 3）。 */
@@ -64,6 +109,10 @@ export interface SchematicData {
 export interface WriteSchematicInput {
   size: [number, number, number]
   blocks: Iterable<SchematicBlock>
+  /** 实体（写进根的 `Entities`）。省略 = 不写这个字段。 */
+  entities?: Iterable<SchematicEntity>
+  /** 方块实体（写进 `Blocks.BlockEntities`）。省略 = 不写这个字段。 */
+  blockEntities?: Iterable<SchematicBlockEntity>
   /** 写进文件的 `DataVersion`。1.21.4 = 4189。 */
   dataVersion: number
   metadata?: Record<string, string>
@@ -113,6 +162,24 @@ export function writeSpongeSchematic(input: WriteSchematicInput): Uint8Array {
   const metadata: NbtTree = {}
   for (const [key, value] of Object.entries(input.metadata ?? {})) metadata[key] = string(value)
 
+  /**
+   * 实体与方块实体。三处**照记忆写必错**的地方，全部按规范原文（`schematic-3.md`）钉死：
+   *
+   * 1. `Entities` 在**根**上，而 `BlockEntities` 在 **`Blocks` 里面**——v2 是两者都在根上。
+   * 2. 附加数据的键 v3 是 **`Data`**、v2 是 **`Extra`**；而且 v2 的实体附加数据是**内联**的
+   *    （`Motion`/`Rotation` 与 `Pos`/`Id` 平级），v3 才嵌在一个子 compound 下。
+   * 3. `Rotation` **不是**必须字段，它只是附加数据的一部分。
+   *
+   * 空的列表不写字段：这两个在规范里都没有 "Required" 标记，而没有实体的原理图
+   * 不该凭空多两个空列表。
+   */
+  const entityTags = [...(input.entities ?? [])].map((entity) =>
+    entityTagOf(entity.pos, entity.id, entity.data),
+  )
+  const blockEntityTags = [...(input.blockEntities ?? [])].map((entity) =>
+    blockEntityTagOf(entity.pos, entity.id, entity.data),
+  )
+
   const schematic: NbtTree = {
     Version: int(3),
     DataVersion: int(input.dataVersion),
@@ -123,11 +190,38 @@ export function writeSpongeSchematic(input: WriteSchematicInput): Uint8Array {
     Blocks: compound({
       Palette: compound(paletteTree),
       Data: byteArray(encodeVarints(indices)),
+      ...(blockEntityTags.length > 0 ? { BlockEntities: compoundList(blockEntityTags) } : {}),
     }),
   }
+  if (entityTags.length > 0) schematic['Entities'] = compoundList(entityTags)
   if (Object.keys(metadata).length > 0) schematic['Metadata'] = compound(metadata)
 
   return writeNbt({ Schematic: compound(schematic) })
+}
+
+/** 实体的 `Pos` 是 `double[3]`——在 NBT 里是 **double 列表**，不是 IntArray。 */
+function entityTagOf(
+  pos: [number, number, number],
+  id: string,
+  data: Record<string, unknown>,
+): NbtTree {
+  return withData({ Pos: list('double', pos), Id: string(id) }, data)
+}
+
+/** 方块实体的 `Pos` 是 `integer[3]`——在 NBT 里是 **IntArray**。 */
+function blockEntityTagOf(
+  pos: [number, number, number],
+  id: string,
+  data: Record<string, unknown>,
+): NbtTree {
+  return withData({ Pos: intArray(pos), Id: string(id) }, data)
+}
+
+/** 附加数据只在**非空**时写 `Data`：规范说它是可选的，空 compound 是噪音。 */
+function withData(head: NbtTree, data: Record<string, unknown>): NbtTree {
+  const payload = compoundFromJson(data)
+  if (Object.keys(payload).length === 0) return head
+  return { ...head, Data: compound(payload) }
 }
 
 /** 读 `.schem`。**v2 与 v3 都认**，也认未压缩的输入。 */
@@ -203,6 +297,19 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
     blocks.push({ x, y, z, state })
   }
 
+  /**
+   * 实体与方块实体。**三个版本差异都要认**（规范 v2 与 v3）：
+   * - `BlockEntities` 的位置：v3 在 `Blocks` 里、v2 在**根**上；
+   * - 附加数据的键：v3 是 `Data`、v2 是 `Extra`；
+   * - v2 的附加数据是**内联**的（与 `Pos`/`Id` 平级），v3 嵌在 `Data` 下。
+   *
+   * 所以两种位置、两个键名、内联与嵌套**全都收**，合并成一份 `data`。
+   * 多认一种写法比按规范严格拒绝更符合 §6 那套读方容忍度；而它不会掩盖结构错误——
+   * `Id` 或 `Pos` 缺失的条目仍然被跳过（数量对不上时在 `ImportResult` 里看得出来）。
+   */
+  const entities = readEntities(schematic['Entities'])
+  const blockEntities = readBlockEntities(blocksTag['BlockEntities'] ?? schematic['BlockEntities'])
+
   const dataVersion = schematic['DataVersion']
   const metadataTree = asCompound(schematic['Metadata'])
   const metadata: Record<string, string> = {}
@@ -211,10 +318,62 @@ export async function readSpongeSchematic(bytes: Uint8Array): Promise<SchematicD
     if (value.length > 0) metadata[key] = value
   }
 
-  const result: SchematicData = { size: [width, height, length], offset, blocks, palette, formatVersion: version }
+  const result: SchematicData = {
+    size: [width, height, length],
+    offset,
+    blocks,
+    entities,
+    blockEntities,
+    palette,
+    formatVersion: version,
+  }
   if (dataVersion !== undefined) result.dataVersion = asInt(dataVersion)
   if (Object.keys(metadata).length > 0) result.metadata = metadata
   return result
+}
+
+function readEntities(tag: Tag | undefined): SchematicEntity[] {
+  const out: SchematicEntity[] = []
+  for (const entry of asCompoundList(tag)) {
+    const id = asString(entry['Id'])
+    const pos = asNumberList(entry['Pos'])
+    if (id.length === 0 || pos === undefined || pos.length !== 3) continue
+    out.push({ id, pos: [pos[0]!, pos[1]!, pos[2]!], data: extraDataOf(entry) })
+  }
+  return out
+}
+
+function readBlockEntities(tag: Tag | undefined): SchematicBlockEntity[] {
+  const out: SchematicBlockEntity[] = []
+  for (const entry of asCompoundList(tag)) {
+    const id = asString(entry['Id'])
+    const pos = asNumberList(entry['Pos'])
+    if (id.length === 0 || pos === undefined || pos.length !== 3) continue
+    out.push({ id, pos: [Math.trunc(pos[0]!), Math.trunc(pos[1]!), Math.trunc(pos[2]!)], data: extraDataOf(entry) })
+  }
+  return out
+}
+
+/**
+ * 一条实体/方块实体记录里的附加数据。
+ *
+ * `Pos` 与 `Id` 是规范规定的字段，剩下的全是附加数据；v3 再额外把它们收进一个
+ * `Data` 子 compound。这里把**内联的其余字段**与 `Data`/`Extra` 两个名字的子
+ * compound 合并成一份 JSON——两个键名都认，是因为规范正文写 `Extra`（v2）、
+ * 而 v2 的示例是内联的，两处不一致，照哪一处都会漏掉另一种写法的文件。
+ */
+function extraDataOf(entry: Record<string, Tag | undefined>): Record<string, unknown> {
+  const inline: Record<string, Tag | undefined> = {}
+  for (const [key, tag] of Object.entries(entry)) {
+    if (key === 'Pos' || key === 'Id' || key === 'Data' || key === 'Extra') continue
+    inline[key] = tag
+  }
+  const out = compoundToJson(inline)
+  for (const key of ['Data', 'Extra']) {
+    const nested = asCompound(entry[key])
+    if (nested !== undefined) Object.assign(out, compoundToJson(nested))
+  }
+  return out
 }
 
 // ── VarInt 与定宽编码 ─────────────────────────────────────────────────────────

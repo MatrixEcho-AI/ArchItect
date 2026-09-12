@@ -914,6 +914,15 @@ async function cmdExport(inv: Invocation): Promise<number> {
         dataVersion: result.dataVersion,
       }),
     )
+    if (result.entities > 0 || result.blockEntities > 0) {
+      out(t('cli.export.sparseLine', { entities: result.entities, blockEntities: result.blockEntities }))
+    }
+    // 附加数据转不成 NBT 就**说出来**：结构导出去了（游戏里能看到实体本身），
+    // 但那一条的额外数据没有。不报的话用户只会觉得"我设的东西丢了"
+    if (result.problems.length > 0) {
+      out(t('cli.export.problemsHeader', { n: result.problems.length }))
+      for (const problem of result.problems.slice(0, 12)) out(`    ${problem}`)
+    }
     out(t('cli.export.outLine', { path: inv.out, kb: (result.bytes.length / 1024).toFixed(1) }))
     out(t('cli.export.worldEdit', { name: basename(inv.out) }))
     return 0
@@ -1026,6 +1035,9 @@ async function cmdImport(inv: Invocation): Promise<number> {
   )
   out(t('cli.import.volume', { volume: `${volume.max.x + 1}x${volume.max.y + 1}x${volume.max.z + 1}` }))
   out(t('cli.import.placed', { placed: result.placed, revision: result.revision }))
+  if (result.entities > 0 || result.blockEntities > 0) {
+    out(t('cli.import.sparse', { entities: result.entities, blockEntities: result.blockEntities }))
+  }
 
   if (result.renamed.length > 0) {
     out(`\n${t('cli.import.renamedHeader', { n: result.renamed.length })}`)

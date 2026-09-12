@@ -524,6 +524,8 @@ export const zhCN = {
     export: {
       schem: '导出 .schem（Sponge v3）',
       schemLine: '  {{size}} 区域   {{blocks}} 方块   DataVersion {{dataVersion}}',
+      sparseLine: '  实体 {{entities}} 个   方块实体 {{blockEntities}} 个',
+      problemsHeader: '  **有 {{n}} 条附加数据没能写进文件**（结构仍然导出了，游戏里能看到实体与方块实体本身）：',
       outLine: '  → {{path}}（{{kb}} KB）',
       worldEdit: '在游戏里用 WorldEdit：//schem load {{name}} 然后 //paste',
       litematic: '导出 .litematic（Litematica v6）',
@@ -539,6 +541,7 @@ export const zhCN = {
       source: '  源尺寸 {{size}}',
       volume: '  工区 {{volume}}',
       placed: '  写入 {{placed}} 格   revision {{revision}}',
+      sparse: '  实体 {{entities}} 个   方块实体 {{blockEntities}} 个',
       renamedHeader: '按改名表迁移了 {{n}} 种方块：',
       more: '  …另有 {{n}} 种',
       unknownHeader: '**有 {{n}} 种方块认不出来，共 {{cells}} 格没有写入**：',

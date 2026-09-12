@@ -1,9 +1,10 @@
 import { DEFAULT_HARD_LIMIT } from '@architect/core'
-import type { Bounds, Pos, WorldStore } from '@architect/core'
+import type { Bounds, PlacedEntity, Pos, WorldStore } from '@architect/core'
 
+import { compoundFromJson, numberFromJson, NbtConversionError } from './json-nbt.js'
 import { migrateState } from './migrate.js'
 import { DATA_VERSION_1_21_4, readSpongeSchematic, writeSpongeSchematic } from './schematic.js'
-import type { SchematicBlock, SchematicData } from './schematic.js'
+import type { SchematicBlock, SchematicBlockEntity, SchematicData, SchematicEntity } from './schematic.js'
 
 /**
  * 世界 ↔ 交换格式的桥。
@@ -28,9 +29,83 @@ export interface ExportResult {
   size: [number, number, number]
   /** 实际写进文件的非空气格数。 */
   blocks: number
+  /** 写进文件的实体数。 */
+  entities: number
+  /** 写进文件的方块实体数。 */
+  blockEntities: number
+  /**
+   * 附加数据转不成 NBT 而**只导出了结构**的条目（类型串 + 原因）。
+   *
+   * 这一栏存在是因为"猜"在这里是错的：JSON 分不出 byte/short/int/float/double，
+   * 猜出来的文件在游戏里是错的、而在这里看不出来。转不了就说出来，别假装成功。
+   */
+  problems: string[]
   /** 导出的世界坐标范围。 */
   region: Bounds
   dataVersion: number
+}
+
+/** `yaw` 的步长：0..15 一步 22.5°（plan D-82）。规范里旋转是附加数据里的 `Rotation`。 */
+const YAW_STEP = 22.5
+
+const cellInside = (x: number, y: number, z: number, region: Bounds): boolean => {
+  const cx = Math.floor(x)
+  const cy = Math.floor(y)
+  const cz = Math.floor(z)
+  return (
+    cx >= region.min.x && cx <= region.max.x &&
+    cy >= region.min.y && cy <= region.max.y &&
+    cz >= region.min.z && cz <= region.max.z
+  )
+}
+
+/**
+ * 默认导出范围：**方块与两层稀疏数据的并集**。
+ *
+ * 只用 `contentBounds()` 会安静地漏掉悬在建筑之上的实体（船浮在水面上、盔甲架站在
+ * 屋顶的栏杆外），因为那个包围盒只算方块。交换格式里没有"世界坐标"，
+ * 范围之外的东西就是不在文件里——所以范围必须自己长到装得下。
+ */
+function exportBoundsOf(store: WorldStore): Bounds | undefined {
+  let box = store.contentBounds()
+  const grow = (x: number, y: number, z: number): void => {
+    const cell = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }
+    if (box === undefined) {
+      box = { min: { ...cell }, max: { ...cell } }
+      return
+    }
+    box = {
+      min: {
+        x: Math.min(box.min.x, cell.x),
+        y: Math.min(box.min.y, cell.y),
+        z: Math.min(box.min.z, cell.z),
+      },
+      max: {
+        x: Math.max(box.max.x, cell.x),
+        y: Math.max(box.max.y, cell.y),
+        z: Math.max(box.max.z, cell.z),
+      },
+    }
+  }
+  for (const entity of store.entities.list()) grow(entity.x, entity.y, entity.z)
+  for (const entity of store.blockEntities.list()) grow(entity.x, entity.y, entity.z)
+  return box
+}
+
+/**
+ * 实体的附加数据。
+ *
+ * 模型的 `yaw`/`pitch` 是一等字段，而规范里旋转只是附加数据里的 `Rotation`。
+ * **`data.Rotation` 优先**：从外部文件读进来的那个才是原值（可能写的是 189.3°，
+ * 而我们的 `yaw` 是 22.5° 的步长，量化回去就毁了）；我们自己的实体没有它，
+ * 才由 `yaw` 生成。两个方向因此都是无损的。
+ */
+function entityExtra(entity: PlacedEntity): Record<string, unknown> {
+  const data: Record<string, unknown> = { ...(entity.data ?? {}) }
+  if (data['Rotation'] === undefined) {
+    data['Rotation'] = [entity.yaw * YAW_STEP, entity.pitch ?? 0]
+  }
+  return data
 }
 
 /**
@@ -41,7 +116,7 @@ export interface ExportResult {
  * 这就是 M7 的验收口径。
  */
 export function exportSchematic(store: WorldStore, options: ExportOptions = {}): ExportResult {
-  const region = options.region ?? store.contentBounds()
+  const region = options.region ?? exportBoundsOf(store)
   if (region === undefined) throw new Error('世界是空的，没有可导出的内容')
   const size: [number, number, number] =
     options.size ??
@@ -58,14 +133,89 @@ export function exportSchematic(store: WorldStore, options: ExportOptions = {}):
     }
   }
 
+  const problems: string[] = []
+  const entities: SchematicEntity[] = []
+  for (const entity of store.entities.list()) {
+    if (!cellInside(entity.x, entity.y, entity.z, region)) continue
+    const place = (data: Record<string, unknown>): SchematicEntity => ({
+      id: entity.type,
+      pos: [entity.x - region.min.x, entity.y - region.min.y, entity.z - region.min.z],
+      data,
+    })
+    const payload = entityExtra(entity)
+    if (!canConvert(payload)) {
+      // 结构照走：类型与位置还是能进游戏的，只有附加数据没有。**但上面已经报出来了**
+      problems.push(`实体 ${entity.id}（${entity.type}）：${conversionProblemOf(payload)}`)
+      entities.push(place({}))
+      continue
+    }
+    entities.push(place(payload))
+  }
+
+  const blockEntities: SchematicBlockEntity[] = []
+  for (const entity of store.blockEntities.list()) {
+    if (!cellInside(entity.x, entity.y, entity.z, region)) continue
+    const place = (data: Record<string, unknown>): SchematicBlockEntity => ({
+      id: entity.kind,
+      pos: [entity.x - region.min.x, entity.y - region.min.y, entity.z - region.min.z],
+      data,
+    })
+    if (!canConvert(entity.data)) {
+      problems.push(`方块实体 ${entity.kind}（${entity.x},${entity.y},${entity.z}）：${conversionProblemOf(entity.data)}`)
+      blockEntities.push(place({}))
+      continue
+    }
+    blockEntities.push(place(entity.data))
+  }
+
   const dataVersion = options.dataVersion ?? DATA_VERSION_1_21_4
   const bytes = writeSpongeSchematic({
     size,
     blocks,
+    entities,
+    blockEntities,
     dataVersion,
     ...(options.metadata !== undefined ? { metadata: options.metadata } : {}),
   })
-  return { bytes, size, blocks: blocks.length, region, dataVersion }
+
+  return {
+    bytes,
+    size,
+    blocks: blocks.length,
+    entities: entities.length,
+    blockEntities: blockEntities.length,
+    problems,
+    region,
+    dataVersion,
+  }
+}
+
+/**
+ * 提前试转一次，好把"转不了"**定位到具体那一条**。
+ *
+ * 不这么做的话，失败会在 `writeSpongeSchematic` 里抛出，于是只能整份重写一遍、
+ * 把所有条目的附加数据都摘掉——一条坏数据连累另外几十条，而报告里也说不清是谁。
+ */
+function canConvert(data: Record<string, unknown>): boolean {
+  try {
+    compoundFromJson(data)
+    return true
+  } catch (error) {
+    return error instanceof NbtConversionError ? false : rethrow(error)
+  }
+}
+
+function conversionProblemOf(data: Record<string, unknown>): string {
+  try {
+    compoundFromJson(data)
+    return ''
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+function rethrow(error: unknown): never {
+  throw error
 }
 
 export interface UnknownBlock {
@@ -97,8 +247,46 @@ export interface ImportResult {
   migrated: boolean
   sourceDataVersion?: number
   size: [number, number, number]
+  /** 写进世界的实体数。 */
+  entities: number
+  /** 写进世界的方块实体数。 */
+  blockEntities: number
   /** 这一次导入的世界 revision。**整次导入只涨一版。** */
   revision: number
+}
+
+/**
+ * 统一成带命名空间的规范串。
+ *
+ * 我们模型里实体/方块实体类型只有一种写法（`minecraft:oak_boat`），而文件里
+ * 两种都见得到——`minecraft:oak_boat` 与 `oak_boat`。不统一的话，`place_entity`
+ * 查白名单、渲染查模型表、导出写回文件会各自遇到"同一个东西的两个身份"。
+ */
+const withNamespace = (id: string): string => (id.includes(':') ? id : `minecraft:${id}`)
+
+/**
+ * 从附加数据里的 `Rotation` 反推 `yaw`/`pitch`，并决定要不要把 `Rotation` 留在 `data` 里。
+ *
+ * 规则是"**只在量化真的会丢信息时才留原值**"：
+ * - 文件的 yaw 正好落在 22.5° 的格点上（我们自己的导出永远是），就把它交给
+ *   `yaw`/`pitch` 两个字段、从 `data` 里删掉——于是"导出 → 导入"逐字段相等
+ *   （除了 id，文件格式不携带它，见 `ExportResult`）；
+ * - 落在格点之外（外部文件里的 189.3°），**原值留在 `data.Rotation` 里**，
+ *   `yaw` 只是"最近的格点"这个给人看的近似。导出时 `data.Rotation` 优先，
+ *   所以重新导出仍然写 189.3°——外部文件 → 我们 → 外部文件是无损的。
+ */
+function rotationOf(data: Record<string, unknown>): { yaw: number; pitch?: number; keep: boolean } {
+  const rotation = data['Rotation']
+  const degrees = Array.isArray(rotation) ? numberFromJson(rotation[0]) : undefined
+  const rawPitch = Array.isArray(rotation) ? numberFromJson(rotation[1]) : undefined
+  if (degrees === undefined) return { yaw: 0, keep: false }
+  const yaw = (((Math.round(degrees / YAW_STEP) % 16) + 16) % 16)
+  return {
+    yaw,
+    // 0 不写成字段：模型的 `pitch` 是可选的，"没有"与"0"在导出时等价
+    ...(rawPitch !== undefined && rawPitch !== 0 ? { pitch: rawPitch } : {}),
+    keep: degrees !== yaw * YAW_STEP,
+  }
 }
 
 export interface ImportOptions {
@@ -237,6 +425,47 @@ export function importSchematicInto(
     throw new Error(`导入写盘失败：${written.reason}（预览 ${written.preview.willChange} 格）`)
   }
 
+  /**
+   * 两层稀疏数据。**必须排在 `writeBlocks` 之后**：方块实体的写入要发生在剪除之后，
+   * 否则刚写进去的附加数据会被同一次写入顺手剪掉——那正是"寄生"的语义，
+   * 顺序反了的症状是"方块和附加数据都在文件里，导入之后附加数据没了"。
+   *
+   * 这里**既不推进版本号也不记 op**：导入的收尾是"rev 0 = 导入时看到的样子"
+   * （命令行动作里那句 `setRevision(0)`），所以整次导入是一个基准，
+   * 方块与两层稀疏数据同属它。
+   */
+  let entityCount = 0
+  for (const entity of data.entities ?? []) {
+    if (!insideFilter(entity.pos, filter)) continue
+    const rotation = rotationOf(entity.data)
+    const extra = { ...entity.data }
+    if (!rotation.keep) delete extra['Rotation']
+    const change = store.entities.set({
+      id: store.entities.allocateId(store.revision + 1),
+      type: withNamespace(entity.id),
+      x: min.x + entity.pos[0],
+      y: min.y + entity.pos[1],
+      z: min.z + entity.pos[2],
+      yaw: rotation.yaw,
+      ...(rotation.pitch !== undefined ? { pitch: rotation.pitch } : {}),
+      ...(Object.keys(extra).length > 0 ? { data: extra } : {}),
+    })
+    if (change !== undefined) entityCount++
+  }
+
+  let blockEntityCount = 0
+  for (const entity of data.blockEntities ?? []) {
+    if (!insideFilter(entity.pos, filter)) continue
+    const change = store.blockEntities.set({
+      x: min.x + entity.pos[0],
+      y: min.y + entity.pos[1],
+      z: min.z + entity.pos[2],
+      kind: withNamespace(entity.id),
+      data: entity.data,
+    })
+    if (change !== undefined) blockEntityCount++
+  }
+
   const output: ImportResult = {
     placed: total - skipped,
     total,
@@ -245,10 +474,32 @@ export function importSchematicInto(
     renamed: [...renamed.values()].sort((a, b) => b.count - a.count || a.from.localeCompare(b.from)),
     migrated: renamed.size > 0 || (data.dataVersion !== undefined && data.dataVersion !== DATA_VERSION_1_21_4),
     size: data.size,
+    entities: entityCount,
+    blockEntities: blockEntityCount,
     revision: written.revision,
   }
   if (data.dataVersion !== undefined) output.sourceDataVersion = data.dataVersion
   return output
+}
+
+/**
+ * 文件坐标是否在 `region` 过滤范围内（`region` 用的也是文件坐标）。
+ *
+ * **按格比，不按浮点比**：方块那一侧的判据是"格子 `z` 在 `[min.z, max.z]` 内"，
+ * 而实体的 `z` 是浮点（4.5 表示第 4 格里的某个位置）。直接用浮点比的话，
+ * `z = 4.5` 会被判成"超过 max.z = 4"而丢掉——而它的格子明明就在范围里。
+ * 同一个区域选择对三层必须给出同样的答案。
+ */
+function insideFilter(pos: readonly number[], filter: Bounds | undefined): boolean {
+  if (filter === undefined) return true
+  const x = Math.floor(pos[0]!)
+  const y = Math.floor(pos[1]!)
+  const z = Math.floor(pos[2]!)
+  return (
+    x >= filter.min.x && x <= filter.max.x &&
+    y >= filter.min.y && y <= filter.max.y &&
+    z >= filter.min.z && z <= filter.max.z
+  )
 }
 
 /** 从字节直接导入（读文件 + 写世界一步到位）。 */

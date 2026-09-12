@@ -508,6 +508,8 @@ export const enUS = {
     export: {
       schem: 'Exported .schem (Sponge v3)',
       schemLine: '  {{size}} area   {{blocks}} blocks   DataVersion {{dataVersion}}',
+      sparseLine: '  {{entities}} entities   {{blockEntities}} block entities',
+      problemsHeader: '  **{{n}} entry/entries could not be written** (the structure was still exported, so the entities and block entities themselves are in the file):',
       outLine: '  → {{path}} ({{kb}} KB)',
       worldEdit: 'In-game with WorldEdit: //schem load {{name}} then //paste',
       litematic: 'Exported .litematic (Litematica v6)',
@@ -523,6 +525,7 @@ export const enUS = {
       source: '  Source size {{size}}',
       volume: '  Volume {{volume}}',
       placed: '  Placed {{placed}} cells   revision {{revision}}',
+      sparse: '  {{entities}} entities   {{blockEntities}} block entities',
       renamedHeader: 'Migrated {{n}} block type(s) via the rename table:',
       more: '  …{{n}} more',
       unknownHeader: '**{{n}} unknown block type(s); {{cells}} cells were not written**:',

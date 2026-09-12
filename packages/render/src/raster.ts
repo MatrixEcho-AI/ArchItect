@@ -60,9 +60,18 @@ export interface RasterStats {
  */
 export function rasterize(
   geometry: WorldGeometry,
-  options: { camera: CameraSpec; atlas: TextureAtlas; canvas: Canvas },
+  options: {
+    camera: CameraSpec
+    atlas: TextureAtlas
+    /** 材质序号 1..n 各自用哪张图集（0 恒为 `atlas`）。见 `WorldGeometry.materials`。 */
+    extraAtlases?: readonly TextureAtlas[]
+    canvas: Canvas
+  },
 ): RasterStats {
   const { camera, atlas, canvas } = options
+  const extraAtlases = options.extraAtlases ?? []
+  const atlasFor = (material: number): TextureAtlas =>
+    material === 0 ? atlas : (extraAtlases[material - 1] ?? atlas)
   const basis = cameraBasis(camera)
   const view = camera.perspective
   const focal = view !== undefined ? focalLength(camera, view.fov) : 0
@@ -106,8 +115,16 @@ export function rasterize(
   }
 
   // ── 2. 分类：不透明 / 半透明，背面剔除 ────────────────────────────────────
-  const tileOpaque = buildOpaqueTileTable(atlas)
-  const tilesPerRow = tilesPerRowOf(atlas)
+  // 每张图集各建一份判据表，按需（通常只有一两张）
+  const gridCache = new Map<number, { tilesPerRow: number; opaque: Uint8Array }>()
+  const gridFor = (material: number): { tilesPerRow: number; opaque: Uint8Array } => {
+    const cached = gridCache.get(material)
+    if (cached !== undefined) return cached
+    const source = atlasFor(material)
+    const entry = { tilesPerRow: tilesPerRowOf(source), opaque: buildOpaqueTileTable(source) }
+    gridCache.set(material, entry)
+    return entry
+  }
   const opaque: number[] = []
   const translucent: number[] = []
   // 按**三角形序号**下标，不是 push——两轮绘制都要能按序号查回自己的明暗
@@ -130,13 +147,16 @@ export function rasterize(
     const area = (px[i1]! - px[i0]!) * (py[i2]! - py[i0]!) - (px[i2]! - px[i0]!) * (py[i1]! - py[i0]!)
     if (area === 0) continue
 
-    // 纹理块由 UV 重心决定：一个面的四个顶点一定落在同一张纹理里
+    // 纹理块由 UV 重心决定：一个面的四个顶点一定落在同一张纹理里。
+    // **先取材质**——两张图集的 tile 网格不一样，查错了表就是随机的通道。
+    const material = geometry.materials?.[t] ?? 0
+    const grid = gridFor(material)
     const uc = (geometry.uvs[i0 * 2]! + geometry.uvs[i1 * 2]! + geometry.uvs[i2 * 2]!) / 3
     const vc = (geometry.uvs[i0 * 2 + 1]! + geometry.uvs[i1 * 2 + 1]! + geometry.uvs[i2 * 2 + 1]!) / 3
-    const tile = tileIndex(uc, vc, tilesPerRow)
+    const tile = tileIndex(uc, vc, grid.tilesPerRow)
 
     faceShades[t] = shadeFor(nx, ny, nz)
-    if (tileOpaque[tile] === 1) opaque.push(t)
+    if (grid.opaque[tile] === 1) opaque.push(t)
     else translucent.push(t)
   }
 
@@ -225,7 +245,7 @@ export function rasterize(
 
         const u = w0 * u0 + w1 * u1 + w2 * u2
         const v = w0 * v0 + w1 * v1 + w2 * v2
-        const texel = sampleAtlas(atlas, u, v)
+        const texel = sampleAtlas(atlasFor(geometry.materials?.[t] ?? 0), u, v)
         const alpha = texel[3] / 255
         if (alpha < CUTOUT_ALPHA) continue
 
@@ -272,9 +292,14 @@ export function rasterize(
     const pieces = clipNear([cornerAt(i0), cornerAt(i1), cornerAt(i2)])
     if (pieces.length === 0) return false
     const shade = faceShades[t]!
+    // 材质要一路传到采样点：透视这条路上三角形会被近平面切成几块，
+    // 每一块都得知道该查哪张图集
+    const material = geometry.materials?.[t] ?? 0
     let touched = false
     for (const piece of pieces) {
-      if (drawPerspectivePiece(piece[0]!, piece[1]!, piece[2]!, shade, writeDepth)) touched = true
+      if (drawPerspectivePiece(piece[0]!, piece[1]!, piece[2]!, shade, writeDepth, material)) {
+        touched = true
+      }
     }
     return touched
   }
@@ -300,6 +325,7 @@ export function rasterize(
     c2: Corner,
     shade: number,
     writeDepth: boolean,
+    material: number,
   ): boolean {
     // 裁剪之后 z 一定 >= 近平面，所以这里不会除以 0
     const iw0 = 1 / c0.z
@@ -343,7 +369,7 @@ export function rasterize(
 
         const u = (w0 * c0.u * iw0 + w1 * c1.u * iw1 + w2 * c2.u * iw2) * inv
         const v = (w0 * c0.v * iw0 + w1 * c1.v * iw1 + w2 * c2.v * iw2) * inv
-        const texel = sampleAtlas(atlas, u, v)
+        const texel = sampleAtlas(atlasFor(material), u, v)
         const alpha = texel[3] / 255
         if (alpha < CUTOUT_ALPHA) continue
 

@@ -188,6 +188,15 @@ export interface WorldGeometry {
   indices: Uint32Array
   /** 顶点数 = positions.length / 3。 */
   vertices: number
+  /**
+   * **逐三角形**的材质序号（长度 = 三角形数）。缺省全是 0 = 方块图集。
+   *
+   * 为什么需要它：实体贴图与方块贴图**不在同一张图集里**，尺寸也不同。
+   * 光栅器的"不透明 / 半透明"判据是"取重心 UV → tile 序号 → 查表"，而两个图集
+   * 的 tile 网格不一样——没有这个字段的话，实体三角形会被拿去查方块那张表，
+   * 判据变成随机。
+   */
+  materials?: Uint8Array
 }
 
 /**
@@ -296,4 +305,64 @@ function blockLoader(version: string): BlockFactory {
     blockFactories.set(version, factory)
   }
   return factory
+}
+
+/**
+ * 把几段几何拼成一段，并给每段标上**材质序号**。
+ *
+ * 方块与实体不在同一张图集里，而 `WorldGeometry` 是一份三角形汤——没有材质位的话，
+ * 光栅器只能拿实体三角形的 UV 去查方块那张 tile 表，判据会变成随机。
+ * 空的段会被跳过，全段材质都是 0 时**不写 `materials`**（省一次分配，
+ * 也让既有路径拿到的对象形状与以前完全一样）。
+ */
+export function concatGeometry(
+  parts: ReadonlyArray<{ geometry: WorldGeometry; material: number }>,
+): WorldGeometry {
+  const kept = parts.filter((part) => part.geometry.vertices > 0)
+  if (kept.length === 0) {
+    return {
+      positions: new Float32Array(0),
+      normals: new Float32Array(0),
+      colors: new Float32Array(0),
+      uvs: new Float32Array(0),
+      indices: new Uint32Array(0),
+      vertices: 0,
+    }
+  }
+  if (kept.length === 1 && kept[0]!.material === 0) return kept[0]!.geometry
+
+  let vertices = 0
+  let indexCount = 0
+  for (const part of kept) {
+    vertices += part.geometry.vertices
+    indexCount += part.geometry.indices.length
+  }
+
+  const positions = new Float32Array(vertices * 3)
+  const normals = new Float32Array(vertices * 3)
+  const colors = new Float32Array(vertices * 3)
+  const uvs = new Float32Array(vertices * 2)
+  const indices = new Uint32Array(indexCount)
+  const materials = new Uint8Array(indexCount / 3)
+
+  let vertexBase = 0
+  let indexBase = 0
+  let triangleBase = 0
+  for (const part of kept) {
+    const { geometry } = part
+    positions.set(geometry.positions, vertexBase * 3)
+    normals.set(geometry.normals, vertexBase * 3)
+    colors.set(geometry.colors, vertexBase * 3)
+    uvs.set(geometry.uvs, vertexBase * 2)
+    for (let i = 0; i < geometry.indices.length; i++) {
+      indices[indexBase + i] = geometry.indices[i]! + vertexBase
+    }
+    const triangles = geometry.indices.length / 3
+    materials.fill(part.material, triangleBase, triangleBase + triangles)
+    vertexBase += geometry.vertices
+    indexBase += geometry.indices.length
+    triangleBase += triangles
+  }
+
+  return { positions, normals, colors, uvs, indices, vertices, materials }
 }

@@ -7,7 +7,8 @@ import { Canvas } from './canvas.js'
 import type { ColorResolver } from './colors.js'
 import { drawOverlayGrid, drawOverlays } from './overlay.js'
 import type { OverlayOptions } from './overlay.js'
-import { loadRenderData, meshWorld } from './mesher.js'
+import { meshWorldEntities } from './entities-render.js'
+import { concatGeometry, loadRenderData, meshWorld } from './mesher.js'
 import type { TexturePack } from './texturepack.js'
 import { rasterize } from './raster.js'
 
@@ -341,8 +342,30 @@ function renderTextured(store: WorldStore, options: RenderOptions): RenderResult
     if (gridAnchor !== undefined) drawOverlayGrid(canvas, camera, basis, gridAnchor, overlays)
   }
 
-  const geometry = meshWorld(store, data)
-  const stats = rasterize(geometry, { camera, atlas: data.atlas, canvas })
+  /**
+   * 方块一段、实体一段，拼成一份三角形汤，各带材质位。
+   *
+   * 实体图集**不能**跟着版本缓存：它取决于这个世界里有哪些实体（只有船的场景
+   * 只需要两张贴图，没必要为全部 94 个模型建一张 16 MB 的图集）。方块图集
+   * 只与版本和资源包有关，所以那一份照旧缓存。
+   */
+  const entities = meshWorldEntities(store, pack)
+  const geometry =
+    entities === undefined
+      ? meshWorld(store, data)
+      : concatGeometry([
+          { geometry: meshWorld(store, data), material: 0 },
+          { geometry: entities.geometry, material: 1 },
+        ])
+  const stats =
+    entities === undefined
+      ? rasterize(geometry, { camera, atlas: data.atlas, canvas })
+      : rasterize(geometry, {
+          camera,
+          atlas: data.atlas,
+          extraAtlases: [entities.atlas],
+          canvas,
+        })
 
   let blocks = 0
   store.forEachNonAir(() => {

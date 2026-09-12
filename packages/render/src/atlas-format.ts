@@ -7,7 +7,13 @@
  * 两边共用同一份判据，不会一边改了另一边忘了。
  */
 
-/** 一张纹理在图集里的像素边长。Minecraft 的方块纹理就是 16×16。 */
+/**
+ * 方块图集里一张纹理的像素边长。Minecraft 的方块纹理就是 16×16。
+ *
+ * 实体图集**不是这个尺寸**（船的贴图是 128×64），所以下面每个按 grid 算的查询
+ * 都改成读图集自己声明的 `tileSize`，缺省才是 16。硬编码一处就会让实体三角形
+ * 的"不透明 / 半透明"判据落到毫不相干的格子上——症状是玻璃后面的东西时有时无。
+ */
 export const TILE_SIZE = 16
 
 /** 图集里一张纹理的归一化矩形。 */
@@ -19,8 +25,24 @@ export interface AtlasIndexEntry {
 }
 
 export interface TextureAtlas {
-  /** 图集边长（像素），等于 `tilesPerRow * TILE_SIZE`。 */
+  /** 图集边长（像素），等于 `tilesPerRow * tileSize`。 */
   size: number
+  /**
+   * 每张纹理在这个图集里占的像素边长。**缺省 16**（方块图集）。
+   *
+   * 同一张图集里所有 tile 等大，只是尺寸可以不是 16——实体贴图因此能装进来，
+   * 而不必给光栅器加一条"逐像素判透明"的新路径。
+   */
+  tileSize?: number
+  /**
+   * 逐 tile 的**实际纹理尺寸**（`[w0,h0, w1,h1, …]`，按 tile 序号）。
+   *
+   * 方块图集不需要它：每张 16×16 正好填满一个 16×16 的 tile。实体图集需要——
+   * 船的贴图是 128×64，塞进一个 128×128 的 tile 时下半是空的，而那块空白的
+   * alpha 是 0。不区分的话 `buildOpaqueTileTable` 会把**整条船**判成半透明，
+   * 于是它走混合通道、不写深度，船自己的面互相之间就不遮挡了。
+   */
+  tileExtents?: Int32Array
   /** RGBA8，长度 = `size * size * 4`。 */
   data: Uint8Array
   /** 纹理名（不带 `.png`）→ 归一化矩形。 */
@@ -36,8 +58,12 @@ export interface TextureAtlas {
   source?: string
 }
 
+/** 这张图集里每个 tile 的像素边长。 */
+export const tileSizeOf = (atlas: Pick<TextureAtlas, 'tileSize'>): number => atlas.tileSize ?? TILE_SIZE
+
 /** 图集里一行放几个 tile。 */
-export const tilesPerRowOf = (atlas: Pick<TextureAtlas, 'size'>): number => Math.round(atlas.size / TILE_SIZE)
+export const tilesPerRowOf = (atlas: Pick<TextureAtlas, 'size' | 'tileSize'>): number =>
+  Math.round(atlas.size / tileSizeOf(atlas))
 
 /** 归一化 UV → tile 序号。越界会夹到合法范围（UV 恰好落在 1.0 上时会出现）。 */
 export function tileIndex(u: number, v: number, tilesPerRow: number): number {
@@ -52,15 +78,22 @@ export function tileIndex(u: number, v: number, tilesPerRow: number): number {
  * 决定一个面走哪条渲染通道：全不透明的可以写深度、不混合；只要有一像素半透明
  * 就得按半透明处理。判错会出现的症状是"玻璃后面的东西时有时无"。
  */
-export function buildOpaqueTileTable(atlas: Pick<TextureAtlas, 'size' | 'data'>): Uint8Array {
+export function buildOpaqueTileTable(
+  atlas: Pick<TextureAtlas, 'size' | 'data' | 'tileSize' | 'tileExtents'>,
+): Uint8Array {
+  const size = tileSizeOf(atlas)
   const tiles = tilesPerRowOf(atlas)
   const table = new Uint8Array(tiles * tiles)
   for (let ty = 0; ty < tiles; ty++) {
     for (let tx = 0; tx < tiles; tx++) {
+      // 只测**这张纹理真的占了**的那一块；`tileExtents` 缺省时就是整个 tile
+      const tileIndex = ty * tiles + tx
+      const width = atlas.tileExtents?.[tileIndex * 2] ?? size
+      const height = atlas.tileExtents?.[tileIndex * 2 + 1] ?? size
       let opaque = 1
-      for (let y = 0; y < TILE_SIZE && opaque === 1; y++) {
-        for (let x = 0; x < TILE_SIZE; x++) {
-          const o = ((ty * TILE_SIZE + y) * atlas.size + tx * TILE_SIZE + x) * 4
+      for (let y = 0; y < height && opaque === 1; y++) {
+        for (let x = 0; x < width; x++) {
+          const o = ((ty * size + y) * atlas.size + tx * size + x) * 4
           if (atlas.data[o + 3]! < 255) {
             opaque = 0
             break

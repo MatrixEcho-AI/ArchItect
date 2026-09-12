@@ -259,6 +259,17 @@ export function bakedColorTexturePack(version: string): TexturePack {
     detail: version,
     blockTiles: () => tiles,
     read(path: string): Uint8Array | undefined {
+      // 实体贴图：烘出来的表里**没有**实体的平均色，所以这里画一张确定性的棋盘。
+      // 棋盘而不是纯色，是因为它顺带把 UV 方向也验了——映射反了在 golden 里
+      // 表现为格子的相位不对，而纯色看不出来。尺寸取 64×32（非正方形），
+      // 好让 golden 走一遍"tile 里塞不满"的那条路。
+      if (path.startsWith('entity/')) {
+        const cachedEntity = pngCache.get(path)
+        if (cachedEntity !== undefined) return cachedEntity
+        const png = checkerTile(path)
+        pngCache.set(path, png)
+        return png
+      }
       if (!path.startsWith('block/')) return undefined
       const name = path.slice('block/'.length)
       const cached = pngCache.get(name)
@@ -281,6 +292,33 @@ export function bakedColorTexturePack(version: string): TexturePack {
       return png
     },
   }
+}
+
+/**
+ * 实体贴图的确定性替代品：一张 64×32 的棋盘，色调由路径的哈希决定。
+ *
+ * 为什么不是纯色：golden 要的是"形状与朝向对不对"，而棋盘顺带把 UV 的方向与
+ * 缩放一起验了。为什么尺寸不是 16×16：实体图集的 tile 尺寸是按内容取的，
+ * 用 16 就永远走不到"tile 比贴图大"那条分支，而那条分支正是判透明时最容易错的。
+ */
+function checkerTile(path: string): Uint8Array {
+  const width = 64
+  const height = 32
+  // 由路径定色调：不同实体贴图在 golden 里看得出区别，而同一个路径永远同色
+  let hash = 0
+  for (let i = 0; i < path.length; i++) hash = (hash * 31 + path.charCodeAt(i)) >>> 0
+  const base = [120 + (hash % 80), 110 + ((hash >> 8) % 90), 100 + ((hash >> 16) % 100)]
+  const canvas = new Canvas(width, height, { r: base[0]!, g: base[1]!, b: base[2]! })
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (((x >> 3) + (y >> 3)) % 2 === 0) continue
+      const o = (y * width + x) * 4
+      canvas.data[o] = Math.min(255, base[0]! + 60)
+      canvas.data[o + 1] = Math.min(255, base[1]! + 60)
+      canvas.data[o + 2] = Math.min(255, base[2]! + 60)
+    }
+  }
+  return encodePng(canvas)
 }
 
 /** 一个用户可能把 Minecraft 装在哪儿。返回**存在**的那些，按优先级。 */

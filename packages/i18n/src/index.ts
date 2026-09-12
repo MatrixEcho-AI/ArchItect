@@ -37,22 +37,50 @@ function normalize(input: string | undefined): Locale | undefined {
 }
 
 /**
- * 从环境推断语言：`ARCHITECT_LANG` 优先，其次标准的 `LC_ALL` / `LC_MESSAGES` / `LANG`。
+ * 从环境推断语言：`ARCHITECT_LANG` 优先，其次标准的 `LC_ALL` / `LC_MESSAGES` / `LANG`，
+ * 最后是系统语言。**纯函数**——两个来源都由调用方传进来，测试才确定得下来。
  *
  * CLI 与 Electron 主进程共用这一条，所以 `LANG=en-US architect build` 直接出英文日志（plan §10.4-2）。
+ *
+ * **系统语言这一层是为 Windows 加的。** `LANG` 那一族在 Windows 上一个都不设，
+ * 没有这一层的话，中文 Windows 上永远是缺省的英文。Linux / macOS 上 `LANG` 是用户
+ * 的明确选择，所以排在它前面。
+ */
+export function detectLocale(env: Record<string, string | undefined>, system?: string): Locale {
+  return (
+    normalize(env['ARCHITECT_LANG']) ??
+    normalize(env['LC_ALL']) ??
+    normalize(env['LC_MESSAGES']) ??
+    normalize(env['LANG']) ??
+    normalize(system) ??
+    DEFAULT_LOCALE
+  )
+}
+
+/**
+ * `Intl` 报出来的系统语言，形如 `zh-CN` / `en-US`。浏览器与 Node 都有，不需要任何原生模块。
+ *
+ * 拿不到就返回 `undefined`（ICU 被裁掉的 Node 构建会这样），让调用方兜到 `DEFAULT_LOCALE`。
+ */
+export function systemLocale(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 实际用的那一条：把 `process.env` 与系统语言接起来。
+ *
+ * `override` 给桌面端用——Electron 的 `app.getLocale()` 反映的是系统**显示语言**，
+ * 比 ICU 的默认区域更贴近用户的选择。
  *
  * `process` 走 `globalThis` 取而不是直接引用：**这个包也会被 esbuild 打进渲染进程**，
  * 那里没有 `process`，直接写 `process.env` 会在浏览器里抛 `process is not defined`。
  */
-export function detectLocale(env?: Record<string, string | undefined>): Locale {
-  const source = env ?? nodeEnv()
-  return (
-    normalize(source['ARCHITECT_LANG']) ??
-    normalize(source['LC_ALL']) ??
-    normalize(source['LC_MESSAGES']) ??
-    normalize(source['LANG']) ??
-    DEFAULT_LOCALE
-  )
+export function resolveLocale(override?: string): Locale {
+  return detectLocale(nodeEnv(), override ?? systemLocale())
 }
 
 /** Node 下的环境变量；浏览器里返回空对象。 */
@@ -68,7 +96,7 @@ function nodeEnv(): Record<string, string | undefined> {
  */
 export function initI18n(options: I18nOptions = {}): void {
   onMissing = options.onMissingKey
-  const locale = options.locale ?? detectLocale()
+  const locale = options.locale ?? resolveLocale()
   if (ready) {
     void i18next.changeLanguage(locale)
     return

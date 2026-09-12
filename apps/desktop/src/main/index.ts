@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { detectLocale, initI18n, setLocale, t } from '@architect/i18n'
+import { initI18n, resolveLocale, setLocale, t } from '@architect/i18n'
 import type { LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
@@ -130,7 +130,8 @@ function settingsPath(): string {
 function initStudio(): void {
   const loaded = loadSettings(settingsPath())
   settingsLoad = loaded
-  initI18n({ locale: loaded.settings.locale ?? detectLocale() })
+  // `app.getLocale()` 是系统**显示语言**，比 ICU 的默认区域更贴近用户的选择
+  initI18n({ locale: loaded.settings.locale ?? resolveLocale(app.getLocale()) })
 
   const secrets = createSecretStore(secretsFile(app.getPath('userData')), keychain)
   studio = new StudioService({

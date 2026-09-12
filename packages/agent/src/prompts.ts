@@ -12,7 +12,23 @@
  * 反过来，**别把这个 import 换成任何运行时才算出来的值**。
  */
 
+import { getLocale } from '@architect/i18n'
+import type { Locale } from '@architect/i18n'
 import { SUGGESTED_DESIGN_NOTES_CHARS } from '@architect/tools'
+
+/**
+ * `[OUTPUT LANGUAGE]`：**跟界面语言走**。
+ *
+ * prompt 本身是英文（tool-calling 更稳、token 更省），这一行只是用英文点名"用哪种语言
+ * 回话"——界面说中文就回中文，界面说英文就回英文。漏了它，模型会顺着英文 prompt
+ * 一路用英文回答中文用户（反过来也一样）。
+ *
+ * 代价说清楚：**换语言会让前缀缓存失效一次**。prompt 真的变了，这一次该付。
+ */
+const OUTPUT_LANGUAGE: Record<Locale, string> = {
+  'en-US': `[OUTPUT LANGUAGE] Reply to the user in English. Keep tool arguments and coordinates in ASCII.`,
+  'zh-CN': `[OUTPUT LANGUAGE] Reply to the user in Chinese. Keep tool arguments and coordinates in ASCII.`,
+}
 
 export interface PromptContext {
   /** 工区，形如 `(0,0,0) .. (63,63,63)`。 */
@@ -114,7 +130,7 @@ export function buildSystemPrompt(context: PromptContext): string {
     `    update_notes with your COMPLETE current plan in about ${SUGGESTED_DESIGN_NOTES_CHARS} characters.`,
     `    Older turns may be dropped from your context, and the notes are the only thing that survives.`,
     `    Record decisions a later turn must not undo (facing, dimensions, materials).`,
-    `[OUTPUT LANGUAGE] Reply to the user in Chinese. Keep tool arguments and coordinates in ASCII.`,
+    OUTPUT_LANGUAGE[getLocale()],
   )
 
   if (context.designNotes !== undefined && context.designNotes.length > 0) {

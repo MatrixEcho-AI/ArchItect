@@ -99,6 +99,18 @@ describe('detectLocale', () => {
     expect(detectLocale({ LC_ALL: 'en_US.UTF-8' })).toBe('en-US')
   })
 
+  it('**环境什么都不说时用系统语言**（Windows 上 LANG 那一族从来不设）', () => {
+    expect(detectLocale({}, 'zh-CN')).toBe('zh-CN')
+    expect(detectLocale({}, 'zh-Hans-CN')).toBe('zh-CN')
+    expect(detectLocale({}, 'en-GB')).toBe('en-US')
+    expect(detectLocale({}, 'fr-FR')).toBe('en-US')
+  })
+
+  it('环境变量优先于系统语言', () => {
+    expect(detectLocale({ LANG: 'en_US.UTF-8' }, 'zh-CN')).toBe('en-US')
+    expect(detectLocale({ ARCHITECT_LANG: 'zh-CN' }, 'en-US')).toBe('zh-CN')
+  })
+
   it('都不认识时兜到英文', () => {
     expect(DEFAULT_LOCALE).toBe('en-US')
     expect(detectLocale({ LANG: 'fr_FR.UTF-8' })).toBe('en-US')

@@ -1902,7 +1902,8 @@ secrets.bin
 
 ## 18. 实体层（Entity Layer）
 
-> 状态：**P1 已落地**（三层数据模型 + 记账 + 39 个测试），P2–P6 未实施。
+> 状态：**P1 已落地；P2 的容器部分已落地**（两个新条目 + `extra` 写回 + WAL 已通），
+> P2 的互操作部分（`.schem` / `.litematic` 的四个字段）与 P3–P6 未实施。
 > 决策见 D-77…D-86。
 
 §4 到 §8 的全部设计都建立在一个假设上：**世界 = 整数格 × uint16 stateId**。
@@ -2106,7 +2107,7 @@ interface PlacedEntity {
 | 期 | 内容 | 关键验收 |
 |---|---|---|
 | **P1 内核** ✅ | 三层数据模型 + 七个记账点 + 两种差分 + `contentHash` 纳入两层 | ① 只放一条船 → 日志**真的**多一条 op；② 覆盖一个满箱子再撤销 → **内容还在**；③ `verifyReplay` 在"方块相同、实体不同"时**必须失败** |
-| **P2 容器与互操作** | 两个新条目 + `packProject` extra 写回 + WAL + `.schem`/`.litematic` 四个字段 | ④ 新条目工程旧读方打开正常、保存后**还在**；⑤ 往返逐字段相等 |
+| **P2 容器与互操作** | 两个新条目 ✅ + `packProject` extra 写回 ✅ + WAL ✅ + `.schem`/`.litematic` 四个字段 ⛔ | ④ ✅ 新条目工程被"不认识它们"的读方打开正常、保存后**还在**；⑤ ⛔ 往返逐字段相等（待互操作落地） |
 | **P3 工具与闸门** | 五个工具 + `slice`/`verify`/`erase` 扩展 + prompt + 文档 | ⑥ 改东西不 verify → 闸门 nudge；⑦ `docs:check` 与 README 的"24"断言过 |
 | **P4 软件渲染** | 实体网格化 + 货架图集 + 两条软件路径 + 旗帜图案 + 告示牌近似文字 + golden | ⑧ 船的形状与朝向在预置机位下正确（golden 逐字节）；⑨ 不破坏既有 golden |
 | P5 视口与交互 | `ScenePayload` + three 路径 + `pickTriangle` + overlay 浮点盒 + 左栏列表 | ⑩ `--gui-smoke` 新断言；⑪ 点选选中实体 |
@@ -2133,10 +2134,28 @@ P1–P4 全部是纯内核 + 纯计算，**不碰 Electron**（守 D5），可�
   （同一格"先剪除旧的、再写入新的"就是两条同键记录），顺序错了的表现是撤销之后
   那个格子上内容凭空消失。这条是写测试时撞出来的。
 
-**已知的 P1 边界**：`.mcai` **还存不下这两层**。`packProject` 每次都写全量快照
-（`baseRevision === revision`），所以打开工程时那两层的唯一来源——重放——根本不会跑；
-`world/entities.jsonl` 与 `world/block-entities.jsonl` 是 P2 的事。也就是说：
-**现在放一条船、存盘、再打开，船会没有。**
+**已知的 P1 边界**（**已由 P2 关闭**）：`.mcai` 曾经存不下这两层。
+`packProject` 每次都写全量快照（`baseRevision === revision`），所以打开工程时
+那两层的唯一来源——重放——根本不会跑。P2 加了 `world/entities.jsonl` 与
+`world/block-entities.jsonl` 两个基快照条目，现在放一条船、存盘、再打开，船还在。
+
+**P2 落地记录**（`packages/mcai/`、桌面端 `studio.ts`、`docs/mcai-format.md`）：
+
+- 两个新条目都是 JSONL、**空集合不写条目**（与"读方缺了就当空"对称，
+  也让没用到这两层的工程字节完全不变）。行序确定（实体按 id、方块实体按 y→z→x）。
+- **装载顺序是有意义的**：`restoreColumns` 会 `clear()` 三层，所以两层基快照必须
+  排在它**之后**。反过来的症状是"打开工程之后实体全没了，而方块数据看上去完好"。
+- **`extra` 写回（`PackInput.extra`）**：格式规范 §6.2 那句"未知条目原样写回、
+  不要丢"从写下那天起就没实现过——`unpackProject` 老实收了 `extra`，
+  `packProject` 从来不写。于是"新版本加条目 → 旧版本打开 → 保存"等于删条目。
+  加条目本来是向后兼容的那一类改动，兼容性坏在**保存**这一步，修复点也在那里。
+- 稀疏层的解码器做结构校验并报出行号，上限用**与内存上限相同的数字**
+  （4096 / 65536），而不是随手定的——`unzipSync` 那条 256 MB 只挡字节数，
+  挡不住"1 MB 的 JSON 里塞 500 万个实体"。
+- **未做**：`.schem` / `.litematic` 的 `Entities` / `BlockEntities`(v2 `TileEntities`)。
+  本机访问不到官方规范（`github.com` 与 `raw.githubusercontent.com` 解析到非公网 IP），
+  字段布局没能核对。plan §18.4 本来就写着"接入前核官方 schema"，而 D-24 说得很清楚：
+  自测往返证明的是自洽、不是兼容——照记忆写一版然后当成做完了，是这里唯一不能做的事。
 
 ---
 

@@ -4,7 +4,12 @@ import type { LlmProvider, LlmRequest, LlmResponse, LlmToolCall, LlmUsage } from
 
 export interface ScriptedStep {
   text?: string
-  toolCalls?: Array<{ name: string; args: unknown }>
+  /**
+   * `unparsableArgs` 用来演"模型吐了一段不是合法 JSON 的参数"（见 `LlmToolCall.unparsableArgs`）。
+   * 有它时循环会把这次调用变成一条失败的工具结果，而不是结束 run——真机上
+   * 遇到的就是这条路径，而它必须在没有 API key 的情况下可测。
+   */
+  toolCalls?: Array<{ name: string; args: unknown; unparsableArgs?: string }>
   reasoningContent?: string
 }
 
@@ -51,6 +56,7 @@ export class ScriptedProvider implements LlmProvider {
       id: `call_${this.turn}_${index}`,
       name: call.name,
       args: call.args,
+      ...(call.unparsableArgs !== undefined ? { unparsableArgs: call.unparsableArgs } : {}),
     }))
 
     const response: LlmResponse = {

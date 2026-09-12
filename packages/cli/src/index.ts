@@ -803,7 +803,9 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
             out(t('cli.build.assistant', { text: truncate(event.text, 200) }))
             break
           case 'tool_call':
-            out(`  → ${event.name} ${truncate(JSON.stringify(event.args ?? {}), 140)}`)
+            // 参数原文不是合法 JSON 时把**原文**打出来而不是 `{}`：那才是模型真正发出去的东西，
+            // 而显示 `{}` 会让人以为"调用是空的"，看不出问题在哪
+            out(`  → ${event.name} ${truncate(event.unparsableArgs ?? JSON.stringify(event.args ?? {}), 140)}`)
             break
           case 'tool_result':
             out(`  ← ${event.result.ok ? '' : '✗ '}${truncate(event.result.summary.split('\n')[0] ?? '', 140)}`)

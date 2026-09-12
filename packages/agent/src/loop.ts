@@ -46,7 +46,7 @@ export type AgentEvent =
    * 就是"把刚才那些碎片丢掉"的信号。
    */
   | { type: 'assistant_delta'; turn: number; text: string; reasoning: string }
-  | { type: 'tool_call'; turn: number; id: string; name: string; args: unknown }
+  | { type: 'tool_call'; turn: number; id: string; name: string; args: unknown; unparsableArgs?: string }
   | { type: 'tool_result'; turn: number; id: string; name: string; result: ToolResult }
   | { type: 'images'; turn: number; count: number; bytes: number }
   | { type: 'retry'; attempt: number; reason: string }
@@ -383,9 +383,28 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
         break
       }
       answered++
-      emit({ type: 'tool_call', turn: state.turn, id: call.id, name: call.name, args: call.args })
+      emit({
+        type: 'tool_call',
+        turn: state.turn,
+        id: call.id,
+        name: call.name,
+        args: call.args,
+        ...(call.unparsableArgs !== undefined ? { unparsableArgs: call.unparsableArgs } : {}),
+      })
 
-      const result = await registry.call(ctx, call.name, call.args)
+      // **参数不是合法 JSON**：不执行这个工具，但**也不结束 run**。
+      //
+      // 出错的是模型的输出，不是端点、不是网络。早先这里是抛 `LlmError('PARSE')`，
+      // 循环拿到非重试的错就 `stopReason = 'error'` 收场——模型连自己错在哪都看不到，
+      // 而同一次响应里别的工具调用也一起没了。真机上撞到的是一条 `{"region"::`，
+      // 整个会话就此停住。
+      //
+      // 现在把它变成一条**普通的失败工具结果**：模型看得见原文与错在哪，
+      // 下一轮重发即可。这与 `registry.call` 对工具内部异常的态度是同一条。
+      const result =
+        call.unparsableArgs === undefined
+          ? await registry.call(ctx, call.name, call.args)
+          : malformedArgsResult(call.name, call.unparsableArgs)
       // 进对话的那段文本**先算出来**，事件里也发同一份：档案与界面看到的应当就是
       // 模型看到的那份。否则"模型为什么漏看了后半截"在档案里查不出来——
       // 截断标记只出现在发出去的请求里，而归档的是没截断的原文（D-67 同一个道理）。
@@ -484,8 +503,33 @@ async function chatWithRetry(
   throw lastError instanceof Error ? lastError : new Error(String(lastError))
 }
 
-/** 工具结果转成回灌给 LLM 的文本。**失败也要带足自纠信息**。 */
-export function formatToolResult(result: ToolResult, maxChars = DEFAULT_TOOL_RESULT_CHARS): string {
+/**
+ * 参数原文不是合法 JSON 时，替这个工具调用合成的那条失败结果。
+ *
+ * 措辞在这里定（provider 只交原文）：模型看得见**自己发出去的那串东西**，
+ * 而界面那条 `→` 行显示的是同一段原文、不带这句包装。
+ *
+ * 错误码用 `INVALID_ARGS` 而不是 `INTERNAL`：这是**调用方**的问题，
+ * 也是唯一一条模型自己就能修好的错误码。
+ */
+function malformedArgsResult(name: string, rawArgs: string): ToolResult {
+  return {
+    ok: false,
+    // 原文进 summary：只回一句"参数非法"的话，模型没法定位自己写错了什么
+    summary: t('agent.openai.toolArgsInvalid', { name, args: rawArgs }),
+    data: { malformedArgs: true },
+    error: {
+      code: 'INVALID_ARGS',
+      message: `Arguments for ${name} could not be parsed`,
+      hint:
+        'Re-send the same call with well-formed JSON. Common causes: a trailing/stray colon, ' +
+        'a trailing comma, single quotes instead of double quotes, or an unescaped newline or quote ' +
+        'inside a string. Coordinates are plain arrays of three numbers, e.g. {"from":[0,0,0],"to":[4,3,4]}.',
+    },
+  }
+}
+
+/** 工具结果转成回灌给 LLM 的文本。**失败也要带足自纠信息**。 */export function formatToolResult(result: ToolResult, maxChars = DEFAULT_TOOL_RESULT_CHARS): string {
   const text = result.ok
     ? result.summary
     : `ERROR [${result.error?.code ?? 'ERROR'}] ${result.summary}` +

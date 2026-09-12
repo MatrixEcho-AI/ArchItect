@@ -1264,6 +1264,20 @@ interface ProviderConfig {
 
 ---
 
+**一处真机事故：坏的工具参数不能结束 run（D-91）。** 模型吐出 `{"region"::`（多一个冒号），
+provider 在解析 `function.arguments` 时抛了一个**非重试**的 `LlmError('PARSE')`，循环拿到它就
+`stopReason = 'error'` 收场：用户看到的是一行
+`[ERROR] 工具 list_entities 的参数不是合法 JSON：{"region"::`，然后**整个会话停住**。
+
+写那段代码时的注释是"把原文交给上层，它会回灌给模型重试"——**上层从来没有接过这句话**。
+三处一起改：provider 把诊断放进 `LlmToolCall.unparsableArgs` 继续返回（同一次响应里别的调用
+不再被连坐）、循环用 `malformedArgsResult` 把它变成一条 `INVALID_ARGS` 失败结果回灌、
+那段原文同时进档案（否则事后翻 `.mcai` 只看到"模型调了个没有参数的工具"）。
+
+判据本身也值得记下来：**只有"端点/网络/我们自己的 bug"才该结束 run**。模型输出的问题
+——参数不是合法 JSON、方块名拼错、坐标越界——都必须在**工具结果的形状**里回到模型手里。
+这条与 `registry.call` 那句"永远不抛异常"是同一条规矩，只是这次漏在了 provider 里。
+
 ## 10. Electron 应用设计
 
 ### 10.1 窗口与面板
@@ -1857,6 +1871,7 @@ secrets.bin
 | D-88 | **`paste_region` / `symmetrize` 带上实体与方块实体** | 剪贴板多两列；实体存"去掉 id 的模板 + 浮点局部坐标"，粘贴时按新版本重新发号；方块实体只在那一格**真的被写成了源方块**时才搬 | §18.9、plan §17.2 里悬着的那条；只搬方块的话复制一座码头得到一排空箱子、镜像一座水寨得到一片没有船的水面，而两件事都不会报错。`only` 是方块名过滤器所以**不顺走实体**；`clear: true` 的 symmetrize 以源半区为准，目标侧的实体会被删 |
 | D-89 | **实体贴图的路径以资源包命名空间为准，上游的旧路径用一张修正表盖掉** | `entity-models.ts` 的 `MODEL_TEXTURE`（20 条，每类写明理由）；`TexturePack` 统一收 `block/` 与 `item/`，`minecraft-assets` 的目录名只在那一个来源里还原 | §18.6；上游表停在 1.16，207 条引用有 30 条在 1.21.4 里不存在，而失败方式是"形状对、糊了一层兜底灰"。新增 `entity-textures.test.ts` 把"有模型的实体必须有一张真贴图"钉成不变式 |
 | D-90 | **稀疏层单列五条 linter 判据，且刻意不报"悬空"** | `blockentity_orphan`(error) / `blockentity_empty`(info) / `entity_embedded`(warn) / `entity_duplicate`(warn) / `entity_outside`(info)；判据与常量写死在 `lint.ts`，正反样例在 `lint.test.ts` | §18.9；方块悬空是错的，而**实体悬空是常态**（箭、展示框、掉落的方块），豁免名单会随版本漂移、漂移的表现是把正常东西报成 error。改成抓明确得多的另一头：东西被砌进有碰撞盒的方块里 |
+| D-91 | **模型的输出坏掉时，循环不结束——把它变成一条可自纠的工具结果** | `LlmToolCall.unparsableArgs`；provider 不再为"参数不是合法 JSON"抛异常，循环用 `malformedArgsResult` 把它包成一条 `INVALID_ARGS` 失败结果回灌 | §9.1、§9.5；真机事故：模型吐出 `{"region"::`，provider 抛非重试的 `LlmError('PARSE')`，循环 `stopReason='error'` 收场——用户看到的是一行 `[ERROR] 工具 list_entities 的参数不是合法 JSON：{"region"::` 然后会话停住。**出错的是模型的输出，不是端点**，它下一轮完全可能改对；同一次响应里别的工具调用也一起没了。与 `registry.call` 对内部异常的态度同源：一个坏输入不能把循环带走 |
 
 ### 17.2 待定
 

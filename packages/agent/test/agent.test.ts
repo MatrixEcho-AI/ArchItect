@@ -118,6 +118,56 @@ describe('Agent 循环', () => {
     expect(session.log.at(0)!.correlationId).toBe(session.log.at(1)!.correlationId)
   })
 
+  it('**工具参数不是合法 JSON 时，run 继续**：变成一条可自纠的失败结果，模型下一轮能改对', async () => {
+    // 真机事故的复现：模型吐出 `{"region"::`（多一个冒号）。早先 provider 抛非重试的
+    // `LlmError('PARSE')`，循环拿它收场——用户看到的就是一行 `[ERROR] 工具 list_entities
+    // 的参数不是合法 JSON：{"region"::`，然后整个会话停住。出错的是模型的输出，
+    // 而它下一次完全可能写对，所以这条必须回到模型手里。
+    const session = makeSession()
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          {
+            name: 'list_entities',
+            args: {},
+            unparsableArgs: '{"region"::',
+          },
+          { name: 'fill_box', args: { from: [0, 0, 0], to: [1, 0, 1], block: 'stone' } },
+        ],
+      },
+      // 模型看到错误之后重发一次正确的调用
+      { toolCalls: [{ name: 'list_entities', args: {} }] },
+      { text: '看过了，世界里还没有实体。' },
+    ])
+    const state = await runAgent(
+      { provider, registry: session.registry, ctx: session.ctx, system: session.buildSystem(),
+        requireVerification: false },
+      '看看有哪些实体',
+    )
+
+    // ① run 没有因为这条错误停下
+    expect(state.stopReason).toBe('completed')
+    expect(state.error).toBeUndefined()
+
+    // ② 坏的那条拿到了失败结果，**原文与错在哪都在里面**
+    const failed = state.messages.find((m) => m.role === 'tool' && m.content.includes('list_entities'))
+    expect(failed?.content).toContain('ERROR [INVALID_ARGS]')
+    // 三个信息缺一不可：**哪个工具**、**原文**、**怎么改**
+    expect(failed?.content).toContain('list_entities')
+    expect(failed?.content).toContain('{"region"::')
+    expect(failed?.content).toContain('HINT:')
+
+    // ③ 同一次响应里**别的**调用照常执行了（抛异常版本会把这条一起丢掉）
+    expect(session.store.revision).toBe(1)
+
+    // ④ 配对完好：每个 tool_call 都有一条 tool 消息——否则下一次请求直接 400，
+    //    而这份历史会被留下当下一轮的 history，400 不是一次性的
+    const ids = state.messages.flatMap((m) => (m.toolCalls ?? []).map((call) => call.id))
+    const answered = new Set(state.messages.filter((m) => m.role === 'tool').map((m) => m.toolCallId))
+    expect(ids.length).toBeGreaterThan(0)
+    for (const id of ids) expect(answered.has(id), `tool_call ${id} 没有对应的回复`).toBe(true)
+  })
+
   it('截图以**独立的 user 消息**回灌（OpenAI 的 tool 消息只收文本）', async () => {
     const session = makeSession()
     const provider = new ScriptedProvider([

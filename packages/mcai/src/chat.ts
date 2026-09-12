@@ -36,6 +36,14 @@ export interface ChatToolCallRecord {
   id: string
   name: string
   args: unknown
+  /**
+   * 模型给的参数**原文不是合法 JSON** 时的那段**原文**（截断到 200 字符）。
+   *
+   * 必须进档案：`args` 这时候只是个空占位（`{}`），只存它的话，事后翻档案
+   * 只会看到"模型调了一个没有参数的工具"，而真实情况是它吐了一段坏 JSON。
+   * 这一条与 `tool_result` 里那条 ERROR 合起来，才够离线复现。
+   */
+  unparsableArgs?: string
 }
 
 export interface ChatMessageRecord {

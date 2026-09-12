@@ -1016,7 +1016,8 @@ export class ChatController {
         this.closeStream()
         const message = this.newMessage('tool', event.name)
         message.toolName = event.name
-        message.args = compactJson(event.args)
+        // 参数原文不是合法 JSON 时显示**原文**而不是 `{}`：那才是模型发出去的东西
+        message.args = event.unparsableArgs ?? compactJson(event.args)
         this.messages.push(message)
         this.meter.toolCall()
         break

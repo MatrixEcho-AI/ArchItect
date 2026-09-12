@@ -33,7 +33,7 @@ export type TranscriptEvent =
    * 不会漂移"那条编译期断言继续成立——新的视图事件必须在这里被**显式**承认。
    */
   | { type: 'assistant_delta'; turn: number; text: string; reasoning: string }
-  | { type: 'tool_call'; turn: number; id: string; name: string; args: unknown }
+  | { type: 'tool_call'; turn: number; id: string; name: string; args: unknown; unparsableArgs?: string }
   | { type: 'tool_result'; turn: number; id: string; name: string; result: TranscriptToolResult }
   | { type: 'images'; turn: number; count: number; bytes: number }
   | { type: 'retry'; attempt: number; reason: string }
@@ -183,7 +183,12 @@ export class TranscriptRecorder {
         // 拆成了多条 `tool_call` 事件，这里再合回去——否则档案里会出现一串
         // 没有内容的空行，而"这一轮模型想做什么"恰恰是最该看清的东西。
         const last = this.messages[this.messages.length - 1]
-        const call = { id: event.id, name: event.name, args: event.args }
+        const call = {
+          id: event.id,
+          name: event.name,
+          args: event.args,
+          ...(event.unparsableArgs !== undefined ? { unparsableArgs: event.unparsableArgs } : {}),
+        }
         if (last !== undefined && last.role === 'assistant' && last.note === undefined) {
           if (last.toolCalls === undefined) last.toolCalls = [call]
           else last.toolCalls.push(call)

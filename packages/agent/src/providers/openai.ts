@@ -426,17 +426,23 @@ export class OpenAiCompatibleProvider implements LlmProvider {
     for (const [index, entry] of [...calls.entries()].sort((a, b) => a[0] - b[0])) {
       if (entry.name.length === 0) continue
       let args: unknown = {}
+      let unparsableArgs: string | undefined
       try {
         args = entry.args.trim().length === 0 ? {} : JSON.parse(entry.args)
       } catch {
-        // 参数不是合法 JSON 时不要吞掉——把原文交给上层，它会回灌给模型重试
-        throw new LlmError(
-          t('agent.openai.toolArgsInvalid', { name: entry.name, args: entry.args.slice(0, 200) }),
-          'PARSE',
-          false,
-        )
+        // **参数不是合法 JSON 时不抛异常**：出错的是模型的输出，不是端点、不是网络。
+        // 抛出去的话循环拿到非重试的 `LlmError` 就 `stopReason = 'error'` 收场——
+        // 模型连自己错在哪都看不到，而它下一轮完全可能改对；同一次响应里**别的**
+        // 工具调用也会被一起丢掉。所以带着原文继续，由循环把它变成一条失败的
+        // 工具结果回灌给模型重试。
+        unparsableArgs = entry.args.slice(0, 200)
       }
-      toolCalls.push({ id: entry.id.length > 0 ? entry.id : `call_${index}`, name: entry.name, args })
+      toolCalls.push({
+        id: entry.id.length > 0 ? entry.id : `call_${index}`,
+        name: entry.name,
+        args,
+        ...(unparsableArgs !== undefined ? { unparsableArgs } : {}),
+      })
     }
 
     const reasoningText = reasoning.join('')

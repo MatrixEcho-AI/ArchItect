@@ -670,6 +670,50 @@ describe('OpenAI 兼容层的自适应（plan §9.5 排查清单自动化）', (
     expect(response.usage).toEqual({ in: 123, out: 45, cachedIn: 100 })
   })
 
+  it('**参数不是合法 JSON 时不再抛异常**：带原文返回，同一次响应里别的调用照常解析', async () => {
+    // 真机事故：模型吐出 `{"region"::`，provider 抛非重试的 `LlmError('PARSE')`，
+    // 循环拿它收场 → 整个 run 就地结束，模型连自己错在哪都看不到。
+    // 出错的是**模型的输出**，不是端点，所以它必须回到模型手里。
+    const sse = [
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{' +
+        '"index":0,"id":"call_1","function":{"name":"list_entities","arguments":"{\\"region\\"::"}}]}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{"tool_calls":[{' +
+        '"index":1,"id":"call_2","function":{"name":"fill_box","arguments":"{\\"from\\":[0,0,0],\\"to\\":[1,1,1],\\"block\\":\\"minecraft:stone\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      'data: [DONE]\n\n',
+    ].join('')
+    const impl = (async () => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sse))
+          controller.close()
+        },
+      }),
+    })) as unknown as typeof fetch
+
+    const provider = createProvider(configFromPreset('deepseek', { model: 'deepseek-flash' }), {
+      apiKey: 'k',
+      fetchImpl: impl,
+    })
+    const response = await provider.chat(base)
+
+    expect(response.toolCalls).toHaveLength(2)
+    const [bad, good] = response.toolCalls
+    // 坏的那条：带着**原文**回来，`args` 只是占位
+    expect(bad?.name).toBe('list_entities')
+    expect(bad?.args).toEqual({})
+    // 交上来的是**原文**，措辞由消费方决定（循环要包装，界面要原样显示）
+    expect(bad?.unparsableArgs).toBe('{"region"::')
+    // 好的那条**没有被连坐**——这正是"抛异常"版本丢掉的东西
+    expect(good).toEqual({
+      id: 'call_2',
+      name: 'fill_box',
+      args: { from: [0, 0, 0], to: [1, 1, 1], block: 'minecraft:stone' },
+    })
+  })
+
   it('**每个 chunk 的 `usage` 都是 `null`**（DeepSeek 的真实形状），不能当成错误', async () => {
     // 真机事故：判据写成 `usage !== undefined` → `null` 漏进来 → 在 null 上读
     // `prompt_tokens` 抛 TypeError → 又被包装成"连接被掐断"，于是所有人都去查网络。

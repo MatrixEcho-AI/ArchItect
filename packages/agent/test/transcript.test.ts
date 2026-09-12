@@ -88,4 +88,42 @@ describe('事件视图与 AgentEvent 不会漂移', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({ role: 'assistant', text: '做好了' })
   })
+
+  it('**参数不是合法 JSON 这件事要进档案**，否则事后只看到"调了个没参数的工具"', async () => {
+    const session = new AgentSession({
+      volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 15, y: 15, z: 15 } },
+      plain: true,
+    })
+    const provider = new ScriptedProvider([
+      {
+        toolCalls: [
+          {
+            name: 'list_entities',
+            args: {},
+            unparsableArgs: '{"region"::',
+          },
+        ],
+      },
+      { text: '好的。' },
+    ])
+    const recorder = new TranscriptRecorder({ title: '看看实体', now: () => '2024-01-01T00:00:00.000Z' })
+    await runAgent(
+      {
+        provider,
+        registry: session.registry,
+        ctx: session.ctx,
+        system: session.buildSystem(),
+        stateLine: session.buildStateLine(),
+        onEvent: (event) => recorder.onEvent(event),
+        requireVerification: false,
+      },
+      '看看有哪些实体',
+    )
+
+    const call = recorder.recording.transcript.messages
+      .flatMap((message) => message.toolCalls ?? [])
+      .find((entry) => entry.name === 'list_entities')
+    // `args` 这时候只是个空占位，只存它的话档案里读不出真相
+    expect(call?.unparsableArgs).toContain('{"region"::')
+  })
 })

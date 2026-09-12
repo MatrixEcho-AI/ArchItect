@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { detectLocale, initI18n, setLocale, t } from '@architect/i18n'
-import type { Budget, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
+import type { Budget, LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
 import { VIEW_PRESETS } from '@architect/render'
@@ -15,6 +15,7 @@ import { AutosaveService } from './services/autosave.js'
 import type { StudioEvent, TestConnectionInput } from './services/chat.js'
 import type { Cipher } from './services/settings.js'
 import { autosaveDirFor, debugFlagNames, isDiagnosticRun } from './services/diagnostics.js'
+import { IMAGE_FILE_FILTERS, readPickedImages } from './services/image-input.js'
 import { createSecretStore, loadSettings, saveSettings, secretsFile, settingsFile } from './services/settings.js'
 import { StudioService } from './services/studio.js'
 import type {
@@ -232,6 +233,25 @@ async function captureInRenderer(input: ShotInput): Promise<Uint8Array | undefin
 
 function persistSettings(): void {
   saveSettings(settingsPath(), studio.chat.settingsValue)
+}
+
+/**
+ * 渲染进程交上来的附图（base64 data URL）。
+ *
+ * 走 base64 而不是让渲染进程把 `Uint8Array` 直接递过来：`ipcRenderer.invoke` 的
+ * 结构化克隆**确实**支持 typed array，但界面手里的本来就是一张 data URL
+ * （缩略图要它），再转一次字节只是白绕。主进程解回来再算内容哈希。
+ */
+interface ChatImageInput {
+  dataUrl: string
+  mimeType: string
+}
+
+/** data URL → `LlmImage`。去掉 `data:...;base64,` 前缀再解 base64。 */
+function toLlmImage(input: ChatImageInput): LlmImage {
+  const comma = input.dataUrl.indexOf(',')
+  const base64 = comma >= 0 ? input.dataUrl.slice(comma + 1) : input.dataUrl
+  return { png: new Uint8Array(Buffer.from(base64, 'base64')), mimeType: input.mimeType }
 }
 
 function createWindow(): void {
@@ -479,12 +499,62 @@ function registerIpc(): void {
 
   // ── 对话 ────────────────────────────────────────────────────────────────────
   handle('chat:view', () => studio.chatView())
-  handle('chat:send', (text: string) => studio.send(text))
+  handle('chat:send', (text: string, images: ChatImageInput[] | undefined) =>
+    studio.send(text, images?.map(toLlmImage)),
+  )
   handle('chat:stop', () => studio.stop())
   handle('chat:clear', () => studio.clearChat())
   handle('chat:image', (id: string) => {
     const png = studio.chatImage(id)
     return png === undefined ? undefined : Buffer.from(png)
+  })
+  // 用户附图的字节（历史消息里那些缩略图）。与 `chat:image` 分开：那是截图表，
+  // 这里是不参与 `retainHistory` 剪枝的附图（见 `ChatController.attachments`）。
+  handle('chat:attachment', (id: string) => {
+    const image = studio.chatAttachment(id)
+    if (image === undefined) return undefined
+    return { png: Buffer.from(image.png), mimeType: image.mimeType }
+  })
+
+  // ── 插图（两个入口：选文件 / 采集视口） ───────────────────────────────────────
+  /**
+   * 打开系统文件选择框，把选中的图片读成可用作插图的数据。
+   *
+   * **取消不是错误**：返回空数组，界面什么都不做。返回 `canceled` 让调用方能区分
+   * "用户点了取消"与"一个文件都没选上"（后者要报错）。
+   */
+  handle('chat:pickImages', async () => {
+    const win = mainWindow
+    if (win === undefined || win.isDestroyed()) return { images: [], rejected: [], canceled: true }
+    const picked = await desktopDialog.showOpenDialog(win, {
+      title: t('image.pickTitle'),
+      buttonLabel: t('image.pickButton'),
+      properties: ['openFile', 'multiSelections'],
+      filters: IMAGE_FILE_FILTERS,
+    })
+    if (picked.canceled || picked.filePaths.length === 0) {
+      return { images: [], rejected: [], canceled: true }
+    }
+    return { ...(await readPickedImages(picked.filePaths)), canceled: false }
+  })
+
+  /**
+   * **采集当前视口**：渲染进程把它此刻的相机发过来，主进程按那个机位出一张图。
+   *
+   * 相机从渲染进程来（它才知道用户拖到了哪儿），渲染从主进程走（复用 `screenshot`
+   * 工具那条链：GPU 优先、拿不到回落软件光栅器）。返回 PNG 字节，界面存下来当附图。
+   */
+  handle('chat:grabViewport', async (request: { camera: unknown; view: string; width: number; height: number }) => {
+    const shot = await studio.grabViewport({
+      camera: request.camera as never,
+      view: request.view,
+      width: request.width,
+      height: request.height,
+    })
+    // 存进附图表的**同时**把它算成 id 交给界面：界面拿 id 画缩略图（走 chat:attachment），
+    // 而发送时用的也是这个 id，所以"采到的就是发出去的那张"。
+    const id = studio.storeChatAttachment({ png: shot.png, mimeType: 'image/png' })
+    return { id, view: shot.view, revision: shot.revision, bytes: shot.png.length }
   })
 
   // 渲染进程的"首次渲染完成"回报。GUI 冒烟测试等它。
@@ -687,6 +757,64 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     const input = document.querySelector('#chat-input');
     check('chat-input', input !== null, input === null ? '没有 #chat-input' : '输入框在');
 
+    /**
+     * **插图的两个入口。**
+     *
+     * 三条断言：在、带 aria-label、待发区那个容器在。
+     *
+     * **可用性不硬断言**：这两个按钮在"正在生成"与"停在历史版本"时是禁用的（locked），
+     * 而冒烟跑到这里时这两件事**都成立**：demo 那一轮可能还在飞，而这个脚本自己刚刚
+     * 把时间线拖到 rev 3（timeline-drag 那一条），世界停在 rev 7 —— 于是
+     * state.behindTip 为真。第一版硬断言 disabled===false，等于拿两个与本次改动
+     * 无关的状态判了红。所以这里读一次真实状态，只在**本该可用**时要求它可用。
+     *
+     * 也**不点它们**：文件选择框是原生对话框，点下去会把冒烟测试挂在那儿等人
+     * （CI 里就是永久卡住）。真实行为由 chat.test.ts 与 image-input.test.ts 覆盖。
+     *
+     * #pending-images 必须**存在**（没图时带 hidden）：那是"图进没进待发区"唯一能读的证据。
+     */
+    const attach = document.querySelector('#btn-attach-image');
+    const grab = document.querySelector('#btn-grab-viewport');
+    const pending = document.querySelector('#pending-images');
+    const chatView = await window.architect.chat();
+    const studioState = await window.architect.state();
+    const busy = chatView.running === true;
+    const behind = studioState.behindTip === true;
+    check(
+      'attach-buttons',
+      attach !== null &&
+        grab !== null &&
+        pending !== null &&
+        attach.getAttribute('aria-label') !== null &&
+        grab.getAttribute('aria-label') !== null &&
+        (busy || behind || (attach.disabled === false && grab.disabled === false)),
+      '插入图片=' + (attach === null ? '缺失' : '在') +
+        ' / 采集视口=' + (grab === null ? '缺失' : '在') +
+        ' / 待发区=' + (pending === null ? '缺失' : '在') +
+        ' / ' +
+        (busy
+          ? '生成中（按设计禁用）'
+          : behind
+            ? '停在历史版本（按设计禁用）'
+            : attach.disabled === false
+              ? '空闲且可用'
+              : '空闲却被禁用'),
+    );
+
+    /**
+     * **粘贴的接线还在。**
+     *
+     * 只断言输入框带着那个标记，不验行为——原因见上面那段的注释：合成 paste 事件
+     * 会把渲染进程弄崩，一个把自己弄红的测试比没有测试更糟。
+     */
+    check(
+      'paste-bound',
+      input !== null && input.getAttribute('data-paste-bound') === '1',
+      input === null
+        ? '没有 #chat-input'
+        : (input.getAttribute('data-paste-bound') === '1' ? '挂在输入框上' : '标记丢了'),
+    );
+
     // 恢复条：**有草稿才显示**。这里不能硬断言"一定是隐藏的"——
     // 上一次跑留下的草稿本来就该让这个条亮着；要断言的是"显示与否跟状态一致"。
     const state = await window.architect.state();
@@ -737,6 +865,31 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     // 元素与写入点都还在——这里断言的是"接线没被拆掉"，一条 class 就能改回可见
     const cost = document.querySelector('#cost');
     check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
+
+    /**
+     * **对话标题必须是一行**（用户报的："你看看这个顶部你不觉得丑吗"）。
+     *
+     * 判据是量出来的高度，不是"看起来对不对"：那一行里标题和右边那串用量读数抢宽度，
+     * 读数更长，而标题原来没有 flex: none——于是它被压到比"对话"两个字还窄，
+     * 两个字各占一行，标题变成一竖条。这种布局事故截图上很显眼，但它既不会报错，
+     * 也不会让任何数据变错，所以只有量高度才拦得住。
+     *
+     * 阈值来自真机实测（960 与 1360 两种窗宽、用户那串长读数）：
+     * 一行 h=19（antd 的行高），两行 h=39。取 28 是两者中间。
+     *
+     * ⚠️ 别改用 getClientRects().length 判行数：块级元素换行之后**仍然只返回 1 个
+     * rect**（实测两行时也是 1），那样写会得到一个永远为真的断言。
+     * （这段脚本整个是 TS 模板字符串：注释里不能出现反引号。）
+     */
+    const chatTitle = document.querySelector('.chat-head h2');
+    const titleHeight = chatTitle === null ? 0 : chatTitle.getBoundingClientRect().height;
+    check(
+      'chat-head-one-line',
+      chatTitle !== null && titleHeight > 0 && titleHeight < 28,
+      chatTitle === null
+        ? '没有 .chat-head h2'
+        : '高 ' + Math.round(titleHeight) + 'px / 文字 "' + chatTitle.textContent + '"',
+    );
 
     // **设置入口在右上角、而且是齿轮**（用户报过一次"设置按钮没了，配不了模型 API"）。
     // 四条一起断言：存在、没带 hidden、antd 图标真的渲染出了 svg、以及它贴着顶栏右缘。

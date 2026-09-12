@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Alert, Button, Flex, Input, Tooltip } from 'antd'
-import { DownOutlined, RightOutlined } from '@ant-design/icons'
+import { DownOutlined, CameraOutlined, PictureOutlined, RightOutlined } from '@ant-design/icons'
 import { t } from '@architect/i18n'
 
 import { usageText } from '../cost.js'
 import { Markdown } from './markdown.js'
-import type { ChatMessageView, ChatView, StudioState } from '../types.js'
+import type {
+  ChatImagePayload,
+  ChatMessageView,
+  ChatView,
+  PickedImage,
+  StagedImage,
+  StudioState,
+} from '../types.js'
 
 /**
  * 对话面板：标题行（含读数）+ 消息列表 + 输入框 + 三条横幅。
@@ -31,16 +38,30 @@ export interface ChatPanelProps {
   /** 一次性提示（导出成功、导入结果、软件视口降级…）。`undefined` = 不显示。 */
   notice: string | undefined
   onNoticeClose: () => void
-  onSend: (text: string) => void
+  /** 发送。`images` 是待发区里那几张（没有就是空数组）。 */
+  onSend: (text: string, images: ChatImagePayload[]) => void
   onStop: () => void
   onRecoveryApply: () => void
   onRecoveryDiscard: () => void
   onOpenSettings: () => void
+  /** 打开文件选择框选图片。回来的那几张由本组件加进待发区。 */
+  onPickImages: () => Promise<PickedImage[]>
+  /** 采集当前视口，返回可直接入待发区的一张。失败时抛错（调用方显示出来）。 */
+  onGrabViewport: () => Promise<StagedImage>
+  /** 一句提示（采集失败之类）。与 `notice` 是同一个出口，所以走 `App`。 */
+  onNotice: (text: string) => void
 }
 
 export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
   const { chat, state } = props
   const [draft, setDraft] = useState('')
+  /**
+   * **待发区**：已经选好、还没随消息发出去的图。
+   *
+   * 放在组件里而不是 `App` 里：它是"输入框的一部分"——发送之后清空、换工程也不该
+   * 留着。放上去只会让 `App` 多一份要跟着清的状态。
+   */
+  const [staged, setStaged] = useState<StagedImage[]>([])
   const messagesRef = useRef<HTMLOListElement>(null)
 
   // 两道闸叠加：运行中不能发，停在历史版本上也不能发。
@@ -54,9 +75,95 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
 
   const submit = (): void => {
     const text = draft.trim()
-    if (text.length === 0 || locked) return
+    // 只有图、没有字也允许发：用户完全可能只想问"这张图你怎么看"。
+    if ((text.length === 0 && staged.length === 0) || locked) return
+    const images: ChatImagePayload[] = staged.map((image) => ({
+      dataUrl: image.dataUrl,
+      mimeType: image.mimeType,
+    }))
     setDraft('')
-    props.onSend(text)
+    setStaged([])
+    props.onSend(text, images)
+  }
+
+  /**
+   * 追加若干张到待发区。
+   *
+   * key 用**一个只增不减的计数器**，不用 `Date.now()`：连着加两次（同时选文件和粘贴
+   * 就做得到）完全可能落在同一毫秒里，那样拼出来的 key 会撞；而 React 遇到重复 key
+   * 时的表现是"删掉一张、另一张跟着消失"——很难往 key 上想。
+   */
+  const nextKey = useRef(0)
+  const stage = (images: StagedImage[]): void => {
+    if (images.length === 0) return
+    setStaged((current) => [
+      ...current,
+      ...images.map((image) => ({ ...image, key: `img-${nextKey.current++}` })),
+    ])
+  }
+
+  /** 采集视口。**失败必须说出来**：静默失败看上去就是"这个按钮没反应"。 */
+  const grab = async (): Promise<void> => {
+    try {
+      stage([await props.onGrabViewport()])
+    } catch (error) {
+      props.onNotice(t('chat.grabFailed', { error: error instanceof Error ? error.message : String(error) }))
+    }
+  }
+
+  const pick = async (): Promise<void> => {
+    const picked = await props.onPickImages()
+    stage(
+      picked.map((image) => ({
+        dataUrl: image.dataUrl,
+        mimeType: image.mimeType,
+        label: image.name,
+      })),
+    )
+  }
+
+  /**
+   * **粘贴进来的图**（截图工具 → ⌘V 是最常见的用法）。
+   *
+   * 剪贴板里同时有文字和图片时**只收图，不让文字也插一遍**：从浏览器或文档里复制
+   * 一段带图的内容，用户要的通常是那张图，而把整段文字一起糊进输入框只会让他删。
+   * 所以有图就 `preventDefault`，没图才走默认粘贴。
+   *
+   * 走 `dataUrl` 与"选文件"同一条路，不额外开一条通道：`storeAttachment` 收的是
+   * 字节，而 data URL 解出来就是字节，主进程不必知道这张图是贴的还是选的。
+   *
+   * **整段包在 try 里**：这个方法跑在 React 的事件派发里，抛出去会顺着派发链
+   * 冒到渲染进程顶层——一次粘贴失败不该把整个界面带走（现场验过：合成一个
+   * `clipboardData` 不对的 paste 事件，崩的就是整条链路）。粘贴失败最多是"没反应"，
+   * 那是可接受的失败方式。
+   */
+  const paste = (event: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    try {
+      // clipboardData 理论上恒在，但合成事件与某些输入法下会是 undefined
+      const items = event.clipboardData?.items
+      if (items === undefined || items === null) return
+      const files = [...items]
+        .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null)
+      if (files.length === 0) return
+      // 有图才拦：没图时让它走默认粘贴（文字照常进来）
+      event.preventDefault()
+      void (async () => {
+        const stitched: StagedImage[] = []
+        for (const file of files) {
+          stitched.push({
+            dataUrl: await readAsDataUrl(file),
+            mimeType: file.type,
+            // 从剪贴板来的图多半没有文件名（截图工具给的是 `image.png` 或空串）
+            label: file.name.length > 0 ? file.name : t('chat.pastedImage'),
+          })
+        }
+        stage(stitched)
+      })()
+    } catch {
+      // 读剪贴板失败就当这次粘贴没发生
+    }
   }
 
   return (
@@ -64,8 +171,12 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
       <div className="chat-head">
         <h2 style={{ margin: 0, fontSize: 12, letterSpacing: 0.4 }}>{t('chat.title')}</h2>
         {/* 用量读数**挪到标题右边**：原来它长在输入框下面、占满一整行，而这一行是常驻的。
-            数字已经压过（`12k` / `1.2M`），缓存只给百分比——见 `cost.ts` 的 `usageText`。 */}
-        <span id="chat-usage" className="chat-usage">
+            数字已经压过（`12k` / `1.2M`），缓存只给百分比——见 `cost.ts` 的 `usageText`。
+
+            它不短：跑久了一行放不下（实测用户那串只比可用宽度多 9px），末尾会被省略号
+            收掉，所以带一个原生 `title`——悬停能看到省略的那部分。反过来，标题那头是用
+            `flex: none` 钉住的（见 `styles.css` 的 `.chat-head h2`）：要挤就挤这行。 */}
+        <span id="chat-usage" className="chat-usage" title={usageText(chat)}>
           {usageText(chat)}
         </span>
       </div>
@@ -143,6 +254,30 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
           submit()
         }}
       >
+        {/* 待发区：**没图时也渲染，只是带 `hidden`**。
+            条件渲染会让冒烟测试无从区分"这张图没进来"与"这块被删了"——
+            `#blocking` 与 `#recovery` 都是这个约定（见它们各自的注释）。 */}
+        <div
+          id="pending-images"
+          className={staged.length > 0 ? undefined : 'hidden'}
+          data-count={String(staged.length)}
+        >
+          {staged.map((image) => (
+            <div className="pending-image" key={image.key}>
+              <StagedThumb image={image} />
+              <button
+                type="button"
+                className="pending-image-remove"
+                aria-label={t('chat.attachRemove')}
+                title={t('chat.attachRemove')}
+                onClick={() => setStaged((current) => current.filter((item) => item.key !== image.key))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+
         <Input.TextArea
           id="chat-input"
           rows={3}
@@ -150,6 +285,16 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
           value={draft}
           placeholder={t('chat.placeholder')}
           onChange={(event) => setDraft(event.target.value)}
+          onPaste={paste}
+          /**
+           * 一个**给冒烟测试看的**标记。
+           *
+           * 粘贴这条链没法在冒烟里合成事件去验（见 `main/index.ts` 那段注释：
+           * 假 `clipboardData` 会把渲染进程弄崩）。所以退一步断言"接线还在"——
+           * 这个属性在，就说明这段 JSX 仍然把这个输入框连到了 `paste`。
+           * 它是 DOM 上唯一能读到的证据，去掉它粘图这件事就没人盯着了。
+           */
+          data-paste-bound="1"
           onKeyDown={(event) => {
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault()
@@ -169,6 +314,32 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
           >
             {t('chat.stop')}
           </Button>
+
+          <span style={{ flex: 1 }} />
+
+          {/* 插图的两个入口。放在**发送按钮那一行、靠右**：
+              它们改的是"这一条要发什么"，与发送是一组动作；
+              左边那个"停止"是另一组。
+
+              **不给 Tooltip**（用户的要求：那是过度说明）。图标认不认得出来靠形状：
+              图片与相机都是通用符号，而 `aria-label` 仍然给着——它服务的是无障碍与
+              自动化，不是给鼠标悬停看的。 */}
+          <Button
+            size="small"
+            id="btn-attach-image"
+            aria-label={t('chat.attachImage')}
+            disabled={locked}
+            icon={<PictureOutlined />}
+            onClick={() => void pick()}
+          />
+          <Button
+            size="small"
+            id="btn-grab-viewport"
+            aria-label={t('chat.grabViewport')}
+            disabled={locked}
+            icon={<CameraOutlined />}
+            onClick={() => void grab()}
+          />
         </div>
       </form>
     </div>
@@ -372,7 +543,109 @@ export function Message({ message }: { message: ChatMessageView }): React.JSX.El
           alt={`rev ${message.imageRevision ?? '?'} ${message.imageView ?? ''}`}
         />
       )}
+
+      {/* 用户给的图：画在**正文下面**，与工具截图同一个视觉族（都可点开放大），
+          但取字节走 `attachment` 而不是 `capture`——两张表。 */}
+      {message.userImageIds !== undefined && message.userImageIds.length > 0 && (
+        <div className="attached-shots">
+          {message.userImageIds.map((id, index) => (
+            <Attachment key={id} id={id} alt={t('chat.attachCount', { count: String(index + 1) })} />
+          ))}
+        </div>
+      )}
     </li>
+  )
+}
+
+/**
+ * 待发区里的一张缩略图。
+ *
+ * 两个来源走两条路，所以这里必须分派一次：
+ *  - **选文件**：字节就在手里（`dataUrl`），直接用；
+ *  - **采集视口**：主进程已经存好了，手里只有 `id`，按 id 取一次字节。
+ *
+ * 为什么不让采集那条也拼一份 data URL 塞进 `dataUrl`：那张图刚在**主进程**里被
+ * 编码成 PNG、算完哈希存好，再把它 base64 回传给渲染进程画一张小缩略图，是白绕
+ * 一大圈（一张 1024×768 的 PNG 有几百 KB）。取字节那条路本来就有（`attachment`）。
+ */
+function StagedThumb({ image }: { image: StagedImage }): React.JSX.Element {
+  const [fetched, setFetched] = useState<string | undefined>(undefined)
+  const [broken, setBroken] = useState(false)
+
+  useEffect(() => {
+    if (image.dataUrl.length > 0 || image.id === undefined) return
+    let revoked: string | undefined
+    let cancelled = false
+    void (async () => {
+      const found = await window.architect.attachment(image.id!)
+      if (found === undefined || cancelled) return
+      const next = URL.createObjectURL(
+        new Blob([found.png as unknown as BlobPart], { type: found.mimeType }),
+      )
+      revoked = next
+      setFetched(next)
+    })()
+    return () => {
+      cancelled = true
+      if (revoked !== undefined) URL.revokeObjectURL(revoked)
+    }
+  }, [image.dataUrl, image.id])
+
+  const src = image.dataUrl.length > 0 ? image.dataUrl : fetched
+  /**
+   * **解码失败就退回文字标签，不画一个碎图标。**
+   *
+   * `sniffImageMime` 认得出 GIF / WebP（网关也普遍收），但渲染进程的 `<img>`
+   * 对个别编码仍可能解不开。那不该表现成"用户选了张图、界面上是个破图"——
+   * 那看起来像功能坏了。退回标签至少还说得出"这是一张叫什么的图"。
+   */
+  if (src === undefined || broken) {
+    return <span className="pending-image-label">{image.label}</span>
+  }
+  return (
+    <img
+      src={src}
+      alt={image.label}
+      title={image.label}
+      onError={() => setBroken(true)}
+    />
+  )
+}
+
+/**
+ * 历史消息里的一张**用户附图**。
+ *
+ * 与 `Shot` 分开而不是复用一个组件：它们取的通道不同（`attachment` / `capture`），
+ * 而这两张表在主进程里是刻意分开的（附图不参与 `retainHistory` 剪枝）。
+ * 复用一个组件势必要在内部按 id 前缀分派，那就把一个数据边界藏进了一个 if 里。
+ */
+export function Attachment({ id, alt }: { id: string; alt: string }): React.JSX.Element {
+  const [url, setUrl] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    let revoked: string | undefined
+    let cancelled = false
+    const load = async (): Promise<void> => {
+      const found = await window.architect.attachment(id)
+      if (found === undefined || cancelled) return
+      const next = URL.createObjectURL(
+        new Blob([found.png as unknown as BlobPart], { type: found.mimeType }),
+      )
+      revoked = next
+      setUrl(next)
+    }
+    void load()
+    return () => {
+      cancelled = true
+      if (revoked !== undefined) URL.revokeObjectURL(revoked)
+    }
+  }, [id])
+
+  if (url === undefined) return <></>
+  return (
+    <Tooltip title={alt}>
+      <img className="shot" src={url} alt={alt} />
+    </Tooltip>
   )
 }
 
@@ -550,4 +823,20 @@ function RecoveryBanner({
       />
     </div>
   )
+}
+
+/**
+ * 文件 → data URL。
+ *
+ * 用 `FileReader` 而不是 `blob.arrayBuffer()` + 手写 base64：后者要把整个 ArrayBuffer
+ * 塞进 `String.fromCharCode`，而大图那样做会**爆调用栈**（实现在几 MB 上就崩），
+ * 得再分块。`FileReader` 这条是浏览器原生、流式、不会爆的。
+ */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('read failed'))
+    reader.readAsDataURL(file)
+  })
 }

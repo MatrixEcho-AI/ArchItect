@@ -110,8 +110,10 @@ function makeChat(options: {
             onEvent(event)
           },
           shouldStop,
+          // 用户附的图也照真实路径带上，这样"贴图之后模型收得到"是可断言的
+          ...(goal.images.length > 0 ? { images: goal.images } : {}),
         },
-        goal,
+        goal.text,
       )
       options.onWorldWrite?.(service)
       return {
@@ -1096,5 +1098,111 @@ describe('流式输出', () => {
     const messages = chat.chatView().messages
     expect(messages.at(-1)).toMatchObject({ role: 'tool', toolName: 'fill_box' })
     expect(messages.some((message) => message.role === 'assistant')).toBe(false)
+  })
+})
+
+/**
+ * **用户插图**（"插入图片" / "采集视口"）。
+ *
+ * 两条链都要通：这一轮模型得真收到图，下一轮那几张还得在历史里。
+ * 后者是这次刻意加的语义——附图与工具截图**不是一回事**：截图会因为 revision
+ * 变了而作废（剪掉），人给的参考图不会。
+ */
+describe('用户附图：这一轮发得出去、下一轮还在', () => {
+  const image = (byte: number, id?: string) => ({
+    png: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, byte]),
+    mimeType: 'image/png',
+    ...(id !== undefined ? { id } : {}),
+  })
+
+  /** 记录每一轮 runner 收到的 goal，并按需回灌一份 messages 当作历史。 */
+  function stage(messagesFor: (turn: number) => LlmMessage[] | undefined) {
+    const secrets = createMemorySecretStore()
+    secrets.set('DeepSeek', 'sk-test-key')
+    const goals: Array<{ text: string; images: ReadonlyArray<{ id?: string; mimeType: string }> }> = []
+    let turn = 0
+    const chat = new ChatController(
+      { settings: deepseekWithKey(), secrets },
+      async (goal) => {
+        turn++
+        goals.push({ text: goal.text, images: goal.images })
+        const messages = messagesFor(turn)
+        return { stopReason: 'completed', usage: { in: 1, out: 1 }, ...(messages !== undefined ? { messages } : {}) }
+      },
+    )
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 200 && chat.chatView().running; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+    }
+    return { chat, goals, settle }
+  }
+
+  it('附图进得了用户消息（界面画缩略图靠这个 id）', async () => {
+    const { chat, goals, settle } = stage(() => undefined)
+    chat.send('看看这张图', [image(1), image(2)])
+    await settle()
+
+    const user = chat.chatView().messages.find((message) => message.role === 'user')
+    expect(user?.userImageIds).toHaveLength(2)
+    // id 是内容寻址 + `user:` 前缀（前缀是 retainHistory 的判据）
+    for (const id of user?.userImageIds ?? []) expect(id.startsWith('user:')).toBe(true)
+    // 界面按 id 取得到字节
+    expect(chat.attachment(user!.userImageIds![0]!)).toBeDefined()
+    // 两张不同的图不能撞成一个 id
+    expect(new Set(user!.userImageIds).size).toBe(2)
+    // 而它们确实被交给了模型
+    expect(goals[0]!.images).toHaveLength(2)
+  })
+
+  it('**只有图没有字也发得出去**（用户可能只想问"这张图你怎么看"）', async () => {
+    const { chat, goals, settle } = stage(() => undefined)
+    chat.send('   ', [image(3)])
+    await settle()
+    expect(goals).toHaveLength(1)
+    expect(goals[0]!.text).toBe('')
+    expect(goals[0]!.images).toHaveLength(1)
+  })
+
+  it('图和字都没有才是空操作', () => {
+    const { chat } = stage(() => undefined)
+    expect(() => chat.send('   ', [])).toThrow()
+  })
+
+  it('**同一张图贴两次只存一份，但消息里两个条目都在**（内容寻址）', async () => {
+    const { chat, settle } = stage(() => undefined)
+    chat.send('两张一样的', [image(7), image(7)])
+    await settle()
+    const ids = chat.chatView().messages.find((message) => message.role === 'user')!.userImageIds!
+    expect(ids[0]).toBe(ids[1])
+    expect(chat.attachment(ids[0]!)).toBeDefined()
+  })
+
+  it('**下一轮的历史里：人给的图留着，模型自己的截图被剪掉**', async () => {
+    const shot = image(9) // 没有 user: 前缀 = 工具截图
+    const { chat, goals, settle } = stage((turn) =>
+      turn === 1
+        ? [
+            { role: 'user', content: '看看这张图', images: [image(4, 'user:aaaa')] },
+            { role: 'tool', content: 'screenshot iso_ne', toolCallId: 'c1', images: [shot] },
+          ]
+        : undefined,
+    )
+    chat.send('看看这张图', [image(4)])
+    await settle()
+    chat.send('那按这个改', [])
+    await settle()
+
+    // 第二轮 runner 收到的 history
+    expect(goals).toHaveLength(2)
+    const history = (chat as unknown as { modelHistory: LlmMessage[] }).modelHistory
+    const userTurn = history.find((message) => message.role === 'user')
+    // 用户那张**原样带着**
+    expect(userTurn?.images).toHaveLength(1)
+    expect(userTurn?.images?.[0]?.id).toBe('user:aaaa')
+    // 工具那张被剪掉，并在同一行说明剪了几张
+    const toolTurn = history.find((message) => message.role === 'tool')
+    expect(toolTurn?.images).toBeUndefined()
+    expect(toolTurn?.content).toContain('1 screenshot(s) omitted')
   })
 })

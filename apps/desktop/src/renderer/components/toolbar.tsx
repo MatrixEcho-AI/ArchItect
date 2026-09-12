@@ -59,8 +59,29 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
   const { state, costText, statusText } = props
   const busy = state === undefined
   return (
-    <Flex align="center" gap={4} style={{ height: '100%' }}>
-      <span style={{ fontWeight: 700, letterSpacing: 0.5, marginRight: 8 }}>{t('app.name')}</span>
+    /**
+     * `align="stretch"` 而不是 `align="center"`：这一行里那个 `flex: 1` 的撑开块
+     * 只有在本容器**比内容宽**时才起作用，而 `align="center"` 会让 antd 输出
+     * `align-items: center`，于是 `.ant-flex` 收缩成 335px（内容宽度）、撑开块
+     * 宽度为 0——设置齿轮就落在 `btn-import` 右边 4px 处，根本不是右上角。
+     *
+     * 这条踩过：`settings-visible` 那条冒烟断言（量齿轮与 header 右缘的距离）
+     * 一直在报 1015px，而肉眼看截图觉得"齿轮在最右边啊"——因为顶栏其余部分是
+     * 浅色背景，335px 处的齿轮看着就像那一行的末端。**别用眼睛代替测量。**
+     * 纵向居中改由每个按钮自己的高度与 `align-items` 以外的因素决定（都一样高）。
+     */
+    <Flex align="stretch" gap={4} style={{ height: '100%', width: '100%' }}>
+      <span
+        style={{
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          marginRight: 8,
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        {t('app.name')}
+      </span>
 
       <IconButton id="btn-new" label="menu.new" disabled={busy} onClick={props.onNew} icon={<PlusOutlined />} />
       <IconButton id="btn-open" label="menu.open" disabled={busy} onClick={props.onOpen} icon={<FolderOpenOutlined />} />

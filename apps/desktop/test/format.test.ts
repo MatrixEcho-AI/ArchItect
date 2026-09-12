@@ -77,12 +77,21 @@ describe('标题行读数：短，且缓存只给百分比', () => {
     screenshots: 6,
   }
 
-  it('token 压成 k/M，轮数与截图也压', () => {
+  it('token 压成 k/M', () => {
     const text = usageText({ usage })
     expect(text).toContain('2M')
     expect(text).toContain('30k')
-    expect(text).toContain('31')
-    expect(text).toContain('6')
+  })
+
+  it('**轮数与截图数不出现**（用户要求删掉：最长又没用）', () => {
+    const text = usageText({ usage })
+    // 这两个数在 usage 里明明有值，但不该被拼进这一行
+    expect(usage.turns).toBe(31)
+    expect(usage.screenshots).toBe(6)
+    expect(text).not.toContain('轮')
+    expect(text).not.toContain('图')
+    expect(text).not.toContain('31')
+    expect(text).not.toContain('shots')
   })
 
   it('**缓存只显示百分比**，不带那个绝对数', () => {
@@ -91,6 +100,10 @@ describe('标题行读数：短，且缓存只给百分比', () => {
     // 绝对数不该出现在这一行里——顶栏那个宽度放不下，也没有决策价值
     expect(text).not.toContain('1.9M')
     expect(text).not.toContain('1931')
+  })
+
+  it('这一行就四项：入、出、缓存、花费', () => {
+    expect(usageText({ usage, costUsd: 0.0123 })).toBe('2M 入 / 30k 出 · 缓存 98% · $0.0123')
   })
 
   it('新会话（还没有任何输入）不显示一串 0', () => {

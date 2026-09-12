@@ -165,10 +165,13 @@ export interface StudioBridge {
 
   // 对话
   chat(): Promise<unknown>
-  send(text: string): Promise<unknown>
+  send(text: string, images?: unknown): Promise<unknown>
   stop(): Promise<unknown>
   clearChat(): Promise<unknown>
   chatImage(id: string): Promise<Uint8Array | undefined>
+  attachment(id: string): Promise<unknown>
+  pickImages(): Promise<unknown>
+  grabViewport(request: unknown): Promise<unknown>
 
   /** 订阅主进程推送（对话进度、世界变化）。返回取消订阅的函数。 */
   subscribe(listener: (event: unknown) => void): () => void
@@ -215,10 +218,13 @@ const bridge: StudioBridge = {
   testConnection: (input) => call('settings:test', input),
 
   chat: () => call('chat:view'),
-  send: (text) => call('chat:send', text),
+  send: (text, images) => call('chat:send', text, images),
   stop: () => call('chat:stop'),
   clearChat: () => call('chat:clear'),
   chatImage: (id) => call('chat:image', id),
+  attachment: (id) => call('chat:attachment', id),
+  pickImages: () => call('chat:pickImages'),
+  grabViewport: (request) => call('chat:grabViewport', request),
 
   subscribe: (listener) => {
     // 包一层：渲染进程永远拿不到 IpcRendererEvent（它带着 sender，能反向拿到底层对象）

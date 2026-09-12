@@ -21,8 +21,14 @@ export interface LlmMessage {
 export interface LlmImage {
   png: Uint8Array
   mimeType: string
-  /** 内容寻址的去重键（sha256 前若干位）。 */
-  id: string
+  /**
+   * 内容寻址的去重键（sha256 前若干位）。
+   *
+   * 由**存图的那一层**在收下图片时算出来（`ChatController.storeAttachment`），
+   * 所以构造 `LlmImage` 的调用方不必给——那个值只有存图的一层知道。
+   * 它只用于去重、以及 `retainHistory` 判断"这张是不是用户给的"，缺了不会画错东西。
+   */
+  id?: string
 }
 
 export interface LlmToolCall {

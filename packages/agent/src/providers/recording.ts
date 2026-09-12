@@ -97,7 +97,9 @@ function serializeRequest(request: LlmRequest): RecordedRequest {
       }
       if (message.toolCallId !== undefined) out.toolCallId = message.toolCallId
       if (message.images !== undefined) {
-        out.images = message.images.map((image) => ({ id: image.id, bytes: image.png.length }))
+        // `id` 现在是可选的（只有存图那一层知道内容哈希），但走过一轮循环的图一定有：
+        // `runAgent` 把它透传下来。这里只把字节数记进档案，缺 id 时记一个占位符。
+        out.images = message.images.map((image) => ({ id: image.id ?? '(no id)', bytes: image.png.length }))
       }
       return out
     }),

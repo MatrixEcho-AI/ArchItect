@@ -66,7 +66,7 @@ function format1(value: number): string {
 /**
  * 对话标题右侧那一行读数：**短**。
  *
- * 形如 `12k 入 · 3k 出 · 5 轮 · 98%`。原来那行是
+ * 形如 `565.3k 入 / 18.1k 出 · 缓存 89% · $0.0123`。原来那行是
  * `1,234,567 入 / 89,012 出   31 turns · 30 tools · 6 shots   $0.0524 · 缓存命中 98%`，
  * 它待在输入框下面、占满一整行——用户要的是"扫一眼知道花了多少"，不是一份账单。
  *
@@ -74,6 +74,8 @@ function format1(value: number): string {
  *  - **缓存那一项只在 provider 报了的时候才显示**（`cacheShare` 返回 undefined 就不显示），
  *    而不是显示 0%——98% 命中是这个 harness 成本结构里最重要的一个数字（§9.2 Regime A）；
  *  - 缓存**只给百分比**，不给绝对数：绝对数在顶栏这个宽度里没有决策价值。
+ *
+ * 只剩四项：入 / 出 / 缓存 / 花费。见下面关于轮次与截图那一段为什么被删掉。
  */
 export function usageText(chat: { usage: ChatUsageView; costUsd?: number } | undefined): string {
   if (chat === undefined) return ''
@@ -87,12 +89,16 @@ export function usageText(chat: { usage: ChatUsageView; costUsd?: number } | und
       }),
     )
   }
-  if (chat.usage.turns > 0) {
-    parts.push(t('cost.compactTurns', { turns: compactNumber(chat.usage.turns) }))
-  }
-  if (chat.usage.screenshots > 0) {
-    parts.push(t('cost.compactShots', { shots: compactNumber(chat.usage.screenshots) }))
-  }
+  /**
+   * **轮数与截图数不显示。**
+   *
+   * 这两项原来跟着 token 一起拼在这一行里，而它们是这里最长、也最没有决策价值的
+   * 两个数：用户要回答的是"花了多少 / 缓存命中有没有生效"，"跑了几轮、截了几张图"
+   * 既不影响任何决定，也不是他能控制的东西。删掉之后这一行短了一大截。
+   *
+   * 数据本身没删：`usage.turns` / `usage.screenshots` 仍在 `UsageTotals` 里记账，
+   * 预算闸门（`agent.usage.maxTurns`）与隐藏的 `#cost` 诊断元素照旧用得到。
+   */
   const cache = cacheShare(chat.usage)
   if (cache !== undefined) parts.push(t('cost.compactCache', { percent: cache.percent }))
   if (chat.costUsd !== undefined) parts.push(t('cost.usd', { amount: chat.costUsd.toFixed(4) }))

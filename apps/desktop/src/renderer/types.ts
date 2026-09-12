@@ -64,6 +64,40 @@ export interface OpDetailView {
 
 // ── 对话 ──────────────────────────────────────────────────────────────────────
 
+/**
+ * 一张**待发**的图：已经进了渲染进程，但还没随消息发出去。
+ *
+ * 带 `dataUrl` 而不是字节：缩略图直接吃它，而 `storeAttachment` 那一步要等
+ * 发送时才发生（用户可能选完又删掉，那就不该占主进程的位置）。
+ */
+export interface StagedImage {
+  dataUrl: string
+  mimeType: string
+  /** 采集视口来的那一张，发出去之后按这个 id 取缩略图；文件选来的没有。 */
+  id?: string
+  /** 文件名或机位标签，画在缩略图的角上。 */
+  label: string
+  /**
+   * React 列表的 key。**由待发区自己补**（见 `ChatPanel` 的 `stage`），
+   * 所以调用方不必给——同一张图选两次是两个条目，key 必须是"第几次加入"
+   * 而不是内容，那只有待发区知道。
+   */
+  key?: string
+}
+
+/** 发给主进程的附图（`chat:send`）。 */
+export interface ChatImagePayload {
+  dataUrl: string
+  mimeType: string
+}
+
+/** 文件选择框回来的一张图（`chat:pickImages`）。 */
+export interface PickedImage {
+  dataUrl: string
+  mimeType: string
+  name: string
+}
+
 export interface ChatMessageView {
   id: number
   role: 'user' | 'assistant' | 'tool'
@@ -74,6 +108,14 @@ export interface ChatMessageView {
   imageId?: string
   imageRevision?: number
   imageView?: string
+  /**
+   * **用户随这条消息给的图**（"插入图片" / "采集视口"）。
+   *
+   * 与 `imageId` 是两回事：那个是**工具截图**（模型自己看回来的，画在工具卡片里），
+   * 这个是**人给的输入**（画在用户消息下方）。取字节走 `attachment(id)`——
+   * 它不在截图表里（见主进程 `ChatController.attachments`）。
+   */
+  userImageIds?: string[]
   /** 工具调用的**完整返回**（给折叠展开用）。与 `text` 是两份：那是默认显示的一行摘要。 */
   toolResult?: string
   gate?: boolean
@@ -316,10 +358,21 @@ export interface ArchitectBridge {
 
   // 对话
   chat(): Promise<ChatView>
-  send(text: string): Promise<ChatView>
+  send(text: string, images?: ChatImagePayload[]): Promise<ChatView>
   stop(): Promise<ChatView>
   clearChat(): Promise<ChatView>
   chatImage(id: string): Promise<Uint8Array | undefined>
+  /** 用户附图的字节。与 `chatImage` 分开一条：那是截图表，这是附图（不参与剪枝）。 */
+  attachment(id: string): Promise<{ png: Uint8Array; mimeType: string } | undefined>
+  /** 打开文件选择框选图片。`canceled` 表示用户直接关掉了对话框（不是错误）。 */
+  pickImages(): Promise<{ images: PickedImage[]; rejected: Array<{ name: string; reason: string }>; canceled: boolean }>
+  /**
+   * **采集当前视口**：把此刻的相机交给主进程，按那个机位出一张图。
+   *
+   * 相机必须从这里给——它只活在渲染进程里（拖动与 WASD 都在这儿），主进程单独
+   * `shoot` 只能得到一个预设机位，那不是用户屏幕上看到的东西。
+   */
+  grabViewport(request: { camera: unknown; view: string; width: number; height: number }): Promise<{ id: string; view: string; revision: number; bytes: number }>
 
   /** 订阅主进程推送（对话进度、世界变化）。返回取消订阅的函数。 */
   subscribe(listener: (event: StudioEvent) => void): () => void

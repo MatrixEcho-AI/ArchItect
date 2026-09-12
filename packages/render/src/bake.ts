@@ -41,7 +41,7 @@ function loadAssets(version: string): AssetsModule {
   const load = assetsModule as unknown as (v: string) => AssetsModule
   const assets = load(version)
   if (assets === undefined || assets === null) {
-    throw new Error(`minecraft-assets 没有版本 "${version}"`)
+    throw new Error(`minecraft-assets has no version "${version}"`)
   }
   return assets
 }

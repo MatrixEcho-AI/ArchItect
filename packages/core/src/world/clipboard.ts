@@ -77,7 +77,7 @@ export function copyRegion(store: WorldStore, from: Pos, to: Pos, options: CopyO
     }
   }
   if (cells.length > limit) {
-    throw new RangeError(`区域里有 ${cells.length} 个非空气方块，超过复制上限 ${limit}；请缩小范围或加 only 过滤`)
+    throw new RangeError(`the region holds ${cells.length} non-air blocks, over the ${limit}-block copy limit; narrow the region or add an only filter`)
   }
   return { origin: min, size, cells }
 }

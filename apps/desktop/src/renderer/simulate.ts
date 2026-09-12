@@ -144,8 +144,8 @@ export async function simulateCameraPanel(shell: ViewportShell | undefined): Pro
     // 拆成变量再拼会让那句中文漂到窗口外，测试就没法把它认成诊断行。
     banner.textContent =
       actual === want
-        ? `[camera-test] OK 模型用这个机位已生效：${actual}`
-        : `[camera-test] FAILED 期望 ${want}，实际 ${actual}`
+        ? `[camera-test] OK the shared camera took effect: ${actual}`
+        : `[camera-test] FAILED wanted ${want}, got ${actual}`
   }
 }
 
@@ -185,8 +185,8 @@ export async function simulateNewProject(): Promise<void> {
     banner.classList.remove('hidden')
     const ok = after.triangles === 0 && afterChat === 0 && afterBlocks === 0
     banner.textContent =
-      `[new-test] ${ok ? 'OK' : 'FAILED'} 画布 ${before.triangles}→${after.triangles} 三角形 · ` +
-      `对话 ${beforeChat}→${afterChat} 条 · 方块 ${beforeBlocks}→${afterBlocks}`
+      `[new-test] ${ok ? 'OK' : 'FAILED'} canvas ${before.triangles}→${after.triangles} triangles · ` +
+      `chat ${beforeChat}→${afterChat} · blocks ${beforeBlocks}→${afterBlocks}`
   }
 }
 

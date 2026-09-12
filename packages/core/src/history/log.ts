@@ -50,8 +50,8 @@ export class EditLog {
     const rev = this.ops.length + 1
     if (worldRevision !== undefined && rev !== worldRevision) {
       throw new EditLogError(
-        `写入后世界在 rev ${worldRevision}，但日志里下一条只能是 rev ${rev}——` +
-          `游标与日志脱节了（宿主忘了传 worldRevision，或者世界被绕过日志改过）`,
+        `after the write the world is at rev ${worldRevision}, but the next log entry can only be rev ${rev}: ` +
+          `the cursor and the log have come apart (the host forgot worldRevision, or the world was changed without going through the log)`,
       )
     }
     const op = makeOp(rev, result.changeSet, {

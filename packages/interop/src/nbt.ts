@@ -176,7 +176,7 @@ export function readNbt(bytes: Uint8Array): Promise<NBT> {
   // 就等于形同虚设——而它下面同样要按结构分配。
   if (buffer.length > MAX_DECOMPRESSED_BYTES) {
     return Promise.reject(
-      new Error(`NBT 输入 ${buffer.length} 字节，超过上限 ${MAX_DECOMPRESSED_BYTES}`),
+      new Error(`NBT input is ${buffer.length} bytes, over the ${MAX_DECOMPRESSED_BYTES}-byte limit`),
     )
   }
   if (compressed) {

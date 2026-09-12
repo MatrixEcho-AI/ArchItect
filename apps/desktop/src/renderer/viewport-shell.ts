@@ -703,7 +703,7 @@ export class ViewportShell {
       const payload: ScenePayload = await window.architect.scene()
       if (payload.revision !== request.revision) {
         return {
-          error: `渲染进程的场景还停在 rev ${payload.revision}，而这一枪要 rev ${request.revision}`,
+          error: `the renderer's scene is still at rev ${payload.revision}, but this shot wants rev ${request.revision}`,
         }
       }
       this.viewport.setRevision(payload.revision)

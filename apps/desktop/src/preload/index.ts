@@ -17,7 +17,7 @@ export interface IpcResult<T> {
 
 async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
   const result = (await ipcRenderer.invoke(channel, ...args)) as IpcResult<T>
-  if (!result.ok) throw new Error(result.error ?? `${channel} 失败`)
+  if (!result.ok) throw new Error(result.error ?? `${channel} failed`)
   return result.value as T
 }
 

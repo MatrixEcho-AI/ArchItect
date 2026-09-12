@@ -206,18 +206,18 @@ export function validateCaptures(bundle: CaptureBundle): string[] {
   const seen = new Set<string>()
   for (const ref of bundle.refs) {
     if (ref.id !== ref.sha256.slice(0, 16)) {
-      problems.push(`截图 ${ref.id} 的 id 与 sha256 前缀不一致`)
+      problems.push(`capture ${ref.id} does not match its own sha256 prefix`)
     }
-    if (seen.has(ref.id)) problems.push(`截图 ${ref.id} 在索引里出现了多次`)
+    if (seen.has(ref.id)) problems.push(`capture ${ref.id} appears more than once in the index`)
     seen.add(ref.id)
     const bytes = bundle.files.get(ref.id)
-    if (bytes === undefined) problems.push(`截图 ${ref.id} 在索引里但没有对应文件`)
+    if (bytes === undefined) problems.push(`capture ${ref.id} is in the index but has no file`)
     else if (bytes.length !== ref.bytes) {
-      problems.push(`截图 ${ref.id} 的文件大小 ${bytes.length} 与索引里的 ${ref.bytes} 不一致`)
+      problems.push(`capture ${ref.id} is ${bytes.length} bytes but the index says ${ref.bytes}`)
     }
   }
   for (const id of bundle.files.keys()) {
-    if (!seen.has(id)) problems.push(`截图 ${id} 有文件但不在索引里`)
+    if (!seen.has(id)) problems.push(`capture ${id} has a file but is not in the index`)
   }
   return problems
 }
@@ -257,7 +257,7 @@ export function collectCaptures(
     // 条目名原样交给下一个解压这份工程的人（打开 → 另存 → 分享，恶意条目就这么
     // 传下去）。真正的 id 是 sha256 的前缀，所以只认十六进制。
     if (!/^[0-9a-f]{8,64}$/.test(id)) {
-      problems.push(`截图条目名不像内容寻址 id，已丢弃：${path}`)
+      problems.push(`capture entry name is not a content-addressed id, dropped: ${path}`)
       continue
     }
     files.set(id, data)

@@ -8,6 +8,7 @@ import { createFallbackColorResolver } from '../src/colors.js'
 import { meshWorldEntities } from '../src/entities-render.js'
 import { ENTITY_FALLBACK_TEXTURE } from '../src/entity-atlas.js'
 import { renderIsometric } from '../src/isometric.js'
+import { pickEntity } from '../src/pick.js'
 import { bakedColorTexturePack } from '../src/texturepack.js'
 
 const VOLUME: Bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 15, y: 15, z: 15 } }
@@ -102,5 +103,40 @@ describe('两条软件路径都要画实体', () => {
       )
     }
     expect(render(true)).not.toEqual(render(false))
+  })
+})
+
+describe('实体拾取：几何里没有身份，靠逐三角形所有者回答', () => {
+  it('屏幕中心的射线命中**那一条**船', () => {
+    const store = makeStore()
+    for (let x = 0; x < 8; x++) for (let z = 0; z < 8; z++) store.setBlock({ x, y: 0, z }, 'minecraft:stone')
+    store.entities.set({ id: 'e_1_1', type: 'minecraft:oak_boat', x: 3.5, y: 1, z: 3.5, yaw: 0 })
+    store.entities.set({ id: 'e_1_2', type: 'minecraft:armor_stand', x: 6.5, y: 1, z: 6.5, yaw: 0 })
+
+    const result = meshWorldEntities(store, pack)!
+    const list = store.entities.list()
+    expect(result.owners.length).toBe(result.geometry.indices.length / 3)
+    // 每个三角形都得有主，而且下标落在清单范围内
+    expect([...new Set(result.owners)].sort()).toEqual(list.map((_, i) => i))
+    expect(Math.max(...result.owners)).toBeLessThan(list.length)
+
+    // 对着第一条船的中心打一枪
+    const camera = cameraForShot(store.contentBounds()!, { view: 'iso_ne', width: 200, height: 150 })
+    const hit = pickEntity(result.geometry, camera, 100, 75, result.owners)
+    expect(hit).toBeDefined()
+    expect(list[hit!.index]!.type).not.toBeUndefined()
+  })
+
+  it('点到天空（世界之外）返回 undefined', () => {
+    const store = makeStore()
+    store.entities.set({ id: 'e_1_1', type: 'minecraft:oak_boat', x: 3.5, y: 1, z: 3.5, yaw: 0 })
+    const result = meshWorldEntities(store, pack)!
+    const camera = cameraForShot({ min: { x: 0, y: 0, z: 0 }, max: { x: 4, y: 4, z: 4 } }, {
+      view: 'iso_ne',
+      width: 200,
+      height: 150,
+    })
+    // 左上角在自动取景之外
+    expect(pickEntity(result.geometry, camera, 1, 1, result.owners)).toBeUndefined()
   })
 })

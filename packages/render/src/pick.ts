@@ -33,6 +33,86 @@ export interface PickHit {
 }
 
 /**
+ * 一次射线与三角形汤的命中，**不含任何方块语义**。
+ *
+ * 抽出来是因为"命中了哪个三角形"是通用的，而"命中之后怎么解释"不是：
+ * 方块那侧要把它吸附到整数格与主轴法线，实体那侧要回到**是哪一个实体**。
+ * 两套语义共用同一段射线与同一个 Möller–Trumbore——各写一遍迟早会在
+ * "贴着边点"这类情况上给出不同的答案。
+ */
+export interface TriangleHit {
+  /** 命中的三角形在 `indices` 里的起始下标。 */
+  triangle: number
+  depth: number
+  point: Vec3
+}
+
+/**
+ * 屏幕像素 → 最近的三角形。没有命中返回 `undefined`（点到天空）。
+ *
+ * **不剔除背面**：方块与实体的几何都有双面（mesher 的绕向会跟着 AO 翻转），
+ * 剔掉背面会让"从里面看"点不到东西。
+ */
+export function pickTriangle(
+  geometry: WorldGeometry,
+  camera: CameraSpec,
+  x: number,
+  y: number,
+): TriangleHit | undefined {
+  const ray = screenRay(camera, x, y)
+  const { positions, indices } = geometry
+  const { origin, direction } = ray
+
+  let bestDepth = Number.POSITIVE_INFINITY
+  let bestTriangle = -1
+  for (let t = 0; t < indices.length; t += 3) {
+    const depth = rayTriangle(
+      origin,
+      direction,
+      positions,
+      indices[t]!,
+      indices[t + 1]!,
+      indices[t + 2]!,
+    )
+    if (depth === undefined || depth < 0.0 || depth >= bestDepth) continue
+    bestDepth = depth
+    bestTriangle = t
+  }
+  if (bestTriangle < 0) return undefined
+
+  return {
+    triangle: bestTriangle,
+    depth: bestDepth,
+    point: {
+      x: origin.x + direction.x * bestDepth,
+      y: origin.y + direction.y * bestDepth,
+      z: origin.z + direction.z * bestDepth,
+    },
+  }
+}
+
+/**
+ * 实体拾取：命中的三角形属于哪一个实体。
+ *
+ * `owners` 是**逐三角形**的所有者下标（`EntityRenderResult.owners`）——几何本身
+ * 是一份三角形汤，没有身份信息，而"点到了哪条船"必须能回答。
+ * 落在没有所有者的三角形上（越界或负值）就当成没命中。
+ */
+export function pickEntity(
+  geometry: WorldGeometry,
+  camera: CameraSpec,
+  x: number,
+  y: number,
+  owners: Int32Array,
+): { index: number; depth: number; point: Vec3 } | undefined {
+  const hit = pickTriangle(geometry, camera, x, y)
+  if (hit === undefined) return undefined
+  const index = owners[hit.triangle / 3]
+  if (index === undefined || index < 0) return undefined
+  return { index, depth: hit.depth, point: hit.point }
+}
+
+/**
  * 射线起点离目标点的距离。
  *
  * 正交投影下它不影响成像，只决定"从哪里开始找交点"。取足够大，
@@ -100,35 +180,16 @@ export function pickBlock(
   x: number,
   y: number,
 ): PickHit | undefined {
-  const ray = screenRay(camera, x, y)
+  const hit = pickTriangle(geometry, camera, x, y)
+  if (hit === undefined) return undefined
   const { positions, indices } = geometry
-  const { origin, direction } = ray
-
-  let bestDepth = Number.POSITIVE_INFINITY
-  let bestTriangle = -1
-  for (let t = 0; t < indices.length; t += 3) {
-    const depth = rayTriangle(
-      origin,
-      direction,
-      positions,
-      indices[t]!,
-      indices[t + 1]!,
-      indices[t + 2]!,
-    )
-    if (depth === undefined || depth < 0.0 || depth >= bestDepth) continue
-    bestDepth = depth
-    bestTriangle = t
-  }
-  if (bestTriangle < 0) return undefined
+  const bestDepth = hit.depth
+  const point = hit.point
+  const bestTriangle = hit.triangle
 
   const i0 = indices[bestTriangle]!
   const i1 = indices[bestTriangle + 1]!
   const i2 = indices[bestTriangle + 2]!
-  const point: Vec3 = {
-    x: origin.x + direction.x * bestDepth,
-    y: origin.y + direction.y * bestDepth,
-    z: origin.z + direction.z * bestDepth,
-  }
   const centroid: Vec3 = {
     x: (positions[i0 * 3]! + positions[i1 * 3]! + positions[i2 * 3]!) / 3,
     y: (positions[i0 * 3 + 1]! + positions[i1 * 3 + 1]! + positions[i2 * 3 + 1]!) / 3,

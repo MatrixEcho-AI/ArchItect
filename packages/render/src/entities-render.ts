@@ -28,6 +28,13 @@ export interface EntityRenderResult {
   missing: string[]
   /** 用兜底盒画的实体类型（模型表里没有它们）。 */
   fallbackTypes: string[]
+  /**
+   * **逐三角形**的所有者：这个三角形属于 `store.entities.list()` 里的第几个实体。
+   *
+   * 几何是一份三角形汤，没有身份信息，而"点到的是哪条船"必须能回答——拾取
+   * （`pickEntity`）与左栏选中都靠它。下标的基准就是 `list()` 的顺序（按 id 排序）。
+   */
+  owners: Int32Array
 }
 
 /**
@@ -79,10 +86,19 @@ export function meshWorldEntities(
     return meshFallbackBox(registry.sizeOf(entry.entity.type) ?? { width: 0.6, height: 1.8 }, options)
   })
 
+  const owners = new Int32Array(meshed.reduce((sum, geometry) => sum + geometry.indices.length / 3, 0))
+  let triangleBase = 0
+  for (let i = 0; i < meshed.length; i++) {
+    const triangles = meshed[i]!.indices.length / 3
+    owners.fill(i, triangleBase, triangleBase + triangles)
+    triangleBase += triangles
+  }
+
   return {
     geometry: concatGeometry(meshed.map((geometry) => ({ geometry, material: 1 }))),
     atlas,
     missing,
     fallbackTypes: [...fallbackTypes].sort(),
+    owners,
   }
 }

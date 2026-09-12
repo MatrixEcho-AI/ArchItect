@@ -787,3 +787,54 @@ describe('视口所用的场景负载：实体那一层', () => {
     expect(studio.scene().entities!.indices.length).toBeGreaterThan(before)
   })
 })
+
+describe('点选实体：与点选方块共用同一段射线', () => {
+  const VIEW = { azimuth: 45, elevation: 30, width: 320, height: 240 }
+
+  /**
+   * ⚠️ **这一条只验证"实体不影响方块拾取"。**
+   *
+   * 端到端的"点中船就选中船"我**没能让它在这儿通过**：射线、几何、所有者表
+   * 三样都单独测过（`packages/render/test/entities-render.test.ts` 里
+   * `pickEntity` 命中了船），但在 studio 这条路上画面中心那一枪没打中它，
+   * 而我没有把原因查到底。与其把它写成一条看着像通过的断言，不如留在这里
+   * 说清楚——`plan.md` 的 P5 验收 ⑪ 目前是**未验证**状态。
+   */
+  it('放一条船不会改变画面上打到的是哪一格（方块拾取不受影响）', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const before = studio.pick({ ...VIEW, x: VIEW.width / 2, y: VIEW.height / 2 })
+    expect(before).toBeDefined()
+
+    const store = studio.agentSession.store
+    const cell = before!.block
+    store.commitSparse({
+      entities: [
+        store.entities.set({
+          id: 'e_1_1',
+          type: 'minecraft:oak_boat',
+          x: cell[0]! + 0.5,
+          y: cell[1]! + 1,
+          z: cell[2]! + 0.5,
+          yaw: 0,
+        })!,
+      ],
+    })
+
+    const after = studio.pick({ ...VIEW, x: VIEW.width / 2, y: VIEW.height / 2 })
+    expect(after).toBeDefined()
+    expect(after!.block).toEqual(cell)
+  })
+
+  it('有实体也不会把天空变成可点的：没有三角形命中就还是 undefined', () => {
+    const studio = makeStudio()
+    studio.demo()
+    const store = studio.agentSession.store
+    store.commitSparse({
+      entities: [store.entities.set({ id: 'e_1_1', type: 'minecraft:oak_boat', x: 0.5, y: 30, z: 0.5, yaw: 0 })!],
+    })
+
+    // 缩到很小，画面绝大部分是空的——实体层不该改变"点到天空"这条
+    expect(studio.pick({ ...VIEW, scale: 4, x: 2, y: 2 })).toBeUndefined()
+  })
+})

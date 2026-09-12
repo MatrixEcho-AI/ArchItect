@@ -29,9 +29,10 @@ import {
   meshWorld,
   meshWorldEntities,
   pickBlock,
+  pickEntity,
   rasterize,
 } from '@architect/render'
-import type { CameraSpec, TexturePack, WorldGeometry } from '@architect/render'
+import type { CameraSpec, EntityRenderResult, TexturePack, WorldGeometry } from '@architect/render'
 import type { SessionCamera } from '@architect/tools'
 
 import type { AutosaveService, PendingRecovery } from './autosave.js'
@@ -235,6 +236,14 @@ export interface PickResult {
   blockId: string
   /** 放置目标在不在工区里。不在时界面直接拦下，不用等主进程报错。 */
   placeInVolume: boolean
+  /**
+   * 点到的是**实体**（而且它挡在方块前面）时给出它。
+   *
+   * 点选实体与点选方块走同一段射线（`pickTriangle`），只是解释不同。实体选中时
+   * `block` / `place` / `normal` 由实体所在的格填出来——它们对"选中了什么"没有
+   * 意义（实体是浮点位置、没有面），填出来只是为了不改既有返回形状。
+   */
+  entity?: { id: string; type: string }
 }
 
 export interface EditBlockRequest {
@@ -318,8 +327,8 @@ export class StudioService {
   private session: AgentSession
   /** 交互视口的网格缓存，见 `viewport()`。revision 一变就失效。 */
   private meshCache?: { revision: number; geometry: WorldGeometry }
-  /** 实体那一段的缓存，见 `entitiesFor`。 */
-  private entityCache?: { revision: number; payload: ScenePayload['entities'] }
+  /** 实体网格化的结果，渲染与拾取共用一份。见 `meshEntities`。 */
+  private entityResult?: { revision: number; result: EntityRenderResult | undefined }
   private projectPath?: string
   /**
    * 打开工程时收下的、**本版本不认识的 zip 条目**（`McaiProject.extra`）。
@@ -1219,10 +1228,7 @@ export class StudioService {
    * 贴图，不进"版本 | 资源包"那张缓存。
    */
   private entitiesFor(store: WorldStore): ScenePayload['entities'] {
-    if (this.entityCache !== undefined && this.entityCache.revision === store.revision) {
-      return this.entityCache.payload
-    }
-    const result = meshWorldEntities(store, this.texturePack(store.registry.minecraftVersion))
+    const result = this.meshEntities(store)
     const payload: ScenePayload['entities'] =
       result === undefined
         ? undefined
@@ -1246,8 +1252,23 @@ export class StudioService {
               yaw: entity.yaw,
             })),
           }
-    this.entityCache = { revision: store.revision, payload }
     return payload
+  }
+
+  /**
+   * `meshWorldEntities` 的结果，按 revision 缓存。
+   *
+   * **只算一次、两处共用**：渲染要的是 `geometry` 与 `atlas`，拾取要的是
+   * `owners` 与 `geometry`。分两次算的话不仅白做一遍，两次的三角形顺序还可能
+   * 因为缓存时机不同而错位——而 `owners` 正是按三角形下标索引的。
+   */
+  private meshEntities(store: WorldStore): EntityRenderResult | undefined {
+    if (this.entityResult !== undefined && this.entityResult.revision === store.revision) {
+      return this.entityResult.result
+    }
+    const result = meshWorldEntities(store, this.texturePack(store.registry.minecraftVersion))
+    this.entityResult = { revision: store.revision, result }
+    return result
   }
 
   private geometryFor(store: WorldStore): { geometry: WorldGeometry; meshed: boolean } {
@@ -1345,6 +1366,42 @@ export class StudioService {
     const store = this.session.store
     const camera = this.viewportCamera(request)
     const { geometry } = this.geometryFor(store)
+
+    /**
+     * **实体挡在方块前面就先选实体。**
+     *
+     * 两条语义共用同一段射线（`pickTriangle`）与同一个 Möller–Trumbore，
+     * 谁在前面由 `depth` 决定——分开两套的话，"贴着船沿点一下"会在两种实现里
+     * 给出不同的答案。
+     */
+    const entityResult = this.meshEntities(store)
+    if (entityResult !== undefined) {
+      const entityHit = pickEntity(
+        entityResult.geometry,
+        camera,
+        request.x,
+        request.y,
+        entityResult.owners,
+      )
+      const blockHit = pickBlock(geometry, camera, request.x, request.y)
+      if (entityHit !== undefined && (blockHit === undefined || entityHit.depth < blockHit.depth)) {
+        const entity = store.entities.list()[entityHit.index]!
+        const cell = {
+          x: Math.floor(entity.x),
+          y: Math.floor(entity.y),
+          z: Math.floor(entity.z),
+        }
+        return {
+          block: [cell.x, cell.y, cell.z],
+          place: [cell.x, cell.y + 1, cell.z],
+          normal: [0, 1, 0],
+          blockId: store.contains(cell) ? store.getBlockString(cell) : 'minecraft:air',
+          placeInVolume: store.contains(cell),
+          entity: { id: entity.id, type: entity.type },
+        }
+      }
+    }
+
     const hit = pickBlock(geometry, camera, request.x, request.y)
     if (hit === undefined) return undefined
 

@@ -85,6 +85,8 @@ export const enUS = {
     measureLine: 'Size {{size}}   blocks {{blocks}}',
     project: 'Project',
     materials: 'Materials',
+    entities: 'Entities',
+    entitiesMore: '{{n}} more not shown',
     palette: 'Palette (take over by hand)',
     ops: 'Edit history',
     tokens: 'Usage',

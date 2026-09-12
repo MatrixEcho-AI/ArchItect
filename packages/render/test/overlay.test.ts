@@ -4,7 +4,15 @@ import { describe, expect, it } from 'vitest'
 
 import { cameraBasis, fitCamera, presetAngles } from './../src/camera.js'
 import { Canvas } from '../src/canvas.js'
-import { autoRulerStep, drawOverlays, drawOverlayGrid, drawText, OVERLAY_COLORS } from '../src/overlay.js'
+import {
+  autoRulerStep,
+  drawBoxEdges,
+  drawFloatBoxEdges,
+  drawOverlays,
+  drawOverlayGrid,
+  drawText,
+  OVERLAY_COLORS,
+} from '../src/overlay.js'
 import { renderIsometric } from '../src/isometric.js'
 import { createFallbackColorResolver } from '../src/colors.js'
 import { CHAR_HEIGHT, glyphFor, isRenderable, sanitizeForFont, textWidth } from '../src/font.js'
@@ -263,5 +271,57 @@ describe('叠加层与渲染器集成', () => {
 
   it('文字高度与行距常量可用', () => {
     expect(CHAR_HEIGHT).toBeGreaterThan(7)
+  })
+})
+
+describe('浮点包围盒：实体这类不是整格的东西', () => {
+  /** 画一个盒子，数出非背景像素数——只关心"画出来了没有"与"画在哪儿"。 */
+  const draw = (fn: (canvas: Canvas, basis: ReturnType<typeof cameraBasis>) => void): Canvas => {
+    const canvas = new Canvas(200, 150, BG)
+    const fitted = fitCamera(HOUSE, presetAngles('iso_ne'), canvas.width, canvas.height)
+    fn(canvas, cameraBasis(fitted))
+    return canvas
+  }
+  const ink = (canvas: Canvas): number => {
+    let count = 0
+    for (let i = 0; i < canvas.data.length; i += 4) {
+      if (canvas.data[i] !== BG.r || canvas.data[i + 1] !== BG.g || canvas.data[i + 2] !== BG.b) count++
+    }
+    return count
+  }
+
+  it('**两版画的是同一个盒子**：整数 [2..2] 与浮点 [2..3] 逐像素相同', () => {
+    // 这是"远角 +1"那条语义最直接的判据——两版画出来不一样就说明有一版错了
+    const integer = draw((canvas, basis) => {
+      const fitted = fitCamera(HOUSE, presetAngles('iso_ne'), canvas.width, canvas.height)
+      drawBoxEdges(canvas, fitted, basis, { min: { x: 2, y: 2, z: 2 }, max: { x: 2, y: 2, z: 2 } }, OVERLAY_COLORS.highlight)
+    })
+    const float = draw((canvas, basis) => {
+      const fitted = fitCamera(HOUSE, presetAngles('iso_ne'), canvas.width, canvas.height)
+      drawFloatBoxEdges(
+        canvas,
+        fitted,
+        basis,
+        { min: { x: 2, y: 2, z: 2 }, max: { x: 3, y: 3, z: 3 } },
+        OVERLAY_COLORS.highlight,
+      )
+    })
+    expect(ink(integer)).toBeGreaterThan(0)
+    expect(ink(float)).toBe(ink(integer))
+    expect([...integer.data]).toEqual([...float.data])
+  })
+
+  it('半格大小的浮点盒画得出来（实体高亮就是这个尺寸量级）', () => {
+    const canvas = draw((c, basis) => {
+      const fitted = fitCamera(HOUSE, presetAngles('iso_ne'), c.width, c.height)
+      drawFloatBoxEdges(
+        c,
+        fitted,
+        basis,
+        { min: { x: 3, y: 1, z: 3 }, max: { x: 4.375, y: 1.5625, z: 4.375 } },
+        OVERLAY_COLORS.highlight,
+      )
+    })
+    expect(ink(canvas)).toBeGreaterThan(0)
   })
 })

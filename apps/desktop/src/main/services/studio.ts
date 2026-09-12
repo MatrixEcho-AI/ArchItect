@@ -56,6 +56,16 @@ export interface StudioState {
   paletteSize: number
   ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
+  /**
+   * 世界里的实体（最多前 12 条，左栏用）。
+   *
+   * 只给"有什么"的紧凑视图，完整的几何与拾取清单在 `ScenePayload.entities` 里。
+   * 左栏是个列表，几十条之后没人看，所以这里**截断**——而截断要在**主进程**做，
+   * 免得每次状态推送都背着几千条实体过 IPC。
+   */
+  entities: Array<{ id: string; type: string; x: number; y: number; z: number; yaw: number }>
+  /** 实体的总数（左栏要能说"共 N 个，显示前 12"）。 */
+  entityCount: number
   /** 游标前面还有内容（可以撤销）。 */
   canUndo: boolean
   /** 游标后面还有内容（可以重做）。 */
@@ -934,6 +944,15 @@ export class StudioService {
           source: op.source,
         })),
       histogram: stats.histogram.slice(0, 8),
+      entities: store.entities.list().slice(0, 12).map((entity) => ({
+        id: entity.id,
+        type: entity.type,
+        x: entity.x,
+        y: entity.y,
+        z: entity.z,
+        yaw: entity.yaw,
+      })),
+      entityCount: store.entities.size,
       // 撤销/重做是**游标移动**，所以这两个是"游标前后还有没有内容"，
       // 不是"世界内部的栈里还有没有东西"。界面据此灰掉按钮。
       canUndo: this.session.history.canUndo,

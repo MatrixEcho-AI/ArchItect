@@ -848,3 +848,45 @@ describe('点选实体：与点选方块共用同一段射线', () => {
     expect(studio.pick({ ...VIEW, scale: 4, x: 2, y: 2 })).toBeUndefined()
   })
 })
+
+describe('左栏的实体清单', () => {
+  it('没有实体时是空数组、总数 0（界面据此整节不显示）', () => {
+    const studio = new StudioService({ plain: true })
+    studio.agentSession.store.setBlock({ x: 0, y: 0, z: 0 }, 'minecraft:stone')
+    const state = studio.state()
+    expect(state.entities).toEqual([])
+    expect(state.entityCount).toBe(0)
+  })
+
+  it('带上 id / 类型 / 位置，并且**在主进程截断**到 12 条', () => {
+    const studio = new StudioService({ plain: true })
+    const store = studio.agentSession.store
+    const changes = []
+    for (let i = 0; i < 20; i++) {
+      changes.push(
+        store.entities.set({
+          id: `e_1_${i}`,
+          type: 'minecraft:oak_boat',
+          x: i + 0.5,
+          y: 1,
+          z: 0.5,
+          yaw: 0,
+        })!,
+      )
+    }
+    store.commitSparse({ entities: changes })
+
+    const state = studio.state()
+    // 截断要在主进程做：否则每次状态推送都背着几千条实体过 IPC
+    expect(state.entities).toHaveLength(12)
+    expect(state.entityCount).toBe(20)
+    expect(state.entities[0]).toEqual({
+      id: 'e_1_0',
+      type: 'minecraft:oak_boat',
+      x: 0.5,
+      y: 1,
+      z: 0.5,
+      yaw: 0,
+    })
+  })
+})

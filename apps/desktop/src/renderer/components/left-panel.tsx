@@ -54,6 +54,8 @@ export interface LeftPanelProps {
 export function LeftPanel(props: LeftPanelProps): React.JSX.Element {
   const { state } = props
   const used = state?.histogram ?? []
+  const entities = state?.entities ?? []
+  const entityCount = state?.entityCount ?? 0
 
   return (
     <div className="panel-scroll">
@@ -226,6 +228,29 @@ export function LeftPanel(props: LeftPanelProps): React.JSX.Element {
           ))}
         </ul>
       </Section>
+
+      {/*
+        实体单独一节，**不混进材质直方图**：材质那一节按方块名统计"这栋楼用了什么"，
+        而实体是另一层（浮点位置、一格能叠多个、不占调色板）。混进去的话，
+        "用了多少方块"这个数字就不再是方块数了。
+      */}
+      {entityCount > 0 && (
+        <Section title={t('panel.entities')}>
+          <ul id="entities" className="histogram">
+            {entities.map((entity) => (
+              <li key={entity.id}>
+                <span>{entity.type.replace('minecraft:', '')}</span>
+                <span>
+                  [{Math.floor(entity.x)},{Math.floor(entity.y)},{Math.floor(entity.z)}] · {entity.id}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {entityCount > entities.length && (
+            <p className="hint">{t('panel.entitiesMore', { n: entityCount - entities.length })}</p>
+          )}
+        </Section>
+      )}
 
       <Section title={t('panel.ops')}>
         {/* 点一条记录展开它的参数与改动量：排查"模型哪一步改坏了"的入口 */}

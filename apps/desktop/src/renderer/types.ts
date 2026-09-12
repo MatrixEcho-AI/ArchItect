@@ -26,6 +26,9 @@ export interface StudioState {
   paletteSize: number
   ops: Array<{ rev: number; tool: string; changed: number; ts: string; source: string }>
   histogram: Array<{ block: string; count: number; percent: number }>
+  /** 实体清单（主进程已截断到前 12 条）与总数。左栏用。 */
+  entities: Array<{ id: string; type: string; x: number; y: number; z: number; yaw: number }>
+  entityCount: number
   /** 一次性提示（崩溃恢复之类）。主进程读过就没了，所以界面要自己留住。 */
   notice?: string
   /**

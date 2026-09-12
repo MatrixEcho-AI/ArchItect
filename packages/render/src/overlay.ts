@@ -253,7 +253,18 @@ function drawRulerLabels(
   }
 }
 
-/** 包围盒的 12 条棱。 */
+/** 浮点包围盒。实体这类东西不是整格的，所以角点也是浮点的。 */
+export interface FloatBox {
+  min: { x: number; y: number; z: number }
+  max: { x: number; y: number; z: number }
+}
+
+/**
+ * **整数包围盒**的 12 条棱。
+ *
+ * `max` 是闭区间的**格子**，所以远角要 `+1`——这是"格"与"坐标"之间的那一步。
+ * 浮点盒没有这一步，见 `drawFloatBoxEdges`。
+ */
 export function drawBoxEdges(
   canvas: Canvas,
   camera: CameraSpec,
@@ -262,8 +273,44 @@ export function drawBoxEdges(
   color: Rgb,
   alpha = 0.95,
 ): void {
-  const lo = { x: box.min.x, y: box.min.y, z: box.min.z }
-  const hi = { x: box.max.x + 1, y: box.max.y + 1, z: box.max.z + 1 }
+  drawEdges(
+    canvas,
+    camera,
+    basis,
+    { x: box.min.x, y: box.min.y, z: box.min.z },
+    { x: box.max.x + 1, y: box.max.y + 1, z: box.max.z + 1 },
+    color,
+    alpha,
+  )
+}
+
+/**
+ * **浮点包围盒**的 12 条棱——实体高亮用。
+ *
+ * 与整数那版的唯一差别是远角**不加 1**：`Bounds` 说的是"哪几格"（闭区间，所以
+ * 远角要推到下一格的边界），而这里说的是"空间里的一个盒子"，两个角就是两个角。
+ * 混用的话实体高亮会整体大出一格，而那种错看起来像"渲染偏了"。
+ */
+export function drawFloatBoxEdges(
+  canvas: Canvas,
+  camera: CameraSpec,
+  basis: CameraBasis,
+  box: FloatBox,
+  color: Rgb,
+  alpha = 0.95,
+): void {
+  drawEdges(canvas, camera, basis, box.min, box.max, color, alpha)
+}
+
+function drawEdges(
+  canvas: Canvas,
+  camera: CameraSpec,
+  basis: CameraBasis,
+  lo: { x: number; y: number; z: number },
+  hi: { x: number; y: number; z: number },
+  color: Rgb,
+  alpha: number,
+): void {
   const corners: Pos[] = []
   for (let i = 0; i < 8; i++) {
     corners.push({

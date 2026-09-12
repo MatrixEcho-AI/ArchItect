@@ -81,6 +81,8 @@ export const zhCN = {
     measureLine: '尺寸 {{size}}   方块 {{blocks}}',
     project: '工程',
     materials: '材质',
+    entities: '实体',
+    entitiesMore: '另有 {{n}} 个未显示',
     palette: '调色板（人手接管）',
     ops: '编辑记录',
     tokens: '用量',

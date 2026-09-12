@@ -468,6 +468,11 @@ export async function runAgent(options: AgentOptions, goal: string): Promise<Age
     // 「这轮只调了这些」，而 `stopReason` 已经如实说明了为什么停下。
     if (answered < response.toolCalls.length) {
       assistantMessage.toolCalls = response.toolCalls.slice(0, answered)
+      // 一条**空**的 assistant 消息同样不合法：`serialize` 把空文本写成
+      // `content: null`，而没有 tool_calls 的 `{ role: 'assistant', content: null }`
+      // 正是这个修复要避免的那类 400。一个调用都没执行、也没有文本时整条摘掉
+      //（此时它必然是最后一条：一条 tool 消息都没推过）。
+      if (answered === 0 && response.text.length === 0) messages.pop()
     }
 
     // 截图必须以**独立的 user 消息**回灌：OpenAI 的 tool 消息只接受文本

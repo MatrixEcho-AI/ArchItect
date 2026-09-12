@@ -324,7 +324,13 @@ export class OpenAiCompatibleProvider implements LlmProvider {
         chunk = JSON.parse(payload) as StreamChunk
       } catch {
         // 服务端真的回了个坏 JSON：重试只会重复同一个错误
-        throw new LlmError(t('agent.openai.chunkInvalid', { chunk: payload.slice(0, 200) }), 'PARSE', false)
+        // 与 `classifyHttpError` 同一条规矩：这段正文同样会进界面、进日志、随
+        // `retry` 进 `.mcai` 档案，所以先脱敏。
+        throw new LlmError(
+          t('agent.openai.chunkInvalid', { chunk: scrubSecrets(payload.slice(0, 200)) }),
+          'PARSE',
+          false,
+        )
       }
       const choice = chunk.choices?.[0]
       // `delta` 可能是 `{}`、也可能是 `null`（收尾那一帧），两种都要当"没有内容"处理

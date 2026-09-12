@@ -173,14 +173,36 @@ export function packProject(input: PackInput): Uint8Array {
  */
 const MAX_ENTRY_BYTES = 256 * 1024 * 1024
 
+/**
+ * 全部条目**合计**允许的字节数，以及条目数上限。
+ *
+ * 单条目上限挡不住「很多个刚好不超限的条目」：中央目录项每个只要几十字节，一个
+ * 1 MB 的文件可以声明上百个各 200 MB 的条目，而 `unzipSync` 会把它们**全部**解开
+ * ——256 MB × 100 = 25 GB。这是同一类「用声明换内存」，只是摊到了多个条目上。
+ */
+const MAX_TOTAL_BYTES = 512 * 1024 * 1024
+const MAX_ENTRIES = 4096
+
 /** 解包 `.mcai` 字节。不建世界，只把各部分读出来。 */
 export function unpackProject(bytes: Uint8Array): McaiProject {
+  let declaredBytes = 0
+  let entryCount = 0
   const entries = unzipSync(bytes, {
     filter: (file) => {
       if (file.originalSize > MAX_ENTRY_BYTES) {
         throw new McaiFormatError(
           `工程里的 ${file.name} 声明解压后 ${file.originalSize} 字节，超过上限 ${MAX_ENTRY_BYTES}`,
         )
+      }
+      declaredBytes += file.originalSize
+      entryCount++
+      if (declaredBytes > MAX_TOTAL_BYTES) {
+        throw new McaiFormatError(
+          `工程里的条目合计声明解压后 ${declaredBytes} 字节，超过上限 ${MAX_TOTAL_BYTES}`,
+        )
+      }
+      if (entryCount > MAX_ENTRIES) {
+        throw new McaiFormatError(`工程有超过 ${MAX_ENTRIES} 个条目，拒绝解包`)
       }
       return true
     },

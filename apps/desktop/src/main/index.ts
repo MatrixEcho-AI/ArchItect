@@ -113,7 +113,7 @@ async function consumePendingOpen(): Promise<void> {
   try {
     await openProjectPath(path)
   } catch (error) {
-    process.stderr.write(`打开 ${path} 失败：${error instanceof Error ? error.message : String(error)}\n`)
+    process.stderr.write(`Could not open ${path}: ${error instanceof Error ? error.message : String(error)}\n`)
   }
 }
 let autosave: AutosaveService | undefined
@@ -160,7 +160,7 @@ function initStudio(): void {
       studio.autosaveNow()
     } catch (error) {
       // 写 WAL 失败不该影响用户继续编辑，但必须让人知道
-      process.stderr.write(`自动保存失败：${error instanceof Error ? error.message : String(error)}\n`)
+      process.stderr.write(`Autosave failed: ${error instanceof Error ? error.message : String(error)}\n`)
     }
   }, AUTOSAVE_INTERVAL_MS)
   // 定时器不该把进程钉住（关窗时 Node 要能退出）
@@ -599,13 +599,13 @@ function registerIpc(): void {
           // 路径是调用方给的，父目录可能还不存在——`writeFile` 自己不会建。
           await mkdir(dirname(shotPath), { recursive: true })
           await writeFile(shotPath, result.png)
-          process.stdout.write(`已写出模型视角截图 → ${shotPath}\n`)
+          process.stdout.write(`wrote the model-view screenshot → ${shotPath}\n`)
           app.exit(result.ok ? 0 : 1)
         })
         .catch((error: unknown) => {
           // 这一条以前没有 catch：写盘失败会变成未处理的 rejection，
           // 而退出码也不是 1（`--capture` 那条一直有 catch，两条不一致）
-          process.stderr.write(`写截图失败：${String(error)}\n`)
+          process.stderr.write(`screenshot write failed: ${String(error)}\n`)
           app.exit(1)
         })
     }
@@ -619,11 +619,11 @@ function registerIpc(): void {
             return writeFile(capturePath, image.toPNG())
           })
           .then(() => {
-            process.stdout.write(`已抓取窗口 → ${capturePath}\n`)
+            process.stdout.write(`captured the window → ${capturePath}\n`)
             app.exit(0)
           })
           .catch((error: unknown) => {
-            process.stderr.write(`抓取失败：${String(error)}\n`)
+            process.stderr.write(`capture failed: ${String(error)}\n`)
             app.exit(1)
           })
         /**
@@ -698,7 +698,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     };
 
     const ops = document.querySelectorAll('#ops li.op');
-    check('ops-list', ops.length > 0, ops.length + ' 条可点的编辑记录');
+    check('ops-list', ops.length > 0, ops.length + ' clickable edit records');
 
     const label = document.querySelector('#rev-label');
     const scrub = document.querySelector('#scrub');
@@ -708,7 +708,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     // 比只报一句"没拖动"省一整轮排查。
     const shape =
       scrub === null
-        ? '没有 #scrub'
+        ? 'no #scrub'
         : scrub.tagName.toLowerCase() + ' max=' + scrub.max + ' disabled=' + String(scrub.disabled);
     const target = Math.max(0, Math.min(Number(scrub === null ? 0 : scrub.max) - 1, 3));
     if (scrub !== null) {
@@ -729,8 +729,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check(
       'timeline-drag',
       labelChanged,
-      '"' + before + '" → "' + (label ? label.textContent : '?') + '"（拖到 rev ' + target +
-        '；读到的是 ' + shape + '）',
+      '"' + before + '" → "' + (label ? label.textContent : '?') + '" (dragged to rev ' + target +
+        '; read back ' + shape + ')',
     );
 
     /**
@@ -761,7 +761,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check(
       'chat-resizer',
       resizer !== null && grew,
-      resizer === null ? '没有 #chat-resizer' : '宽 ' + widthBefore + ' → ' + siderWidth() + '（往左拖 90px）',
+      resizer === null ? 'no #chat-resizer' : 'width ' + widthBefore + ' → ' + siderWidth() + ' (dragged 90px left)',
     );
 
     const items = document.querySelectorAll('#ops li.op');
@@ -786,13 +786,13 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check(
       'op-detail',
       detailReady,
-      detailReady ? '展开出 ' + detailChars + ' 字' : '等了 1.5s 也没等到 #op-detail（或它是空的）',
+      detailReady ? 'expanded to ' + detailChars + ' chars' : 'waited 1.5s and never found #op-detail (or it was empty)',
     );
 
     // 需求模板行已按要求删除（M8 里"模板填得进输入框"那条随之作废）：
     // 这里退一步，只断言输入框还在接线上
     const input = document.querySelector('#chat-input');
-    check('chat-input', input !== null, input === null ? '没有 #chat-input' : '输入框在');
+    check('chat-input', input !== null, input === null ? 'no #chat-input' : 'input present');
 
     /**
      * **输入区是一个盒子：发送钮和两个插图入口都在它里面**（用户拿 DeepSeek harness
@@ -841,8 +841,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         input !== null &&
         input.getBoundingClientRect().height <= maxHeight,
       Number.isFinite(grewBy)
-        ? '打 12 行后长高 ' + grewBy + 'px / 上限 ' + (Number.isFinite(maxHeight) ? maxHeight + 'px' : '读不到')
-        : '没读到输入框',
+        ? 'grew ' + grewBy + 'px after 12 lines / max ' + (Number.isFinite(maxHeight) ? maxHeight + 'px' : 'unreadable')
+        : 'could not read the input box',
     );
 
     const composer = document.querySelector('.composer');
@@ -866,13 +866,13 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         sendBtn.textContent === '' &&
         sendBtn.querySelector('svg') !== null,
       composer === null
-        ? '没有 .composer'
+        ? 'no .composer'
         : sendBtn === null
-          ? '没有 #btn-send'
-          : '框 ' + Math.round(composer.getBoundingClientRect().width) + 'px 宽 / 发送钮在框内=' + inside +
-            ' / 钮 ' + Math.round(sendBtn.getBoundingClientRect().width) + 'px 圆形=' + (getComputedStyle(sendBtn).borderRadius === '50%') +
-            ' / 文字="' + sendBtn.textContent + '" 图标=' + (sendBtn.querySelector('svg') !== null) +
-            ' / 输入框 resize=' + (input === null ? 'n/a' : getComputedStyle(input).resize),
+          ? 'no #btn-send'
+          : 'box ' + Math.round(composer.getBoundingClientRect().width) + 'px wide / send button inside=' + inside +
+            ' / button ' + Math.round(sendBtn.getBoundingClientRect().width) + 'px round=' + (getComputedStyle(sendBtn).borderRadius === '50%') +
+            ' / text="' + sendBtn.textContent + '" icon=' + (sendBtn.querySelector('svg') !== null) +
+            ' / input resize=' + (input === null ? 'n/a' : getComputedStyle(input).resize),
     );
 
     /**
@@ -906,17 +906,17 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         attach.getAttribute('aria-label') !== null &&
         grab.getAttribute('aria-label') !== null &&
         (busy || behind || (attach.disabled === false && grab.disabled === false)),
-      '插入图片=' + (attach === null ? '缺失' : '在') +
-        ' / 采集视口=' + (grab === null ? '缺失' : '在') +
-        ' / 待发区=' + (pending === null ? '缺失' : '在') +
+      'insert image=' + (attach === null ? 'missing' : 'present') +
+        ' / capture viewport=' + (grab === null ? 'missing' : 'present') +
+        ' / pending area=' + (pending === null ? 'missing' : 'present') +
         ' / ' +
         (busy
-          ? '生成中（按设计禁用）'
+          ? 'generating (disabled by design)'
           : behind
-            ? '停在历史版本（按设计禁用）'
+            ? 'on a historical revision (disabled by design)'
             : attach.disabled === false
-              ? '空闲且可用'
-              : '空闲却被禁用'),
+              ? 'idle and enabled'
+              : 'idle but disabled'),
     );
 
     /**
@@ -929,8 +929,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       'paste-bound',
       input !== null && input.getAttribute('data-paste-bound') === '1',
       input === null
-        ? '没有 #chat-input'
-        : (input.getAttribute('data-paste-bound') === '1' ? '挂在输入框上' : '标记丢了'),
+        ? 'no #chat-input'
+        : (input.getAttribute('data-paste-bound') === '1' ? 'bound on the input box' : 'marker lost'),
     );
 
     // 恢复条：**有草稿才显示**。这里不能硬断言"一定是隐藏的"——
@@ -942,7 +942,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check(
       'recovery-banner',
       recovery !== null && shown === hasDraft,
-      (hasDraft ? '有 ' + state.recovery.ops + ' 步草稿' : '没有草稿') + '，条' + (shown ? '显示' : '隐藏'),
+      (hasDraft ? state.recovery.ops + ' draft step(s)' : 'no draft') + ', bar ' + (shown ? 'shown' : 'hidden'),
     );
     if (hasDraft) {
       const apply = document.querySelector('#btn-recover');
@@ -950,7 +950,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       check(
         'recovery-buttons',
         apply !== null && discard !== null && apply.disabled === !state.recovery.baseExists,
-        '恢复' + (apply.disabled ? '禁用' : '可用') + ' / 丢掉存在=' + (discard !== null),
+        'recover ' + (apply.disabled ? 'disabled' : 'enabled') + ' / discard present=' + (discard !== null),
       );
     }
 
@@ -975,14 +975,14 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       check(
         'card-colors',
         cardBg !== '' && cardBg !== 'rgba(0, 0, 0, 0)' && cardBg !== 'transparent',
-        '卡片底色 ' + cardBg + ' / 左边框 ' + card.borderLeftColor,
+        'card background ' + cardBg + ' / left border ' + card.borderLeftColor,
       );
     }
 
     // 成本读数按要求从界面上隐藏了（#cost 带 hidden，见 index.html），
     // 元素与写入点都还在——这里断言的是"接线没被拆掉"，一条 class 就能改回可见
     const cost = document.querySelector('#cost');
-    check('cost-element', cost !== null, cost === null ? '没有 #cost' : '文本 "' + cost.textContent + '"');
+    check('cost-element', cost !== null, cost === null ? 'no #cost' : 'text "' + cost.textContent + '"');
 
     /**
      * **标题行那串读数里的币种必须与当前价格表一致**（用户报的："我改了货币，
@@ -1007,8 +1007,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       wantCurrency === undefined ||
         (usageLine !== null && (usageLine.textContent ?? '').includes(wantCurrency)),
       wantCurrency === undefined
-        ? '当前 provider 没配价格表（表盘只报 token 数）'
-        : '价格表币种 ' + wantCurrency + ' / 读数 "' + (usageLine === null ? '' : usageLine.textContent) + '"',
+        ? 'the active provider has no price table (the meter reports tokens only)'
+        : 'price currency ' + wantCurrency + ' / reading "' + (usageLine === null ? '' : usageLine.textContent) + '"',
     );
 
     /**
@@ -1032,8 +1032,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       'chat-head-one-line',
       chatTitle !== null && titleHeight > 0 && titleHeight < 28,
       chatTitle === null
-        ? '没有 .chat-head h2'
-        : '高 ' + Math.round(titleHeight) + 'px / 文字 "' + chatTitle.textContent + '"',
+        ? 'no .chat-head h2'
+        : 'height ' + Math.round(titleHeight) + 'px / text "' + chatTitle.textContent + '"',
     );
 
     // **设置入口在右上角、而且是齿轮**（用户报过一次"设置按钮没了，配不了模型 API"）。
@@ -1053,10 +1053,10 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         Number.isFinite(gapRight) &&
         gapRight < 24,
       settings === null
-        ? '没有 #btn-settings'
-        : (settings.classList.contains('hidden') ? '被隐藏了' : '可见') +
-          ' / 图标 ' + (settings.querySelector('svg') === null ? '缺失' : '在') +
-          ' / 距顶栏右缘 ' + (Number.isFinite(gapRight) ? gapRight + 'px' : '读不到顶栏'),
+        ? 'no #btn-settings'
+        : (settings.classList.contains('hidden') ? 'hidden' : 'visible') +
+          ' / icon ' + (settings.querySelector('svg') === null ? 'missing' : 'present') +
+          ' / from the toolbar right edge ' + (Number.isFinite(gapRight) ? gapRight + 'px' : 'could not read the toolbar'),
     );
 
     // **顶栏里的按钮必须纵向居中**（用户报的："工具按钮为什么靠到顶了"）。
@@ -1091,9 +1091,9 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       'toolbar-centered',
       centered,
       centering.length === 0
-        ? '一个图标按钮都没读到'
+        ? 'not one icon button could be read'
         : centering
-            .map((box, at) => centeredIds[at] + ' 上留 ' + box.top + 'px / 下留 ' + box.bottom + 'px')
+            .map((box, at) => centeredIds[at] + ' above ' + box.top + 'px / below ' + box.bottom + 'px')
             .join('，'),
     );
 
@@ -1129,20 +1129,20 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
           document.querySelector('#btn-test') === null &&
           document.querySelector('#probe-log') === null,
         modal === null
-          ? '对话框没打开'
-          : cards.length + ' 个 provider 条目' +
-              ' / 添加按钮 ' +
+          ? 'the dialog did not open'
+          : cards.length + ' provider rows' +
+              ' / add buttons ' +
               (['btn-add-deepseek', 'btn-add-custom'].every(
                 (id) => document.querySelector('#' + id) !== null,
               )
-                ? 'DeepSeek+自定义 在'
-                : '缺') +
+                ? 'DeepSeek and Custom present'
+                : 'missing') +
               (document.querySelector('#btn-add-openai') === null &&
               document.querySelector('#btn-add-ollama') === null
-                ? '（OpenAI/Ollama 已删除）'
-                : '（OpenAI/Ollama 还在）') +
-              ' / 测试连接按钮 ' + (document.querySelector('#btn-test') === null ? '已移除' : '还在') +
-              ' / 探针日志 ' + (document.querySelector('#probe-log') === null ? '已移除' : '还在'),
+                ? ' (OpenAI and Ollama removed)'
+                : ' (OpenAI and Ollama still there)') +
+              ' / test button ' + (document.querySelector('#btn-test') === null ? 'removed' : 'still there') +
+              ' / probe log ' + (document.querySelector('#probe-log') === null ? 'removed' : 'still there'),
       );
 
       // 展开第一条（点它自己的「编辑」，不是点卡片——点卡片是"换成用它"）
@@ -1156,8 +1156,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
           document.querySelector('#btn-advanced') !== null &&
           document.querySelector('#cfg-baseurl') === null,
         expanded
-          ? '表单展开，自定义设置默认收起=' + (document.querySelector('#cfg-baseurl') === null)
-          : '点了「编辑」但表单没出来',
+          ? 'form expanded, custom settings collapsed by default=' + (document.querySelector('#cfg-baseurl') === null)
+          : 'clicked Edit but the form did not appear',
       );
 
       const advanced = document.querySelector('#btn-advanced');
@@ -1173,12 +1173,12 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
           document.querySelector('#cfg-usd') === null &&
           document.querySelector('#cfg-turns') === null,
         openedAdvanced
-          ? '地址 / 模型名 / 加价格行 / 货币都在' +
-              ' / 用量上限 ' +
+          ? 'endpoint / model / add price row / currency all present' +
+              ' / usage cap ' +
               (document.querySelector('#cfg-usd') === null && document.querySelector('#cfg-turns') === null
-                ? '已移除'
-                : '还在')
-          : '展开自定义设置后没读到价格表与地址字段',
+                ? 'removed'
+                : 'still there')
+          : 'expanded the custom settings but found no price table or endpoint field',
       );
 
       const cancel = document.querySelector('#btn-settings-cancel');
@@ -1216,9 +1216,9 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       'composer-model-picker',
       pickerOk,
       picker === null
-        ? '没有 #model-picker'
-        : '选择器 ' + (sendBtn2 === null ? '?' : pickerOk ? '在发送钮左侧且框内' : '位置不对') +
-            ' / 显示 "' + (picker.textContent ?? '').trim() + '"',
+        ? 'no #model-picker'
+        : 'picker ' + (sendBtn2 === null ? '?' : pickerOk ? 'left of the send button, inside the box' : 'wrong position') +
+            ' / shows "' + (picker.textContent ?? '').trim() + '"',
     );
 
     // 挡住发送的时候，必须有一条**能直接解决问题的路**（不然新用户第一屏就卡住）
@@ -1228,7 +1228,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check(
       'blocking-actionable',
       blocked ? action !== null : true,
-      blocked ? '被挡且有打开设置的按钮' : '没有被挡（模型已配置）',
+      blocked ? 'blocked, with a button that opens settings' : 'not blocked (a model is configured)',
     );
 
     // **WASD 真的在移动相机**。
@@ -1252,7 +1252,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     check(
       'wasd-move',
       afterW !== null && afterA !== null && afterW !== afterA,
-      '相机位置 ' + afterW + ' →（按 A 横移）' + afterA,
+      'camera position ' + afterW + ' → (after A)' + afterA,
     );
 
     // **空格上升 / Shift 下降**：同一条真实键盘路径。
@@ -1282,8 +1282,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         yOf(sank) < yOf(rose) &&
         xzOf(rose) === xzOf(resting) &&
         xzOf(sank) === xzOf(resting),
-      'Y ' + yOf(resting) + ' →（空格）' + yOf(rose) + ' →（Shift）' + yOf(sank) +
-        '，水平位置保持在 ' + xzOf(rose),
+      'Y ' + yOf(resting) + ' → (Space) ' + yOf(rose) + ' → (Shift) ' + yOf(sank) +
+        ', horizontal position held at ' + xzOf(rose),
     );
 
     // **拖动 = 原地转头**：角度变了，位置一动不动。
@@ -1328,7 +1328,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         beforeTurn.position === afterTurn.position &&
         beforeTurn.azimuth !== afterTurn.azimuth &&
         afterTurn.azimuth > beforeTurn.azimuth,
-      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°（往右拖 = 左转 = 角度增大），位置保持在 ' + beforeTurn.position,
+      'azimuth ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '° (dragging right turns left, so the angle grows), position held at ' + beforeTurn.position,
     );
     return results;
   })()`
@@ -1349,20 +1349,20 @@ async function assertGpuShot(report: {
   ok: boolean
   detail: string
 }): Promise<{ ok: boolean; detail: string; png?: Uint8Array }> {
-  if (!report.ok) return { ok: false, detail: `渲染进程自己就失败了：${report.detail}` }
+  if (!report.ok) return { ok: false, detail: `the renderer itself failed: ${report.detail}` }
   try {
     const image = await studio.shoot({ view: 'iso_ne', width: 512, height: 384 })
     const fallback = studio.renderFallback
-    if (fallback !== undefined) return { ok: false, detail: `退回了软件光栅器：${fallback}` }
+    if (fallback !== undefined) return { ok: false, detail: `fell back to the software rasterizer: ${fallback}` }
     const isPng = image.png[0] === 0x89 && image.png[1] === 0x50 && image.png[2] === 0x4e && image.png[3] === 0x47
-    if (!isPng) return { ok: false, detail: `回来的不是 PNG（前 4 字节 ${[...image.png.slice(0, 4)].join(',')}）` }
+    if (!isPng) return { ok: false, detail: `what came back is not a PNG (first 4 bytes ${[...image.png.slice(0, 4)].join(',')})` }
     return {
       ok: true,
       png: image.png,
-      detail: `截图 ${image.png.length} 字节 PNG, revision ${image.revision}, 机位 ${image.view}`,
+      detail: `screenshot ${image.png.length} bytes PNG, revision ${image.revision}, camera ${image.view}`,
     }
   } catch (error) {
-    return { ok: false, detail: `截图抛错：${error instanceof Error ? error.message : String(error)}` }
+    return { ok: false, detail: `the screenshot threw: ${error instanceof Error ? error.message : String(error)}` }
   }
 }
 
@@ -1376,23 +1376,23 @@ async function runSmoke(): Promise<void> {
   const lines: string[] = []
   const service = new StudioService()
   const state = service.demo()
-  lines.push(`demo: rev ${state.revision} / op ${state.totalOps} / ${state.blocks} 方块`)
+  lines.push(`demo: rev ${state.revision} / op ${state.totalOps} / ${state.blocks} blocks`)
 
   const shot = await service.shoot({ view: 'iso_ne', width: 320, height: 240 })
   // 冒烟模式没有窗口，所以这一枪必然是软件光栅器画的——把"确实回落了"也报出来，
   // 否则以后有人改了回落条件，这里会静默变成别的东西
-  lines.push(`shoot: ${shot.png.length} 字节 PNG, revision ${shot.revision} (无窗口 → 软件光栅器)`)
+  lines.push(`shoot: ${shot.png.length} bytes PNG, revision ${shot.revision} (no window → software rasterizer)`)
 
   const back = service.seek(Math.max(0, state.revision - 3))
-  lines.push(`seek(${state.revision - 3}): rev ${back.revision} / ${back.blocks} 方块`)
+  lines.push(`seek(${state.revision - 3}): rev ${back.revision} / ${back.blocks} blocks`)
   service.seekLatest()
   lines.push(`seekLatest: rev ${service.state().revision}`)
 
   const slice = service.slice({ axis: 'y', index: 1, x: [0, 15], z: [0, 15] })
-  lines.push(`slice: ${slice.split('\n').length} 行`)
+  lines.push(`slice: ${slice.split('\n').length} lines`)
 
   // 设置 / 对话链路（不联网，只验证形状与默认值）
-  lines.push(`settings: ${service.settingsView().providers.length} 个 provider, active=${service.settingsView().activeId}`)
+  lines.push(`settings: ${service.settingsView().providers.length} providers, active=${service.settingsView().activeId}`)
 
   // 自动保存 + 崩溃恢复：**走真实的文件系统路径**（临时目录里的一卷真 WAL）
   {
@@ -1427,18 +1427,18 @@ async function runSmoke(): Promise<void> {
     const reopened = new AutosaveService({ dir, projectId: 'active', name: 'crash-recovery smoke' })
     after.attachAutosave(reopened)
     const summary = after.recover()
-    if (summary === undefined) throw new Error('WAL 里应当有可恢复的 op')
+    if (summary === undefined) throw new Error('the WAL should hold a recoverable op')
     const recoveredState = await after.applyRecovery()
     const restored = after.agentSession.store
 
     const recovered = restored.contentHash() === expectedHash
     lines.push(
-      `autosave: 记下 ${journaled} 条 op → 崩溃后 recover() 报 ${summary.ops} 条 → ` +
-        `applyRecovery() 后 rev ${restored.revision} / ${restored.stats().blocks} 方块 / ` +
-        `hash ${recovered ? '一致' : '不一致'} / 待办${recoveredState.recovery === undefined ? '已清' : '还在'}`,
+      `autosave: wrote ${journaled} ops → after a crash recover() reports ${summary.ops} → ` +
+        `after applyRecovery() rev ${restored.revision} / ${restored.stats().blocks} blocks / ` +
+        `hash ${recovered ? 'matches' : 'differs'} / pending ${recoveredState.recovery === undefined ? 'cleared' : 'still there'}`,
     )
-    if (!recovered) throw new Error('崩溃恢复后的世界与崩溃前不一致')
-    if (recoveredState.recovery !== undefined) throw new Error('恢复之后不该还留着待办')
+    if (!recovered) throw new Error('the recovered world does not match the world before the crash')
+    if (recoveredState.recovery !== undefined) throw new Error('recovery should not leave a pending journal behind')
     await fs.rm(dir, { recursive: true, force: true })
   }
   lines.push(`chat: ready=${service.chatView().ready} blocking=${service.chatView().blocking.length}`)
@@ -1452,11 +1452,11 @@ async function runSmoke(): Promise<void> {
   const second = service.viewport({ azimuth: 75, elevation: 50, width: 900, height: 640, draft: true })
   const warm = Date.now() - t1
   lines.push(
-    `viewport: 首帧 ${first.ms}ms（建网格 ${first.meshed ? '是' : '否'}）→ 转 30° 后 ${warm}ms` +
-      `（建网格 ${second.meshed ? '是' : '否'}）· ${second.width}x${second.height} · ${second.pixels.length} 字节`,
+    `viewport: first frame ${first.ms}ms (meshed ${first.meshed ? 'yes' : 'no'}) → ${warm}ms after turning 30°` +
+      `(meshed ${second.meshed ? 'yes' : 'no'}) · ${second.width}x${second.height} · ${second.pixels.length} bytes`,
   )
-  if (second.meshed) throw new Error('换个角度不该重建网格——网格缓存没生效')
-  if (second.pixels.length !== second.width * second.height * 4) throw new Error('像素缓冲区长度不对')
+  if (second.meshed) throw new Error('a new angle should not rebuild the mesh; the mesh cache is not working')
+  if (second.pixels.length !== second.width * second.height * 4) throw new Error('the pixel buffer has the wrong length')
   // 图里得真有东西，而且转 30° 之后画出来的**必须不一样**——
   // 只断言"没抛异常"的话，一个永远返回背景色的实现也能过
   const painted = countPainted(first.pixels)
@@ -1465,9 +1465,9 @@ async function runSmoke(): Promise<void> {
   for (let i = 0; i < first.pixels.length; i += 4) {
     if (first.pixels[i] !== second.pixels[i] || first.pixels[i + 1] !== second.pixels[i + 1]) changed++
   }
-  lines.push(`  画面：着色像素 ${painted} → ${painted2}，转角度后变化 ${((changed / (first.width * first.height)) * 100).toFixed(1)}%`)
-  if (painted < 1000) throw new Error('视口几乎是空的，渲染没画上东西')
-  if (changed / (first.width * first.height) < 0.02) throw new Error('转了 30° 画面几乎没变，相机没接上')
+  lines.push(`  image: shaded pixels ${painted} → ${painted2}, ${((changed / (first.width * first.height)) * 100).toFixed(1)}% changed after turning`)
+  if (painted < 1000) throw new Error('the viewport is nearly empty; nothing was drawn')
+  if (changed / (first.width * first.height) < 0.02) throw new Error('the image barely changed after turning 30°; the camera is not wired up')
 
   const os = await import('node:os')
   const path = await import('node:path')
@@ -1475,7 +1475,7 @@ async function runSmoke(): Promise<void> {
   const tmp = path.join(os.tmpdir(), `architect-smoke-${Date.now()}.mcai`)
   await service.save(tmp)
   const reopened = await service.open(tmp)
-  lines.push(`save+open: ${(await fs.stat(tmp)).size} 字节 → rev ${reopened.revision} / ${reopened.blocks} 方块`)
+  lines.push(`save+open: ${(await fs.stat(tmp)).size} bytes → rev ${reopened.revision} / ${reopened.blocks} blocks`)
   await fs.rm(tmp, { force: true })
 
   // ── 导出/导入闭环（M7） ─────────────────────────────────────────────────────
@@ -1495,10 +1495,10 @@ async function runSmoke(): Promise<void> {
   const before = service.state().blocks
   const imported = await service.importModel(path.join(dir, 'smoke.schem'))
   lines.push(
-    `import schem: ${imported.summary} · 工程 ${before} → ${imported.state.blocks} 方块` +
-      (imported.unknown.length > 0 ? ` · ${imported.unknown.length} 种未知` : ''),
+    `import schem: ${imported.summary} · project ${before} → ${imported.state.blocks} blocks` +
+      (imported.unknown.length > 0 ? ` · ${imported.unknown.length} unknown type(s)` : ''),
   )
-  if (imported.state.blocks === 0) throw new Error('导入 .schem 后世界是空的')
+  if (imported.state.blocks === 0) throw new Error('the world is empty after importing a .schem')
   await fs.rm(dir, { recursive: true, force: true })
 
   process.stdout.write(`SMOKE OK\n${lines.map((l) => `  ${l}`).join('\n')}\n`)
@@ -1581,7 +1581,7 @@ async function loadExampleOrDemo(): Promise<void> {
   for (const candidate of candidates) {
     try {
       await studio.open(candidate)
-      process.stdout.write(`[demo] 已载入示例工程 ${candidate}\n`)
+      process.stdout.write(`[demo] loaded the example project ${candidate}\n`)
       return
     } catch {
       // 换下一个候选；都没有就走脚本化生成
@@ -1625,7 +1625,7 @@ function seedMarkdownSample(): void {
   lines.push('{ "check": "block_at", "pos": [8, 1, 4], "expect": "minecraft:spruce_door" }')
   lines.push('```')
   lines.push('')
-  lines.push('参考：[Minecraft Wiki](https://minecraft.wiki/w/Stairs)')
+  lines.push('Reference: [Minecraft Wiki](https://minecraft.wiki/w/Stairs)')
   const markdown = lines.join('\n')
   studio.chat.seedDiagnosticMessage(
     markdown,
@@ -1681,24 +1681,24 @@ void app.whenReady().then(async () => {
         if (result === undefined) return
         persistSettings()
         process.stdout.write(
-          `[probe] ${result.ok ? '已测出' : '未测通'} ${result.config.model}` +
-            ` 图像输入=${result.config.capabilities.vision ? '支持' : '不支持'}\n`,
+          `[probe] ${result.ok ? 'probed' : 'not reachable'} ${result.config.model}` +
+            ` image input=${result.config.capabilities.vision ? 'supported' : 'unsupported'}\n`,
         )
       })
       .catch((error: unknown) => {
-        process.stderr.write(`[probe] 能力探测失败：${error instanceof Error ? error.message : String(error)}\n`)
+        process.stderr.write(`[probe] capability probe failed: ${error instanceof Error ? error.message : String(error)}\n`)
       })
   }
 
   // 首次启动把设置里的问题（比如设置文件坏过）告诉用户，而不是静默吞掉
   if (settingsLoad.fresh === false && settingsLoad.issues.length > 0) {
-    process.stderr.write(`设置文件有 ${settingsLoad.issues.length} 个问题\n`)
+    process.stderr.write(`the settings file has ${settingsLoad.issues.length} issue(s)\n`)
   }
 
   // GUI 冒烟：窗口 + preload + 渲染进程 + IPC + 渲染全链路，10 秒内没回报就算失败
   if (guiSmoke || capturePath !== undefined || shotPath !== undefined) {
     setTimeout(() => {
-      process.stderr.write('GUI 超时：渲染进程没有回报\n')
+      process.stderr.write('GUI timed out: the renderer never reported back\n')
       app.exit(1)
     }, 10000)
   }

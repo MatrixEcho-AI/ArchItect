@@ -982,6 +982,44 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
             .join('，'),
     );
 
+    /**
+     * **设置对话框里不该有探针日志，也不该有"测试连接"按钮**（用户定的：那是给维护
+     * 这个程序的人看的，不是给配模型的人看的，详细日志在 CLI 的 architect providers）。
+     *
+     * 这条断言的价值全在**反向**：它钉住"别再加回来"。所以判据是"按钮在、日志在、
+     * 字段也在"，而不是"对话框打得开"——只查打得开的话，加回一整个日志面板照样过。
+     * 顺带证明 openSettings() 那条路还活着（它同时是挡住发送时那条横幅的入口）。
+     *
+     * 它**不点「应用」**：那会在真实配置上发起一次网络探测（挑模型那一步会在服务端
+     * 花掉一次调用），而且用户这台机器上跑的可能是真端点。应用那条路只能靠单元测试
+     * 与人工验，冒烟测不碰。
+     */
+    const settingsBtn = document.querySelector('#btn-settings');
+    if (settingsBtn !== null && settingsBtn.disabled !== true) {
+      settingsBtn.click();
+      for (let i = 0; i < 8; i++) await frames();
+      const modal = document.querySelector('.ant-modal');
+      const hasField = (id) => document.querySelector('#' + id) !== null;
+      check(
+        'settings-dialog-clean',
+        modal !== null &&
+          hasField('cfg-baseurl') &&
+          hasField('cfg-model') &&
+          hasField('cfg-key') &&
+          document.querySelector('#btn-test') === null &&
+          document.querySelector('#probe-log') === null,
+        modal === null
+          ? '对话框没打开'
+          : '字段 ' + (hasField('cfg-baseurl') && hasField('cfg-model') && hasField('cfg-key') ? '在' : '缺') +
+              ' / 测试连接按钮 ' + (document.querySelector('#btn-test') === null ? '已移除' : '还在') +
+              ' / 探针日志 ' + (document.querySelector('#probe-log') === null ? '已移除' : '还在'),
+      );
+      // 关掉，后面几条断言要读的不是这一层
+      const cancel = document.querySelector('#btn-settings-cancel');
+      if (cancel !== null) cancel.click();
+      for (let i = 0; i < 8; i++) await frames();
+    }
+
     // 挡住发送的时候，必须有一条**能直接解决问题的路**（不然新用户第一屏就卡住）
     const blocking = document.querySelector('#blocking');
     const blocked = blocking !== null && !blocking.classList.contains('hidden');

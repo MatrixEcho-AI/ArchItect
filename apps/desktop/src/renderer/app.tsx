@@ -824,7 +824,7 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
         onActiveId={setEditingProvider}
         onClose={() => setSettingsOpen(false)}
         onSaved={(next: SettingsView) => studioRef.current?.setSettings(next)}
-        onStatus={(key: MessageKey) => setStatus(t(key))}
+        onStatus={(key: MessageKey, params?: Record<string, string>) => setStatus(t(key, params))}
       />
     </>
   )

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button, Flex, Input, InputNumber, Modal, Select, Typography } from 'antd'
 import { t } from '@architect/i18n'
 
-import type { DiscoveryResult, ProviderView, SettingsView } from '../types.js'
+import type { ProviderView, SettingsView } from '../types.js'
 import type { Locale } from '@architect/i18n'
 import type { MessageKey } from '@architect/i18n'
 
@@ -13,9 +13,15 @@ import type { MessageKey } from '@architect/i18n'
  * 没有任何一条 IPC 通道能把明文读回来——所以这里连"回显已保存的 key"这条路都不存在，
  * 不是"没做"。
  *
- * 另一个保留：**探针（测试连接）的结果是人能读的一段文本**，不是几个对勾。
- * 它要回答的是"到底哪一步不对"（列不出模型？不吃图？工具调用不支持？），
- * 而"失败"两个字回答不了这个问题。
+ * **这里没有"测试连接"，也没有探针日志**（用户定的）：接口地址、模型名、能不能吃图
+ * 那一堆是**维护这个程序的人**要看的，不是设置模型的人要看的。要看那本日志有 CLI：
+ * `architect providers`（见 `cli.providers.*` 与 `packages/cli`）。
+ *
+ * 但探针**本身**不能一起删掉：它是唯一会写回「模型名」和「vision」的地方
+ * （`ChatController.testConnection` 那段写回），而 `vision` 是决定图发不发给模型的
+ * 唯一开关。没有按钮还调不到它的话，新用户填完地址保存后会永远卡在
+ * "还没选定模型"，而且附图会被静默丢掉。所以「应用」时自己补一次，见下面
+ * `runProbe` 的调用点——**那条调用是这个对话框里唯一不可省的一步**。
  */
 
 const PRESETS = ['deepseek', 'openai', 'ollama', 'custom'] as const
@@ -29,7 +35,11 @@ export interface SettingsModalProps {
   onClose: () => void
   /** 让 `App` 统一处理"写回 + 刷新 + 状态行"这三件事。 */
   onSaved: (next: SettingsView) => void
-  onStatus: (key: MessageKey) => void
+  /**
+   * 让 `App` 写一行状态。**带参数**，因为"挑了哪个模型"这条必须说出模型名——
+   * 只说"发现 1 个可用模型"等于没说。
+   */
+  onStatus: (key: MessageKey, params?: Record<string, string>) => void
 }
 
 export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
@@ -40,7 +50,6 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   const [usd, setUsd] = useState<number | null>(null)
   const [turns, setTurns] = useState<number | null>(null)
   const [locale, setLocale] = useState<Locale>('zh-CN')
-  const [probe, setProbe] = useState('')
 
   const target =
     props.activeId !== undefined && settings?.providers.some((p) => p.id === props.activeId) === true
@@ -80,33 +89,46 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
     return keyPlain.trim().length > 0 ? { config, plain: keyPlain } : { config }
   }
 
-  const runProbe = async (listOnly: boolean): Promise<void> => {
-    if (editing === undefined) return
+  /**
+   * 探测当前正在编辑的这个 provider，把结果落回设置。
+   *
+   * 两件事一起做，缺一不可：
+   *
+   * 1. **写回模型名**。`testConnection` 会在模型名为空时从 `GET /models` 挑一个
+   *    （`discoverProvider` 的 `model` 步骤），这条是把挑出来的那个填回输入框，
+   *    用户不用手抄。
+   * 2. **写回能力**。主进程在 `testConnection` 里已经把 `result.config.capabilities`
+   *    写进设置并落盘，但这里的 `editing` 还是探测前那份快照，而「应用」走的
+   *    `collectConfig()` 恰恰读 `editing.capabilities`。所以探测完必须重新拉一次
+   *    `settings()` 把快照换掉——否则点「应用」会用旧的 `vision: false` 盖掉刚探到的
+   *    `vision: true`，图就又静默丢了。这条踩过一次。
+   *
+   * 返回挑出来的模型名（空串表示没挑到，例如端点不可达）。
+   */
+  const probeCurrent = async (): Promise<string> => {
+    if (editing === undefined) return ''
     const { config, plain } = collectConfig()
-    setProbe(t('settings.llm.testing'))
     try {
-      const result: DiscoveryResult = await window.architect.testConnection({
+      const result = await window.architect.testConnection({
         preset: editing.preset,
         baseURL: config['baseURL'],
         model: config['model'],
         apiKeyRef: config['apiKeyRef'],
         ...(plain !== undefined ? { apiKeyPlain: plain } : {}),
-        listOnly,
       })
-      setProbe(describeProbe(result))
-      // 探针挑出来的模型写回输入框——用户不用手抄
       if (result.config.model.length > 0) setModel(result.config.model)
-      /**
-       * **把量出来的能力同步回界面**。
-       *
-       * 主进程在 `testConnection` 里已经把 `result.config.capabilities` 写回设置并落盘，
-       * 但这里的 `editing` 还是探测前那一份快照；而「应用」按钮走的 `collectConfig()`
-       * 恰恰读的是 `editing.capabilities`。不同步的话，点一下应用就把刚探到的
-       * `vision: true` 又用旧的 `false` 盖回去——图会再次被静默丢掉。
-       */
       props.onSaved(await window.architect.settings())
-    } catch (error) {
-      setProbe(error instanceof Error ? error.message : String(error))
+      return result.config.model
+    } catch {
+      /**
+       * 探测失败**不拦着保存**：地址写错了也要能先把配置存下来，而失败的原因会在
+       * 对话面板那条"挡住发送"的横幅里显示（`ChatController.blocking()` 读的是同一份
+       * 配置）。这里只负责不让异常冒到 React 外面。
+       *
+       * 失败时模型名多半还是空的，调用方据此给一条能看懂的状态——那是这里唯一
+       * 需要说话的地方，因为对话框里已经没有探针日志了。
+       */
+      return ''
     }
   }
 
@@ -129,6 +151,11 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
               void (async () => {
                 const { config, plain } = collectConfig()
                 await window.architect.saveProvider(config, plain)
+                /**
+                 * **先探测，再把预算写下去**——顺序反了的话，`setBudget` 末尾那次
+                 * `onSaved` 会拿着探测前的快照刷新界面，`vision` 又被盖回旧值。
+                 */
+                const chosen = await probeCurrent()
                 const budget: Record<string, number> = {}
                 if (usd !== null && Number.isFinite(usd) && usd > 0) budget['maxUsd'] = usd
                 if (turns !== null && Number.isFinite(turns) && turns > 0) budget['maxTurns'] = turns
@@ -137,7 +164,11 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                 )
                 props.onSaved(next)
                 setKeyPlain('')
-                props.onStatus('settings.llm.saved')
+                // 挑到模型就说挑到了哪一个；没挑到就是没接上，说清楚，别让用户以为配好了
+                props.onStatus(
+                  chosen.length > 0 ? 'settings.llm.chosen' : 'settings.llm.notChosen',
+                  { model: chosen },
+                )
                 props.onClose()
               })()
             }}
@@ -189,7 +220,6 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                   void window.architect.addProvider(preset).then((view) => {
                     props.onActiveId(view.activeId)
                     props.onSaved(view)
-                    setProbe(t('settings.llm.testing'))
                   })
                 }}
               >
@@ -274,23 +304,6 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
             ]}
           />
         </Row>
-
-        <div style={{ borderTop: '1px solid var(--ant-color-border-secondary)', paddingTop: 8 }}>
-          <Flex gap={6}>
-            <Button size="small" id="btn-test" onClick={() => void runProbe(false)}>
-              {t('settings.llm.test')}
-            </Button>
-            <Button size="small" id="btn-test-list" onClick={() => void runProbe(true)}>
-              {t('settings.llm.listOnly')}
-            </Button>
-          </Flex>
-          <pre id="probe-log" className="probe-log">
-            {probe}
-          </pre>
-          <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
-            {t('settings.llm.capabilitySource')}
-          </Typography.Text>
-        </div>
       </Flex>
     </Modal>
   )
@@ -318,60 +331,4 @@ function Row({
       {children}
     </Flex>
   )
-}
-
-/**
- * 把探针的每一步摊成人能读的一段话。
- *
- * 刻意**不做成对勾列表**：用户要回答的是"到底哪一步不对"，而每个失败都带着原始错误。
- */
-function describeProbe(result: DiscoveryResult): string {
-  const lines: string[] = []
-  for (const step of result.steps) {
-    switch (step.type) {
-      case 'models':
-        lines.push(t('settings.llm.discovered', { count: step.count }))
-        for (const model of step.models) lines.push(`    ${model}`)
-        break
-      case 'model':
-        lines.push(
-          `${t('settings.llm.model')}: ${step.model}` +
-            (step.matched !== undefined ? `  (${step.matched})` : step.guessed === true ? '  (?)' : ''),
-        )
-        break
-      case 'text':
-        lines.push(step.ok ? `text ok (${step.tokensIn} in)` : `text failed: ${step.error}`)
-        break
-      case 'tools':
-        lines.push(`tool calling: ${step.mode}`)
-        break
-      case 'vision':
-        lines.push(
-          step.vision
-            ? `${t('settings.llm.vision')}: ${t('settings.llm.yesVision')}` +
-                (step.imageTokenCost !== undefined
-                  ? `  ${t('settings.llm.imageTokenCost')} ≈ ${step.imageTokenCost}`
-                  : '')
-            : `${t('settings.llm.vision')}: ${t('settings.llm.noVision')} — ${step.error ?? ''}`,
-        )
-        break
-      case 'error':
-        lines.push(`! ${step.error}`)
-        break
-      case 'capabilities':
-        lines.push('')
-        lines.push(
-          `source: ${step.capabilities.source}   promptCache: ${step.capabilities.promptCache}`,
-        )
-        if (step.capabilities.contextWindow !== undefined) {
-          lines.push(`${t('settings.llm.contextWindow')}: ${step.capabilities.contextWindow}`)
-        }
-        break
-      default:
-        break
-    }
-  }
-  lines.push('')
-  lines.push(result.ok ? 'OK' : `FAILED: ${result.error ?? ''}`)
-  return lines.join('\n')
 }

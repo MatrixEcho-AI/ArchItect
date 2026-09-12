@@ -1998,9 +1998,51 @@ interface PlacedEntity {
 
 | 目标 | 现状 | 要做 |
 |---|---|---|
-| `.schem` | `Entities` 完全没写没读（`schematic.ts:116-130,148-217`）；`BlockEntities`(v3)/`TileEntities`(v2) 同样没有 | 两个都从零加。v2/v3 差异不止在块 `Data`，**接入前核官方 schema** |
-| `.litematic` | 已固定塞**空** `Entities` 与 `TileEntities`（`litematic.ts:156-157`），读侧忽略 | 槽位现成，改成填内容 + 解析 |
+| `.schem` | ~~`Entities` 完全没写没读；`BlockEntities`(v3)/`TileEntities`(v2) 同样没有~~ ✅ 已落地 | 写 v3、读 v2+v3。**字段布局已对官方规范原文核过**，三处与记忆不同，见下 |
+| `.litematic` | 已固定塞**空** `Entities` 与 `TileEntities`（`litematic.ts:156-157`），读侧忽略 | 形状已核（见下），实现未做 |
 | `.obj` | 几何来自 `registry.shapesOf(stateId)` 碰撞盒 | 实体走不通（无 stateId）；方块实体天然含在内 |
+
+**P2 的 `.schem` 落地记录**：写 v3、读 v2+v3，实体与方块实体两个字段都通。
+`json-nbt.ts` 负责 JSON ↔ NBT——两边的信息量不一样（NBT 十二种数字类型、
+JSON 一种），所以规则写死：**能精确推断的裸写、推断不出的带标注**
+（`{"__nbt":"short","value":5}`），`long` 写十进制字符串。于是外部文件 →
+我们 → 外部文件是无损的。
+
+两个会**安静丢数据**的坑，都是测试撞出来的：
+- **导出范围只算了方块**。`contentBounds()` 不看稀疏层，于是悬在建筑之上的船
+  落在范围外、直接不在文件里。范围现在会长到装得下两层稀疏数据。
+- **区域过滤按浮点比**。文件 `z = 4` 的方块在 `max.z = 4` 的范围里，而 `z = 4.5`
+  的实体就在同一格里、却被判成越界。两边现在都按格比。
+
+`.schem` 的验收口径是**重新导出逐字节相同**，不是 `contentHash` 相等：
+格式不携带实体 id（规范明说 UUID 不可依赖），导入时必然重新分配，
+所以哈希不可能相等——而字节相同是更强的断言，它连顺序、类型、空与非空一起管住了。
+
+`yaw`/`pitch` 在模型里是一等字段、在格式里只是附加数据。导出时 `data.Rotation`
+优先；导入时**只有当角度正好落在 22.5° 格点上**才把它收进 `yaw`/`pitch`
+（我们自己的导出永远落在格点上，所以逐字段相等），格点之外的原值留在 `data` 里——
+否则外部文件里的 189.3° 会被安静地量化成 180°。
+
+**互操作的字段布局（已核对，不要再凭记忆写）**：`web_fetch` 在本机拒绝
+`github.com` / `raw.githubusercontent.com`，但 `curl` 可以——规范原文因此拿到了。
+三处与记忆不同，而且每一处都会产出"这里看着成功、游戏里是错的"文件：
+
+| | Sponge v2 | Sponge v3 | Litematica |
+|---|---|---|---|
+| 方块实体列表在哪 | **根** `BlockEntities` | **`Blocks` 里面** | 每个 region 的 `TileEntities` |
+| 附加数据的键 | **`Extra`** | **`Data`** | 无包装，直接就是原版 NBT |
+| 附加数据怎么写 | **内联**（与 `Pos`/`Id` 平级） | 嵌在 `Data` 子 compound 下 | 内联 |
+| 类型字段名 | `Id` | `Id` | **小写 `id`** |
+| 实体位置 | `Pos` = `double[3]` | 同左 | `Pos` = **double 列表** |
+| 方块实体位置 | `Pos` = `integer[3]` | 同左 | **`x`/`y`/`z` 三个 int**（`putVec3i`） |
+| 写哪个版本 | — | 写 3、读 2 与 3 | v1 是 `EntityData`/`TileNBT` 包装 + 外层 `Pos`，v2+ 内联 |
+
+`Rotation` **不是**必需字段——它只是附加数据的一部分。照记忆把它当成并列字段写，
+会同时错三处。
+
+`.litematic` 的形状来自 Litematica 自己的序列化代码（`LitematicaSchematic.java` 的
+`getEntitiesAsListData` / `getBlockEntitiesAsListData` 与 `readEntities_v1/v2`），
+不是 Sponge 规范管的。
 | 迁移 | `MIGRATIONS` 绑 stateId（`migrate.ts:102-161`） | 仿同表模式另写实体版映射（`oak_boat`→模型 `boat`、`darkoak`↔`dark_oak`），与方块迁移分开 |
 
 ### 18.5 工具
@@ -2107,7 +2149,7 @@ interface PlacedEntity {
 | 期 | 内容 | 关键验收 |
 |---|---|---|
 | **P1 内核** ✅ | 三层数据模型 + 七个记账点 + 两种差分 + `contentHash` 纳入两层 | ① 只放一条船 → 日志**真的**多一条 op；② 覆盖一个满箱子再撤销 → **内容还在**；③ `verifyReplay` 在"方块相同、实体不同"时**必须失败** |
-| **P2 容器与互操作** | 两个新条目 ✅ + `packProject` extra 写回 ✅ + WAL ✅ + `.schem`/`.litematic` 四个字段 ⛔ | ④ ✅ 新条目工程被"不认识它们"的读方打开正常、保存后**还在**；⑤ ⛔ 往返逐字段相等（待互操作落地） |
+| **P2 容器与互操作** | 两个新条目 ✅ + `packProject` extra 写回 ✅ + WAL ✅ + `.schem` 两个字段 ✅ + `.litematic` 两个字段 ⛔ | ④ ✅ 新条目工程被"不认识它们"的读方打开正常、保存后**还在**；⑤ ✅ `.schem` 往返**逐字节相同**（比逐字段更强——id 由格式不携带，见下）/ ⛔ `.litematic` |
 | **P3 工具与闸门** | 五个工具 + `slice`/`verify`/`erase` 扩展 + prompt + 文档 | ⑥ 改东西不 verify → 闸门 nudge；⑦ `docs:check` 与 README 的"24"断言过 |
 | **P4 软件渲染** | 实体网格化 + 货架图集 + 两条软件路径 + 旗帜图案 + 告示牌近似文字 + golden | ⑧ 船的形状与朝向在预置机位下正确（golden 逐字节）；⑨ 不破坏既有 golden |
 | P5 视口与交互 | `ScenePayload` + three 路径 + `pickTriangle` + overlay 浮点盒 + 左栏列表 | ⑩ `--gui-smoke` 新断言；⑪ 点选选中实体 |

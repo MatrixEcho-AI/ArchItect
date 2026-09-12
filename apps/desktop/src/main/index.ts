@@ -1330,6 +1330,30 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         afterTurn.azimuth > beforeTurn.azimuth,
       '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°（往右拖 = 左转 = 角度增大），位置保持在 ' + beforeTurn.position,
     );
+
+    /**
+     * **实体那一层不凭空出现。**
+     *
+     * --demo 的示例工程里没有实体，所以这里断言的是**反向**的那一条：
+     * 没有实体时 ScenePayload 不带 entities、左栏也不显示实体一节。
+     * 这条看着弱，守的却是一件要紧的事——meshWorldEntities 在空世界上必须返回
+     * undefined，否则**两条渲染路径的对象形状都会变**，而既有 golden 正是靠
+     * 这一点逐字节不变的。有人图省事让它在空世界上也返回一份空几何，这条就会红。
+     *
+     * 正向的那一半（有实体时画出来、点得中、左栏列得出来）在单元测试里：
+     * packages/render/test/entities-render.test.ts 与 apps/desktop/test/studio.test.ts。
+     * 那几条需要往世界里写实体，注入脚本里没有这个入口。
+     *
+     * ⚠️ 这段脚本是 TS 模板字符串，**注释里不能出现反引号**（会把字符串提前闭合）。
+     */
+    const scene = await window.architect.scene();
+    const entitySection = document.querySelector('#entities');
+    check(
+      'scene-entity-layer',
+      scene.entities === undefined && entitySection === null,
+      '无实体时 entities=' + String(scene.entities === undefined) +
+        ' 左栏实体节=' + String(entitySection !== null),
+    );
     return results;
   })()`
   const raw = (await target.webContents.executeJavaScript(script)) as GuiCheck[]

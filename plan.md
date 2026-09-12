@@ -25,6 +25,7 @@
 15. [里程碑与验收标准](#15-里程碑与验收标准)
 16. [风险与对策](#16-风险与对策)
 17. [决策记录](#17-决策记录)
+18. [实体层（Entity Layer）](#18-实体层entity-layer)
 
 ---
 
@@ -1842,6 +1843,17 @@ secrets.bin
 | D-75 | **视口是一台真的第一人称相机：位置是真的，拖动只转头** | 交互相机持有 `eye`（世界坐标）+ 朝向 + 视场角（`renderer/freecamera.ts`）；拖动只改角度（`turn`），`WASD` 沿自己的轴平移（`moveStep`：W/S 走完整视线，A/D 走水平右方），滚轮改视场角，第一次交互时 `settleCamera()` 用 `fitPerspective` 把相机落到"框住内容"的位置。**拖动的方向按"画面跟着手走"定**：往右拖 = 画面里的东西往右移（`azimuth` 增）、往下拖 = 东西往下移（`elevation` 减） | 用户原话："不管怎么拖动，画面都是围绕中心旋转，不能更改视角面向的方向""不要相对目标点旋转，要相对相机旋转"。旧实现里"画面中心"是一个**钉死**的注视点（默认内容中心），于是拖动必然表现为"建筑原地自转"，而且没有位置概念，`WASD` 无从谈起。第一步把位置变成真的（转头时世界从眼前扫过），但**光有位置还不够**：正交投影下没有近大远小，转起来仍然像"托盘上的模型"，见 D-76。**枢轴一换，拖动的手感就翻了**：同样是"往右拖 = 方位角减小"，绕画面中心转时建筑跟着手往右走，原地转头时却往左走——用户的下一句反馈就是"拖动视角反了"。教训是**方向要对着屏幕上的实际位移定，不能对着角度符号定**，所以 `turn` 的符号按"画面跟手"写，并且 `test/freecamera.test.ts` 里把两个世界点真的投影出来、断言它们往哪边挪（改回旧符号这条就红） |
 | D-76 | **交互视口是透视投影（第一人称），模型截图仍是正交等轴测** | `CameraSpec.perspective = { eye, fov }`：给了它 `projectPoint` 做透视除法、`screenRay` 从相机出发、光栅器走**裁剪 + `1/z` 加权**那条内层循环；不给就是原来的正交。`fitPerspective` 解"相机该站多远才框得住"（按八个角点解不等式，不是估包围球）。桌面视口走透视；`cameraForShot`（模型截图、CLI、golden）**不开**透视 | 用户："我要的是透视投影，第一视角——渲染一个画面需要输入相机坐标、相机朝向，拖动鼠标调整的是相机朝向。" 正交下无论怎么改相机，成像只差一个旋转+平移，近处的墙和远处的墙一样大，观感永远是"托盘上的模型"；透视才有近大远小、才有"站在世界里"的感觉。**模型那条路故意不跟进**：等轴测图两张之间可以直接比（近大远小会让同一座建筑因为站位不同而没法比），而且 golden 签名图、工具描述、提示词都是按它写的。代价：同一个机位，人看到的是透视、模型拍到的是正交——这是**有意的差别**，不是漏了。光栅器那条路必须自己裁近平面（顶点落到相机后面时除以 z 会把三角形翻到画面另一侧），`PERSPECTIVE_NEAR` 两条路取同一个值（0.1），否则"贴着墙站"时 GPU 与兜底视口会画出不同的东西 |
 
+| D-77 | **实体与方块实体共享同一个 rev、同一条 `EditOp`** | 三层数据都记进 `EditOp`；撤销仍然是游标移动（D-57），不产生新 op | §18.3；两套 rev 会立刻产生双真相，而 `replay.ts:36-46` 正是为这个坑写过注释的地方 |
+| D-78 | **新负载只加可选字段，`patch` 恒在** | `EditOp.blockEntityPatch?` / `entityPatch?`；实体 op 写**空** `ChangeSet` | §18.1；缺 `patch` 会让 `decodeEditOp` 抛在 `fromJSONL` 的 `try` **之外**，旧读方**整份工程打不开** |
+| D-79 | **实体差分用 JSON `{key, before, after}`，不用 packed 数组** | 与 `ChangeSet` 的 from/to 同构、`inverted()` 一律交换 before/after；上限兜底 | 方块是百万级稠密格，实体是几十个稀疏对象。为几十条记录设计二进制格式是过度工程 |
+| D-80 | **实体 id 是 `e_<rev>_<n>`，由写入方分配并写进差分** | 不持久化计数器 | §18.3；replay 纯机械应用，不需要处理"截断分叉之后计数器该回退到哪" |
+| D-81 | **方块实体的差分必须由 `store` 层产出** | `writeBlocks` 在写方块的同时产出方块实体差分；位置索引为空时走零成本快路径 | §18.2；`fill_box` 覆盖一个满箱子时**只有 store 知道**，放到工具层收集的话撤销之后箱子回来、**内容没了**，而且是安静地没 |
+| D-82 | **实体位置存精确 double，工具入参量化到 1/16 格** | 磁盘无损（NBT 原生 double、导入不丢精度），API 侧给整数格 + 偏移 | D1/D3 的老规矩：模型给意图、harness 给精度。量化 API 而不量化存储，守住附录 E.5"永不静默丢东西" |
+| D-83 | **实体类型不设白名单，改用注册表 + 封闭 schema + 硬上限** | 类型串必须命中 minecraft-data 的实体表；`data` 按类型做封闭 schema；`MAX_ENTITIES = 4096` | §18.7；拆掉 D8 那道墙就要用三条别的顶上，否则"模型能往 `.schem` 里写任意 NBT"等于往游戏里注入 |
+| D-84 | **实体图集是货架装箱的异构 tile，不是等大网格** | `atlas-format.ts` 的等大 16×16 假设推广成"按实际尺寸取 + 货架装箱" | §18.6；实体贴图从 64×64 到 256×256，等大网格要么浪费到 64 MB、要么装不下大的 |
+| D-85 | **方块实体的渲染只补旗帜图案与告示牌文字** | 箱子/床/花盆/头颅等零成本或一张小映射表；告示牌先用 5×7 近似字体，原生字体 + CJK 列为后续 | §18.6；其余要么方块状态已经画了，要么静态渲染看不见（箱子内容） |
+| D-86 | **`contentHash` 必须把方块实体与实体算进去** | `store.contentHash()` 扩到三层 | §18.3；不进 hash 的话 `verifyReplay` 会**静默放过**"方块相同、实体分叉"，正是 D-57 那次事故的同一类 |
+
 ### 17.2 待定
 
 **M4 验收标准的具体数字**：黄金任务（§14）的通过率阈值、单任务成本上限、允许的轮数上限。
@@ -1867,6 +1879,239 @@ secrets.bin
 **软件光栅器的 golden 基线**：✅ 已落地（4 张，见 §14）。接受"改渲染就要重新签"这个代价，
 因为换来的是"砖缝糊了 / AO 丢了 / z-buffer 失效"这类**看得见的 diff**——
 以前那些弱断言（非空白 + 尺寸对）对这三种退化一律放行。
+
+**实体模型映射表与方块实体能力表的维护**：两张表都只能自维护——`minecraft-data` 1.21.4
+**不提供**"哪些方块带方块实体"（`blocksByName[*].entity` 全空，实测 0 命中），而
+`prismarine-viewer@1.33.0` 已经是 npm 上的最新版、模型表还是旧命名（`boat` 而不是 `oak_boat`）。
+它们会随 Minecraft 版本与上游包变动而漂移，而漂移的表现是"某个实体静默变成兜底盒"——
+要不要给它们加一条闸门（比如"映射覆盖率低于 N% 就测试失败"）还没定。
+
+**`.obj` 导出实体**：实体的几何是骨骼模型，而 `obj.ts` 那条路只认
+`registry.shapesOf(stateId)` 的碰撞盒。按 AABB 盒导出成独立 `o` 组、还是明确不导出并写进 README，没定。
+方块实体天然含在方块几何里，不受这条影响。
+
+**复制与镜像要不要带上实体**：`paste_region` / `symmetrize` 带实体与方块实体是很自然的
+（复制一座码头应该把船一起带走），但那是**行为变更**——同一个工程重放出来的结果会不会和以前不同？
+没定。
+
+**告示牌文字的原生字体**：`render/font.ts` 是给标尺用的 5×7 ASCII 位图字体，源码里明说没有 CJK。
+先用它近似够看，但"告示牌上写中文"迟早要做。原生字体（`minecraft-assets` 的 `font/` +
+逐码点宽度表 + unifont）是一块独立的工作，没排期。
+
+---
+
+## 18. 实体层（Entity Layer）
+
+> 状态：**方案，未实施**。决策见 D-77…D-86。
+
+§4 到 §8 的全部设计都建立在一个假设上：**世界 = 整数格 × uint16 stateId**。
+实体打破这个假设——它是浮点位置、可重叠、带附加数据的对象。这一章说明怎么加第二层与第三层，
+以及为什么不能"在方块格式上打补丁"。
+
+### 18.1 四条会被撞碎的不变式
+
+| # | 不变式 | 证据 | 撞碎的后果 |
+|---|--------|------|-----------|
+| 1 | `ChangeSet` 是**稠密格网**（`Int32 x/y/z` + `Uint16 from/to`，16 字节一格） | `changeset.ts:13-36,104-150` | 实体是稀疏对象，塞不进去 |
+| 2 | `EditLog.record()` 在 `changeSet.length === 0` 时返回 `undefined` | `log.ts:45` | **只放一条船、不动方块 → op 根本不落盘** |
+| 3 | 视口刷新的判据是 `session.log.length` 变化 | `studio.ts:404-409` | 没有 op 就不发 `revision` 事件，**界面不重画** |
+| 4 | `EditOpRecord` 缺 `patch` 时 `decodeEditOp` 抛错，且抛点在 `fromJSONL` 的 `try` **之外** | `log.ts:133-145,205`；`project.ts:244` | **整份工程打不开** |
+
+第 4 条把"实体负载怎么放"从设计偏好变成一个硬约束：**只能新增可选字段，不能改 record 形状**。
+
+还有两处会**安静地**出事：`EditLog.validate()` 断言 `patch.length === result.changed`（`log.ts:161-165`），
+`verifyReplay` 只比方块 `contentHash`（`replay.ts:119-128`；`store.ts:384`）。实体不进 hash 的话，
+"方块相同、实体分叉"会被静默放过——正是 `replay.ts:36-46` 那段注释为之写过墓志铭的那类事故。
+
+### 18.2 世界分三层
+
+| 层 | 键 | 基数 | 与方块的关系 | 差分由谁产出 |
+|---|---|---|---|---|
+| **方块** | `(x,y,z)` | 稠密，`uint16` stateId | — | `store.writeBlocks`（现状） |
+| **方块实体** | `(x,y,z)` | 稀疏，**≤ 1/格** | **寄生**：方块换成不带方块实体的类型，它就随之消失 | **`store` 层** |
+| **实体** | `id` | 稀疏，**0..n/格**（可重叠） | 无 | **工具层** |
+
+最后两列的不对称是这一章最要紧的一条：
+
+> **方块实体的差分必须由 `store` 层产出，不能在工具层收集。**
+
+`fill_box` 覆盖一个箱子时，"箱子及其内容消失"这件事**只有 `store` 知道**——工具只知道它写了什么，
+不知道哪个格子上原来有箱子。放到工具层收集的话，撤销之后箱子会回来、**里面的东西没了**，
+而且是安静地没。
+
+代价：`writeBlocks` 要为每个变更格查一次位置索引（`ChangeSet` 可能是上百万格）。
+对策是一条快路径——索引为空时零成本，非空时才逐格查 `Map`。这条注释必须留在代码里，
+因为它是"看起来多余、删掉就出事"的那一类。
+
+方块实体能力表要自维护（约 40 项：`chest`→容器、`oak_sign`→告示牌、`white_banner`→旗帜…），
+与实体模型映射表同级，理由见 §17.2。
+
+### 18.3 差分与记账
+
+`EditOp` 的最终形状（`patch` **恒在**，其余两个可选——守 §18.1 第 4 条）：
+
+```ts
+interface EditOp {
+  patch: ChangeSet                          // 方块；实体 op 时为空集
+  blockEntityPatch?: BlockEntityChange[]    // 键 = 位置
+  entityPatch?: EntityChange[]              // 键 = id
+}
+
+interface EntityChange { key: string; before?: PlacedEntity; after?: PlacedEntity }
+```
+
+`EntityChange` 与 `BlockEntityChange` **共用同一个 `{key, before?, after?}` 形状**，只有键的类型不同。
+一个新概念，不是两个。`inverted()` 一律交换 before/after——与 `ChangeSet.inverted()`
+（`changeset.ts:95-102`）同构。
+
+```ts
+interface PlacedEntity {
+  id: string            // `e_<rev>_<n>`，由写入方分配 → replay 纯机械，不需要持久化计数器
+  type: string          // 规范串 `minecraft:oak_boat`（版本无关层，对齐 palette 的思路）
+  x: number; y: number; z: number   // 精确 double
+  yaw: number           // 0..15（22.5° 一步）；named facing 在工具层映射
+  pitch?: number
+  data?: Record<string, unknown>    // 按类型封闭 schema
+}
+```
+
+必须一起改的**七个记账点**——漏掉任何一个都会安静地坏：
+
+1. `editop.ts` —— 三个字段 + `EditOpResult` 加两个计数
+2. `log.ts` —— `record()` 的丢弃判据改成"三层都空才丢"；`validate()` 加校验；`encode/decodeEditOp` 带上两个负载。
+   这两个函数是 `.mcai` **与** WAL 的唯一真相（D-31）
+3. `replay.ts` —— `replayTo` 与 `ReplaySession.seek` **两个方向**都要应用
+4. `store.ts` —— 写入路径产出方块实体差分（§18.2）
+5. `store.ts` —— `contentHash()` 纳入两层，否则 `verifyReplay` 会安静地放过实体分叉
+6. `inspect/ascii.ts` —— `slice` 标出实体与方块实体；`measure`/`lint` 的口径跟着扩
+7. `studio.ts` —— 回归点：三层中任何一层的写入都必须让 `revision` 事件发出
+
+### 18.4 容器与互操作
+
+两个新条目（都是"基快照 + op 流"里的基快照）：`world/entities.jsonl`、`world/block-entities.jsonl`。
+
+**前置条件：先修 `packProject` 的 `extra` 写回。** `unpack` 把未知条目收进 `extra` 不报错
+（`project.ts:258-263`），但 `PackInput` 没有 `extra`、`packProject` 从不写回（`project.ts:47-62,115-162`）——
+与 `docs:259` "原样保留"的承诺相反。**旧读方打开含新条目的工程没事，一保存就把新条目丢了。**
+
+| 目标 | 现状 | 要做 |
+|---|---|---|
+| `.schem` | `Entities` 完全没写没读（`schematic.ts:116-130,148-217`）；`BlockEntities`(v3)/`TileEntities`(v2) 同样没有 | 两个都从零加。v2/v3 差异不止在块 `Data`，**接入前核官方 schema** |
+| `.litematic` | 已固定塞**空** `Entities` 与 `TileEntities`（`litematic.ts:156-157`），读侧忽略 | 槽位现成，改成填内容 + 解析 |
+| `.obj` | 几何来自 `registry.shapesOf(stateId)` 碰撞盒 | 实体走不通（无 stateId）；方块实体天然含在内 |
+| 迁移 | `MIGRATIONS` 绑 stateId（`migrate.ts:102-161`） | 仿同表模式另写实体版映射（`oak_boat`→模型 `boat`、`darkoak`↔`dark_oak`），与方块迁移分开 |
+
+### 18.5 工具
+
+| 工具 | 形态 | 理由 |
+|---|---|---|
+| `place_entity` | `{entities: [{type, at, facing?, offset?, data?}]}` —— **数组** | D1：一次调用 = 一个 op = 一次撤销。"码头边一排 8 条船"是**一个意图**；单放一条就是长度 1 的数组 |
+| `remove_entity` | `{ids?} \| {region}` | 与 `erase` 分开：`erase` 是方块语义，让它"顺便删实体"会制造歧义 |
+| `list_entities` | `{region?, type?}` | 读侧 |
+| `edit_block_entity` | `{at, patch}`，`patch` 按**该格方块类型**的封闭 schema 校验 | 方块实体类型有十几二十种且开放；一类型一工具会吃掉 prompt 预算，而约束本该由 schema 承担 |
+| `get_block_entity` | `{at}` | 读侧 |
+
+三处扩展：
+
+- **`slice`** —— ASCII 图给实体一个字形 + 图例项（坐标取 `floor(pos)`）。守 D3：文本才是精确编辑的介质。
+- **`verify`** —— claim 加 `entity_at` / `entity_count` / `block_entity_at`。**这是过闸门的必需品**：
+  闸门只认 `mutating && data.readback === true`（`loop.ts:403-405`，D-18），而现有 `verify`/`analyze`
+  只读方块 → 不改就连续两次 nudge，然后以 `unverified` 收尾（`loop.ts:139-143,401-407`）。
+- **`erase`** —— 命中区域里有实体时，**在结果里报告"还有 N 个实体留在原地"**（不默认删）。
+  harness 给精度，模型做决定。
+
+`run_batch` **不收实体工具**：`planBatchOp` 要求工具能表达成纯方块 `EditPlan`（`edit.ts:26-32`），
+实体天然不适配（`batch.ts:40-48,53-102`）。
+
+错误必须可自纠，抄 `search_blocks` 的 "Did you mean: minecraft:oak_boat, …"（§8.4）。
+
+### 18.6 渲染
+
+#### 图集：货架装箱，不是等大网格
+
+现有图集硬编码 `TILE_SIZE = 16` 且假定等大正方形 tile 网格（`atlas-format.ts:11,40-94`），
+而船的贴图是 128×64、末影龙是 256×256——**装不进现有图集**。
+
+实体图集改为**货架装箱（shelf packing），tile 尺寸异构**。`readTilePixels` 现在"只取左上 16×16"
+（`atlas.ts:81-91`）的做法推广成"取实际尺寸"，UV 由 `(u0,v0,su,sv)` 表给出。原来那条
+"一个三角形的 3 个 UV 必须落在同一 tile 内"的不变式变成"同一张贴图"——天然成立，
+而 `raster.ts:133-141` 只取重心判 opaque 的假设保住了。
+
+`TexturePack.read()` 现在只认 `block/`（`assets.ts:55` 直接 `return undefined`）→ 要扩出 `entity/`。
+注意 `minecraft-assets` 的 JS API **不暴露** entity 索引，只能自己 `join(directory,'entity')` 读盘。
+
+#### 三条路径都要接
+
+- **纹理软件路径**（`renderTextured`）—— CLI `shoot` 与 bench 走它。不接 → **模型看不见自己放的东西，回路是断的**。
+- **纯色快路径**（golden 走的那条）—— 接一个"实心盒 + 平色"的简化，成本极低。
+- **视口 three.js 路径** —— 不接 → 用户看到的不等于模型看到的，违反 D-48/D-50。
+
+对应的扩展点：`pickBlock` 的射线是通用的，但语义层是整数格 + 主轴法线（`pick.ts:143-161`）
+→ 抽出 `pickTriangle()`，在其上分别建方块语义与实体语义；`drawOverlays` 只有整数 `Bounds`
+（`overlay.ts:10,266`）→ 需要浮点 min/max 版才能画实体高亮。
+
+#### 实体几何
+
+上游 `prismarine-viewer` 的 `viewer/lib/entity/entities.json`（94 个模型）来自 1.33.0，
+**已确认它就是 npm 上的最新版**，没有更新的表可拉。像 `render.json`/`blockmap.json` 一样
+**烘成** `packages/render/data/<版本>/entities.json`（派生数据进 `data/`，vendored 代码进 `src/vendor/`）。
+
+转换器把 `{bones[{pivot,rotation,mirror,cubes[{origin,size,uv,inflate}]}], texturewidth/height}`
+变成与方块同形的 `{positions,normals,uvs,indices}`。上游 `Entity.js:91-129` 的 `addCube` 数学可以借用，
+但它把骨骼层级交给 three 的 `Skeleton/Bone` → **软件路径必须自己沿 `parent` 链复合变换**，
+最后整体缩放到 1/16。这是渲染侧唯一有真实难度的部分。
+
+模型表的键是**旧命名**（`boat`、`chest_minecart`），而 1.21.4 的实体名是 `oak_boat`。
+映射表约 30 条（生物名基本同名，重命名集中在船/羊驼/僵尸猪灵这类）。
+**映射不到的类型画 AABB 兜底盒 + 平均色**（对齐上游 `entities.js:40` 与附录 E.5"永不静默丢东西"）。
+
+#### 方块实体的渲染成本
+
+| 方块实体 | 静态渲染成本 |
+|---|---|
+| 箱子 / 陷阱箱 / 桶 | **零** —— 外观由方块状态画，内容静态看不见 |
+| 床、花盆 | **零** —— 1.21.4 里颜色是方块状态，`potted_*` 是独立方块 |
+| 头颅 / 玩家头 | 低 —— 按类型选贴图，一张小映射表 |
+| 讲台 / 唱片机 / 营火 / 雕纹书架 | 低 —— 静态大多看不见 |
+| 雕纹陶罐 | 中 —— 纹样影响贴图 |
+| **旗帜 / 墙旗** | **高** —— 在 `banner_base` 上叠加最多 16 层纹样（`entity/banner/` 已确认有 43 张图案） |
+| **告示牌 / 悬挂告示牌** | **中** —— 文字画在牌面上（颜色、发光、正反两面） |
+
+**真正要新画的只有旗帜图案和告示牌文字两块。**
+
+告示牌文字注意：`render/font.ts` **复用不了**——源码里明说那是 5×7 位图字体、只覆盖 ASCII、
+没有 CJK，且只被 `overlay.ts` 用来画标尺。先近似（现有 5×7 字体 + 染色，够看、成本近乎零），
+正规做法（从 `minecraft-assets` 的 `font/` 取原生字体图集 + 逐码点宽度表 + unifont）列为后续。
+理由是告示牌文字的设计价值主要在**导出**（进游戏能看见），不在截图里那几像素。
+
+### 18.7 范围与上限
+
+实体类型**不设白名单**（有的都放）。这拆掉了 D8 那道"结构上不可能用错"的墙，
+所以要用三条补偿顶上：
+
+1. **注册表校验** —— 类型串必须命中 minecraft-data 的实体表，锚定小写 + 允许列表
+   （照 `migrate.ts:76` 的模式），不命中给 "Did you mean" 候选。
+2. **`data` 按类型封闭 schema 校验** —— 不接受自由 NBT。模型能往 `.mcai` 与 `.schem` 里写任意东西，
+   等于往游戏里注入。既有加固模式：capture id 的十六进制限制（`chat.ts:255-262`）、
+   `scrubSecrets`（`agent/redact.ts:15-20`）。
+3. **硬上限** —— `MAX_ENTITIES = 4096`、单 op 实体数上限、单条 JSONL 行长度上限
+   （对齐 `DEFAULT_HARD_LIMIT` 的风格，`store.ts:65`）。
+
+打包仍要改：`apps/desktop/package.json` 的 `build.files` 只放回 `data/1.21.4/blocks/**`，
+实体贴图（**2.2 MB**）与告示牌/旗帜贴图都要单独放回。
+
+### 18.8 分期与验收
+
+| 期 | 内容 | 关键验收 |
+|---|---|---|
+| **P1 内核** | 三层数据模型 + 七个记账点 + 两种差分 + `contentHash` 纳入两层 | ① 只放一条船 → 日志**真的**多一条 op；② 覆盖一个满箱子再撤销 → **内容还在**；③ `verifyReplay` 在"方块相同、实体不同"时**必须失败** |
+| **P2 容器与互操作** | 两个新条目 + `packProject` extra 写回 + WAL + `.schem`/`.litematic` 四个字段 | ④ 新条目工程旧读方打开正常、保存后**还在**；⑤ 往返逐字段相等 |
+| **P3 工具与闸门** | 五个工具 + `slice`/`verify`/`erase` 扩展 + prompt + 文档 | ⑥ 改东西不 verify → 闸门 nudge；⑦ `docs:check` 与 README 的"24"断言过 |
+| **P4 软件渲染** | 实体网格化 + 货架图集 + 两条软件路径 + 旗帜图案 + 告示牌近似文字 + golden | ⑧ 船的形状与朝向在预置机位下正确（golden 逐字节）；⑨ 不破坏既有 golden |
+| P5 视口与交互 | `ScenePayload` + three 路径 + `pickTriangle` + overlay 浮点盒 + 左栏列表 | ⑩ `--gui-smoke` 新断言；⑪ 点选选中实体 |
+| P6 打磨 | `paste_region`/`symmetrize` 带实体、linter 判据、打包、i18n | ⑫ linter 判据**写死**并配正反样例（附录 D 的教训） |
+
+P1–P4 全部是纯内核 + 纯计算，**不碰 Electron**（守 D5），可以脱离界面测透。
 
 ---
 

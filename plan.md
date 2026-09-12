@@ -1902,7 +1902,8 @@ secrets.bin
 
 ## 18. 实体层（Entity Layer）
 
-> 状态：**方案，未实施**。决策见 D-77…D-86。
+> 状态：**P1 已落地**（三层数据模型 + 记账 + 39 个测试），P2–P6 未实施。
+> 决策见 D-77…D-86。
 
 §4 到 §8 的全部设计都建立在一个假设上：**世界 = 整数格 × uint16 stateId**。
 实体打破这个假设——它是浮点位置、可重叠、带附加数据的对象。这一章说明怎么加第二层与第三层，
@@ -2104,7 +2105,7 @@ interface PlacedEntity {
 
 | 期 | 内容 | 关键验收 |
 |---|---|---|
-| **P1 内核** | 三层数据模型 + 七个记账点 + 两种差分 + `contentHash` 纳入两层 | ① 只放一条船 → 日志**真的**多一条 op；② 覆盖一个满箱子再撤销 → **内容还在**；③ `verifyReplay` 在"方块相同、实体不同"时**必须失败** |
+| **P1 内核** ✅ | 三层数据模型 + 七个记账点 + 两种差分 + `contentHash` 纳入两层 | ① 只放一条船 → 日志**真的**多一条 op；② 覆盖一个满箱子再撤销 → **内容还在**；③ `verifyReplay` 在"方块相同、实体不同"时**必须失败** |
 | **P2 容器与互操作** | 两个新条目 + `packProject` extra 写回 + WAL + `.schem`/`.litematic` 四个字段 | ④ 新条目工程旧读方打开正常、保存后**还在**；⑤ 往返逐字段相等 |
 | **P3 工具与闸门** | 五个工具 + `slice`/`verify`/`erase` 扩展 + prompt + 文档 | ⑥ 改东西不 verify → 闸门 nudge；⑦ `docs:check` 与 README 的"24"断言过 |
 | **P4 软件渲染** | 实体网格化 + 货架图集 + 两条软件路径 + 旗帜图案 + 告示牌近似文字 + golden | ⑧ 船的形状与朝向在预置机位下正确（golden 逐字节）；⑨ 不破坏既有 golden |
@@ -2112,6 +2113,30 @@ interface PlacedEntity {
 | P6 打磨 | `paste_region`/`symmetrize` 带实体、linter 判据、打包、i18n | ⑫ linter 判据**写死**并配正反样例（附录 D 的教训） |
 
 P1–P4 全部是纯内核 + 纯计算，**不碰 Electron**（守 D5），可以脱离界面测透。
+
+**P1 落地记录**（`packages/core/src/entity/`、`history/`、`world/store.ts`，以及两处宿主重放）：
+
+- 新增 `EntityStore`（id 键 + 位置索引）与 `BlockEntityStore`（位置键）。两层共用
+  `{key, before, after}` 差分形状；`canonicalJson`（对象键递归排序）保证哈希与往返的确定性。
+- `EditOp` 加 `blockEntityChanges?` / `entityChanges?`，`patch` 恒在（D-78）。
+  `EditLog.record` 的第二个参数改成**可为 `undefined`**——只动稀疏层的那一笔没有方块写入，
+  逼调用方造一个空 `WriteResult` 占位，迟早会有人填上一个真的结果。第三个参数是
+  `SparseWrite { entities?, blockEntities? }`，丢弃判据改成"三层都空才丢"。
+- **方块实体有两个来源，必须在 `record` 里相加**：`result.blockEntityChanges`（寄生剪除）
+  与 `sparse.blockEntities`（工具主动写：给箱子塞东西、给告示牌写字）。只取一个的话，
+  另一种就是安静的数据丢失。顺序也是语义：剪除在前、主动在后。
+- `WorldStore` 持有两层；`writeBlocks` 顺手产出剪除差分（索引为空时零成本快路径），
+  `commitEntities` 负责"只有实体"那一笔的版本推进，`contentHash` 覆盖三层。
+- `applyOp` / `applyOpInverted` 三层一起应用；`replayTo`、`ReplaySession.seek`、
+  `openProject` 与桌面端的 WAL 崩溃恢复全部改走它们。
+- **`invertChanges` 必须把顺序也倒过来**，不只是交换 before/after：差分的键允许重复
+  （同一格"先剪除旧的、再写入新的"就是两条同键记录），顺序错了的表现是撤销之后
+  那个格子上内容凭空消失。这条是写测试时撞出来的。
+
+**已知的 P1 边界**：`.mcai` **还存不下这两层**。`packProject` 每次都写全量快照
+（`baseRevision === revision`），所以打开工程时那两层的唯一来源——重放——根本不会跑；
+`world/entities.jsonl` 与 `world/block-entities.jsonl` 是 P2 的事。也就是说：
+**现在放一条船、存盘、再打开，船会没有。**
 
 ---
 

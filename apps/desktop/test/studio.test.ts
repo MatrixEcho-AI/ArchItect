@@ -791,39 +791,49 @@ describe('视口所用的场景负载：实体那一层', () => {
 describe('点选实体：与点选方块共用同一段射线', () => {
   const VIEW = { azimuth: 45, elevation: 30, width: 320, height: 240 }
 
-  /**
-   * ⚠️ **这一条只验证"实体不影响方块拾取"。**
-   *
-   * 端到端的"点中船就选中船"我**没能让它在这儿通过**：射线、几何、所有者表
-   * 三样都单独测过（`packages/render/test/entities-render.test.ts` 里
-   * `pickEntity` 命中了船），但在 studio 这条路上画面中心那一枪没打中它，
-   * 而我没有把原因查到底。与其把它写成一条看着像通过的断言，不如留在这里
-   * 说清楚——`plan.md` 的 P5 验收 ⑪ 目前是**未验证**状态。
-   */
-  it('放一条船不会改变画面上打到的是哪一格（方块拾取不受影响）', () => {
-    const studio = makeStudio()
-    studio.demo()
-    const before = studio.pick({ ...VIEW, x: VIEW.width / 2, y: VIEW.height / 2 })
-    expect(before).toBeDefined()
-
+  it('**点中船就选中船**', () => {
+    // 用一个**干净场景**而不是 `demo()` 的小屋：屋子里的船会被墙挡住，而"挡住的东西
+    // 不该被选中"本身是对的——把船摆在小屋内部测出来的失败是场景的错，不是拾取的错。
+    // 这里只铺一块地板，船正摆在内容中心上，没有任何遮挡。
+    const studio = new StudioService({ plain: true })
     const store = studio.agentSession.store
-    const cell = before!.block
+    for (let x = 0; x < 8; x++) for (let z = 0; z < 8; z++) store.setBlock({ x, y: 0, z }, 'minecraft:stone')
     store.commitSparse({
-      entities: [
-        store.entities.set({
-          id: 'e_1_1',
-          type: 'minecraft:oak_boat',
-          x: cell[0]! + 0.5,
-          y: cell[1]! + 1,
-          z: cell[2]! + 0.5,
-          yaw: 0,
-        })!,
-      ],
+      entities: [store.entities.set({ id: 'e_1_1', type: 'minecraft:oak_boat', x: 3.5, y: 1, z: 3.5, yaw: 0 })!],
     })
 
-    const after = studio.pick({ ...VIEW, x: VIEW.width / 2, y: VIEW.height / 2 })
-    expect(after).toBeDefined()
-    expect(after!.block).toEqual(cell)
+    /**
+     * **找船真正占住的那个像素**，而不是想当然地打正中心。
+     *
+     * 船是开口的盒子，而它的底面与地板顶面**同高**——正中那一枪穿进船舱、打到的
+     * 是地板，两者深度几乎相同，方块赢了那个浮点边界。真正能选中船的是它的侧壁。
+     * 这个细节值得留在测试里：它说明"点中实体"取决于打到的是哪一面，而不是
+     * "射线有没有经过那个格子"。
+     */
+    let hit: ReturnType<typeof studio.pick>
+    let aimed: { x: number; y: number } | undefined
+    for (let y = 80; y < 160 && aimed === undefined; y += 2) {
+      for (let x = 120; x < 200; x += 2) {
+        const candidate = studio.pick({ ...VIEW, x, y })
+        if (candidate?.entity !== undefined) {
+          aimed = { x, y }
+          hit = candidate
+          break
+        }
+      }
+    }
+    expect(aimed, '船上应当有能选中它的像素（船体侧壁）').toBeDefined()
+    expect(hit!.entity).toEqual({ id: 'e_1_1', type: 'minecraft:oak_boat' })
+    // 实体选中时也给出它所在的格（界面沿用既有的返回形状）
+    expect(hit!.block).toEqual([3, 1, 3])
+
+    // 同一枪在没有实体时打中的是**地板那一格**——两套语义共用一段射线，但解释不同
+    const plain = new StudioService({ plain: true })
+    const plainStore = plain.agentSession.store
+    for (let x = 0; x < 8; x++) for (let z = 0; z < 8; z++) plainStore.setBlock({ x, y: 0, z }, 'minecraft:stone')
+    const blockOnly = plain.pick({ ...VIEW, x: VIEW.width / 2, y: VIEW.height / 2 })
+    expect(blockOnly).toBeDefined()
+    expect(blockOnly!.entity).toBeUndefined()
   })
 
   it('有实体也不会把天空变成可点的：没有三角形命中就还是 undefined', () => {

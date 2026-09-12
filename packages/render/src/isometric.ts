@@ -1,4 +1,4 @@
-import { AIR_STATE_ID } from '@architect/core'
+import { AIR_STATE_ID, loadEntityRegistry } from '@architect/core'
 import type { Bounds, ShapeBox, WorldStore } from '@architect/core'
 
 import { cameraBasis, projectPoint } from './camera.js'
@@ -33,6 +33,24 @@ const SHAPELESS_FALLBACK: ShapeBox = [0.375, 0, 0.375, 0.625, 0.625, 0.625]
  * `flush` 是关键：只有贴着方块边界的面才需要做邻居剔除。楼梯中间那级台阶的侧面
  * 即使旁边是实心方块也不该被剔除——它是**看得见**的。
  */
+/**
+ * 实体在纯色路径里的颜色：**由类型名哈希出来的**，与方块那条哈希配色同一个思路。
+ *
+ * 用具名颜色表会在"表里没有这个实体"时逼出一个兜底色，而兜底色一旦出现，
+ * 两种不同的实体就长得一样了。哈希值只要求确定性，不要求好看——
+ * 纹理路径才是用来看外观的那条。
+ */
+function entityAppearance(type: string): { r: number; g: number; b: number; a: number } {
+  let hash = 0
+  for (let i = 0; i < type.length; i++) hash = (hash * 31 + type.charCodeAt(i)) >>> 0
+  return {
+    r: 120 + (hash % 100),
+    g: 110 + ((hash >> 8) % 100),
+    b: 130 + ((hash >> 16) % 90),
+    a: 255,
+  }
+}
+
 function boxFaces(box: ShapeBox): Face[] {
   const [x0, y0, z0, x1, y1, z1] = box
   const c = (x: number, y: number, z: number): Vec3 => ({ x, y, z })
@@ -233,6 +251,41 @@ export function renderIsometric(store: WorldStore, options: RenderOptions): Rend
   }
 
   // 画家算法：远的先画
+  /**
+   * 实体：纯色路径把它们画成**碰撞盒**。
+   *
+   * 与上面方块用碰撞盒是同一个理由（64 行那条注释）——而这也是两条路径之间
+   * **唯一**的差异：纹理路径画的是真模型，纯色路径画的是盒子。`--plain` 本来就
+   * 是"快而粗略"的那一档，而实体在盒子里至少**在那里、大概多大**是看得出来的。
+   * 尺寸来自 `minecraft-data`，模型表里没有的实体在纹理路径上走的也是这条。
+   */
+  const entityRegistry = loadEntityRegistry(store.registry.minecraftVersion)
+  for (const entity of store.entities.list()) {
+    const size = entityRegistry.sizeOf(entity.type) ?? { width: 0.6, height: 1.8 }
+    const half = Math.min(0.5, size.width / 2)
+    const height = Math.min(1, size.height)
+    const box: ShapeBox = [0.5 - half, 0, 0.5 - half, 0.5 + half, height, 0.5 + half]
+    const faces: Face[] = []
+    for (const face of boxFaces(box)) {
+      if (dot(face.normal, basis.forward) >= -BACKFACE_EPSILON) continue
+      faces.push(face)
+    }
+    if (faces.length === 0) continue
+
+    const x = Math.floor(entity.x)
+    const y = Math.floor(entity.y)
+    const z = Math.floor(entity.z)
+    const depth = projectPoint({ x: x + 0.5, y: y + height / 2, z: z + 0.5 }, camera, basis).depth
+    visible.push({
+      x,
+      y,
+      z,
+      depth,
+      parts: [{ box, depth, faces }],
+      appearance: entityAppearance(entity.type),
+    })
+  }
+
   visible.sort((a, b) => b.depth - a.depth)
 
   let facesDrawn = 0

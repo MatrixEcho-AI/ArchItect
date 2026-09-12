@@ -12,8 +12,11 @@ export type { LocalizableToolError } from './errors.js'
 export const SUPPORTED_LOCALES = ['zh-CN', 'en-US'] as const
 export type Locale = (typeof SUPPORTED_LOCALES)[number]
 
-/** 中文优先（D-01）：默认与兜底都是 `zh-CN`。 */
-export const DEFAULT_LOCALE: Locale = 'zh-CN'
+/**
+ * 默认英文。开源项目的读者不一定是中文用户，所以环境没有明说中文时一律用英文；
+ * 中文只在环境说了（`LANG=zh_CN.UTF-8` 之类）或用户在设置里选了才用。
+ */
+export const DEFAULT_LOCALE: Locale = 'en-US'
 
 export interface I18nOptions {
   locale?: Locale

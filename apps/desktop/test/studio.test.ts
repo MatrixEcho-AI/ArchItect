@@ -3,12 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { measure } from '@architect/core'
+import { initI18n } from '@architect/i18n'
 import { unpackProject } from '@architect/mcai'
 import type { ShotInput } from '@architect/agent'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { StudioService } from '../src/main/services/studio.js'
 import type { StudioEvent } from '../src/main/services/chat.js'
+
+// 这里断言的是文案，所以把语言钉死：用例不该随开发机的 LANG 而变
+initI18n({ locale: 'zh-CN' })
 
 // 用确定性兜底配色，跳过 352MB 资源包的加载
 const makeStudio = (): StudioService => new StudioService({ plain: true })

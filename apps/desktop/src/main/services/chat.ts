@@ -26,7 +26,7 @@ import type {
   SettingsIssue,
   UsageTotals,
 } from '@architect/agent'
-import { t } from '@architect/i18n'
+import { getLocale, t } from '@architect/i18n'
 import { TranscriptRecorder } from '@architect/mcai'
 import type { CaptureBundle, ChatTranscript, TranscriptRecording } from '@architect/mcai'
 import type { ToolResult } from '@architect/tools'
@@ -335,7 +335,7 @@ export class ChatController {
     return {
       activeId: this.settings.activeId,
       providers: this.settings.providers.map((config) => this.providerView(config)),
-      locale: this.settings.locale ?? 'zh-CN',
+      locale: this.settings.locale ?? getLocale(),
       ui: this.settings.ui ?? {},
       secrets: { location: this.secrets.location, encrypted: this.secrets.encrypted },
       issues: this.issues,

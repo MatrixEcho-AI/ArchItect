@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Flex, Input, InputNumber, Modal, Select, Typography } from 'antd'
 import { DownOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons'
-import { t } from '@architect/i18n'
+import { getLocale, t } from '@architect/i18n'
 
 import type { ProviderView, SettingsView } from '../types.js'
 import type { Locale } from '@architect/i18n'
@@ -76,7 +76,7 @@ interface CostRow {
 export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   const { settings } = props
   const [keyPlain, setKeyPlain] = useState('')
-  const [locale, setLocale] = useState<Locale>('zh-CN')
+  const [locale, setLocale] = useState<Locale>(getLocale())
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   /** 表单里可编辑的那几项。其余（capabilities / compat / kind）保存时从 `editing` 原样带上。 */

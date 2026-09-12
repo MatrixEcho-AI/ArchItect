@@ -44,7 +44,6 @@ export function defaultSettings(): ProviderSettings {
     version: SETTINGS_VERSION,
     activeId: deepseek.id,
     providers: [deepseek],
-    locale: 'zh-CN',
     ui: { view: 'iso_ne', requireVerification: true },
   }
 }
@@ -371,7 +370,6 @@ export function settingsFromEnv(
     version: SETTINGS_VERSION,
     activeId: config.id,
     providers: [config],
-    locale: 'zh-CN',
     ui: { view: 'iso_ne', requireVerification: true },
   }
 }

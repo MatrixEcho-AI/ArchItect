@@ -3,12 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { WorldStore } from '@architect/core'
+import { initI18n } from '@architect/i18n'
 import { DATA_VERSION_1_21_4, exportSchematic } from '@architect/interop'
 import { openProject } from '@architect/mcai'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { AutosaveService } from '../src/main/services/autosave.js'
 import { StudioService } from '../src/main/services/studio.js'
+
+// 这里断言的是文案，所以把语言钉死：用例不该随开发机的 LANG 而变
+initI18n({ locale: 'zh-CN' })
 
 let dir: string
 beforeEach(() => {

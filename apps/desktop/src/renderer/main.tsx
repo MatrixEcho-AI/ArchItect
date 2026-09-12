@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { App as AntdApp, ConfigProvider } from 'antd'
 import enUS from 'antd/locale/en_US'
 import zhCN from 'antd/locale/zh_CN'
-import { initI18n } from '@architect/i18n'
+import { getLocale, initI18n } from '@architect/i18n'
 
 import { App } from './app.js'
 import { ARCHITECT_THEME } from './theme.js'
@@ -26,7 +26,8 @@ import './styles.css'
  *    组件里就能用 `App.useApp()` 拿到它们（不必再自己造一套提示）。
  */
 function Root(): React.JSX.Element {
-  const [locale, setLocale] = useState<Locale>('zh-CN')
+  // 占位值取主进程已经定好的那个，别写死：写死会在首帧把设置里的语言覆盖掉一次
+  const [locale, setLocale] = useState<Locale>(getLocale())
   const onLocaleChange = useCallback((next: Locale) => setLocale(next), [])
   // 脏活在这里、不在渲染里：渲染函数可能有副作用是 React 最忌讳的一类 bug
   useEffect(() => {

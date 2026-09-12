@@ -13,6 +13,7 @@ import type {
   ProviderSettings,
   ScriptedStep,
 } from '@architect/agent'
+import { initI18n } from '@architect/i18n'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { ChatController } from '../src/main/services/chat.js'
@@ -25,6 +26,9 @@ import {
   saveSettings,
 } from '../src/main/services/settings.js'
 import { StudioService } from '../src/main/services/studio.js'
+
+// 这里断言的是文案，所以把语言钉死：用例不该随开发机的 LANG 而变
+initI18n({ locale: 'zh-CN' })
 
 let workspace: string
 beforeAll(async () => {

@@ -340,7 +340,7 @@ describe('不按文件声明的数字分配', () => {
     )
   })
 
-  it('**目标方块不接受的属性值换成声明表里的第一个取值**，而不是让整次导入失败', () => {
+  it('**目标方块不接受的属性值换成它的默认状态**，而不是让整次导入失败', () => {
     // 有些第三方工具把枚举写成数字下标（`half=1`）。以前这个值会一路走到
     // `propertiesToStateId` 抛 `StateError`，把**整次导入**带走——实测报的是
     // 「half: "1" is not a valid value, options: top | bottom」。
@@ -353,7 +353,9 @@ describe('不按文件声明的数字分配', () => {
     )
     expect(out.placed, '方块被丢掉了').toBe(1)
     expect(out.skipped).toBe(0)
-    expect(store.getBlockString({ x: 0, y: 0, z: 0 })).toContain('half=top')
+    // **默认状态里的值**，不是声明表的第一项：楼梯的 `half` 声明表里 `top` 在前，而
+    // 默认状态是 `bottom`——取前者会把楼梯整个翻个面。
+    expect(store.getBlockString({ x: 0, y: 0, z: 0 })).toContain('half=bottom')
   })
 
   it('对照：合法尺寸与合法属性值不受影响', async () => {

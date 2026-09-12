@@ -194,6 +194,8 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
   if (regionsTree === undefined) throw new Error('不是合法的 .litematic：缺少 Regions')
 
   const regions: LitematicRegion[] = []
+  // 跨区域的总量预算：单区域的上限挡不住「很多个刚好不超限的区域」。
+  let totalCells = 0
   for (const [regionName, regionTag] of Object.entries(regionsTree)) {
     const region = asCompound(regionTag)
     if (region === undefined) continue
@@ -205,16 +207,10 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
     ]
     const position = readPosition(asCompound(region['Position']))
 
-    const palette = readPalette(region['BlockStatePalette'])
-    const longs = asUnsignedLongArray(region['BlockStates'])
-    if (longs === undefined) throw new Error(`区域 ${regionName} 缺少 BlockStates`)
-
-    // `count` 是**文件声明的**体积：下面按它分配、也按它遍历，所以必须先卡一道。
-    // 一个 168 字节的文件只要写 Size 20000×20000×1，`new Array(4e8)` 就会被 V8
-    // 直接 abort——不是可捕获的异常，桌面端跑在主进程里等于整个应用消失。
-    // 上限用仓库自己的单次写入上限：超了 `writeBlocks` 本来也只会静默截断。
+    // **先算账，再取数据。** `count` 来自文件声明的 `Size`，而下面那行会把文件里的
+    // `BlockStates` 整段物化成 BigInt 数组——检查放在那之后等于没检查。
     //
-    // 注意别把这道守卫塞进 `unpackBlockStates`：它「读到超出长度的位置补 0 而不是
+    // 也别把这道守卫塞进 `unpackBlockStates`：它「读到超出长度的位置补 0 而不是
     // 抛错」是明写的行为，有测试盯着（formats.test.ts）。
     const count = size[0] * size[1] * size[2]
     if (count > DEFAULT_HARD_LIMIT) {
@@ -223,6 +219,19 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
           `超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
       )
     }
+    // 单区域不超限还不够：一个文件可以声明很多个「刚好不超」的区域，而导入最终只用
+    // `regions[0]`——内存会随区域数线性涨，用一个很小的文件就能堆上去。
+    totalCells += count
+    if (totalCells > DEFAULT_HARD_LIMIT) {
+      throw new Error(
+        `Litematica: 各区域合计 ${totalCells} 格，超过单次写入上限 ${DEFAULT_HARD_LIMIT} 格`,
+      )
+    }
+
+    const palette = readPalette(region['BlockStatePalette'])
+    const longs = asUnsignedLongArray(region['BlockStates'])
+    if (longs === undefined) throw new Error(`区域 ${regionName} 缺少 BlockStates`)
+
     const indices = unpackBlockStates(longs, count, palette.length)
 
     const blocks: SchematicBlock[] = []

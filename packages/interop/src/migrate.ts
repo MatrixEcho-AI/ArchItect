@@ -135,6 +135,8 @@ export function migrateState(
 function canonicalize(block: NonNullable<ReturnType<BlockRegistry['blockByName']>>, properties: Properties): string {
   const declared = new Set(block.states.map((property) => property.name))
   const filtered: Properties = {}
+  // 目标方块的**默认状态**：属性值对不上时从这里取。
+  const defaults = stateIdToProperties(block, block.defaultState)
   for (const [key, value] of Object.entries(properties)) {
     if (!declared.has(key)) continue
     const coerced = coerce(block, key, value)
@@ -143,11 +145,13 @@ function canonicalize(block: NonNullable<ReturnType<BlockRegistry['blockByName']
       continue
     }
     // `coerce` 说「目标方块不接受这个值」时，按它的注释应当**让它从默认状态继承**。
-    // 但「不传」在编码层表达不出来：`propertiesToStateId` 要的是一份完整的属性表，
-    // 少一个属性它会抛——实测那一格会被记成「未知方块」跳过，方块直接没了。
-    // 所以这里显式换成它的**声明默认值**，意图一样而结果是方块按默认状态落地。
+    // 「不传」在编码层表达不出来（`propertiesToStateId` 要一份完整的属性表），所以
+    // 这里显式补上——但补的必须是**默认状态里的值**，不是声明表的第一项：楼梯的
+    // `half` 声明表里 `top` 在前，而默认状态是 `bottom`，用前者会把楼梯整个翻个面。
+    // 默认状态里没有这一项才退回声明表第一项（最后手段，只为让属性表完整）。
     const property = block.states.find((entry) => entry.name === key)
-    if (property !== undefined) filtered[key] = propertyValueAt(property, 0)
+    const fallback = defaults[key] ?? (property === undefined ? undefined : propertyValueAt(property, 0))
+    if (fallback !== undefined) filtered[key] = fallback
   }
   const stateId = propertiesToStateId(block, filtered)
   const full = stateIdToProperties(block, stateId)

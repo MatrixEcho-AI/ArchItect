@@ -44,6 +44,14 @@ export const LINT_MAX_SAMPLES = 8
  * （船上的盔甲架），所以判据必须带上类型。
  */
 export const LINT_ENTITY_DUPLICATE_LIMIT = 1
+/**
+ * 判"实体在分析范围之外"时，范围先向每个方向放宽这么多格。
+ *
+ * 1 是判据本身而不是余量：默认范围是**方块**的内容包围盒，而一个站在建筑上的
+ * 实体按定义就在它的上面一格。不放宽的话，每一只站在地板上的盔甲架都会被报成
+ * "跑到范围外去了"——一条只在正常场景里响的检查比没有还坏。
+ */
+export const LINT_ENTITY_OUTSIDE_MARGIN = 1
 /** 悬挑搜索在 `maxOverhang` 之外再多探这么多圈，用于给出「最坏离支撑多远」。 */
 const OVERHANG_SEARCH_EXTRA = 4
 /** 漏水洪泛的包围盒格数上限，超过就跳过（避免为一个空包围盒分配几百 MB）。 */
@@ -779,6 +787,12 @@ function lintSparseLayers(store: WorldStore, region: Bounds): LintFinding[] {
     x >= region.min.x && x <= region.max.x &&
     y >= region.min.y && y <= region.max.y &&
     z >= region.min.z && z <= region.max.z
+  // 判"实体跑到范围外"用放宽过的框，理由见 `LINT_ENTITY_OUTSIDE_MARGIN`
+  const m = LINT_ENTITY_OUTSIDE_MARGIN
+  const inPaddedRegion = (x: number, y: number, z: number): boolean =>
+    x >= region.min.x - m && x <= region.max.x + m &&
+    y >= region.min.y - m && y <= region.max.y + m &&
+    z >= region.min.z - m && z <= region.max.z + m
 
   // ── 方块实体 ────────────────────────────────────────────────────
   const orphans = new SampleSet(LINT_MAX_SAMPLES, compareYThenXZ)
@@ -841,7 +855,7 @@ function lintSparseLayers(store: WorldStore, region: Bounds): LintFinding[] {
 
   for (const entity of store.entities.list()) {
     const cell = cellOf(entity)
-    if (!inRegion(cell.x, cell.y, cell.z)) {
+    if (!inPaddedRegion(cell.x, cell.y, cell.z)) {
       outsideCount++
       outside.push(cell)
       continue
@@ -897,7 +911,8 @@ function lintSparseLayers(store: WorldStore, region: Bounds): LintFinding[] {
       summary:
         `${outsideCount} entit(ies) are outside the analysed region ` +
         `(${region.min.x},${region.min.y},${region.min.z})..(${region.max.x},${region.max.y},${region.max.z}). ` +
-        `The region defaults to the **block** content bounds, so an entity placed past the edge of the build lands here.`,
+        `The region defaults to the **block** content bounds, so an entity placed past the edge of the build lands here. ` +
+        `The check pads the region by ${LINT_ENTITY_OUTSIDE_MARGIN} block(s) so that an entity standing on top of the build is not counted.`,
       samples: outside.list(),
     })
   }

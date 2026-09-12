@@ -464,3 +464,31 @@ describe('lint：实体与方块实体（另外两层）', () => {
     expect(report.findings.map((entry) => entry.id)).not.toContain('entity_duplicate')
   })
 })
+
+describe('lint：`entity_outside` 的放宽（否则正常场景里每条都会被报）', () => {
+  const put = (store: WorldStore, entity: PlacedEntity): void => {
+    const change = store.entities.set(entity)
+    if (change !== undefined) store.commitSparse({ entities: [change] })
+  }
+
+  it('**站在建筑顶上的实体不算"跑到范围外"**（默认范围是方块包围盒）', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 4, y: 0, z: 4 }, PLANKS)
+    put(store, { id: 'e_1_1', type: 'minecraft:armor_stand', x: 2.5, y: 1.5, z: 2.5, yaw: 0 })
+    expect(finding(lintStructure(store), 'entity_outside')).toBeUndefined()
+  })
+
+  it('**贴着建筑边缘外侧一格**也算在里面', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 4, y: 0, z: 4 }, PLANKS)
+    put(store, { id: 'e_1_1', type: 'minecraft:oak_boat', x: 5.5, y: 0.5, z: 2.5, yaw: 0 })
+    expect(finding(lintStructure(store), 'entity_outside')).toBeUndefined()
+  })
+
+  it('**远在界外**的实体照报', () => {
+    const store = makeStore()
+    fill(store, { x: 0, y: 0, z: 0 }, { x: 4, y: 0, z: 4 }, PLANKS)
+    put(store, { id: 'e_1_1', type: 'minecraft:oak_boat', x: 12.5, y: 0.5, z: 2.5, yaw: 0 })
+    expect(finding(lintStructure(store), 'entity_outside')?.count).toBe(1)
+  })
+})

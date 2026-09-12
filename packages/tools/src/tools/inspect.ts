@@ -1,4 +1,4 @@
-import { formatMeasure, measure, renderSlice } from '@architect/core'
+import { formatMeasure, measure, normalizeEntityName, renderSlice } from '@architect/core'
 import type { Bounds, SliceAxis, WorldStore } from '@architect/core'
 
 import { arr, blockRef, int, obj, str, vec3 } from '../schema.js'
@@ -167,10 +167,20 @@ export const searchBlocksTool = defineTool<{ query: string; limit?: number }>({
 
 /** `verify` 的单条 claim。 */
 interface Claim {
-  check: 'block_at' | 'air_at' | 'count' | 'supported' | 'symmetric'
+  check:
+    | 'block_at'
+    | 'air_at'
+    | 'count'
+    | 'supported'
+    | 'symmetric'
+    | 'entity_at'
+    | 'entity_count'
+    | 'block_entity_at'
   pos?: number[]
   expect?: string
   block?: string
+  /** 实体类型（`entity_at` 期望的、`entity_count` 统计的）。**不是方块名**。 */
+  type?: string
   from?: number[]
   to?: number[]
   min?: number
@@ -186,7 +196,9 @@ export const verifyTool = defineTool<{ claims: Claim[] }>({
     'After any modification call it to read back the result before claiming completion — **it is forbidden to say "done" without reading back**.\n' +
     'Before calling it you must write down your expectations in claims; if you cannot, you have not thought through what you are doing.\n' +
     'Available checks: block_at (a cell is a given block — write properties in brackets to also constrain them, e.g. `minecraft:oak_stairs[facing=west]`; properties you omit are not constrained) / air_at (a cell is air) / count (the count of a block is within a range)' +
-    '/ supported (no floating blocks in a region — floating means the whole column below is empty down to the reference region floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane).',
+    '/ supported (no floating blocks in a region — floating means the whole column below is empty down to the reference region floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane)' +
+    ' / entity_at (an entity of a given type is in a cell — **use this after place_entity**) / entity_count (how many entities of a type are in a region; give min and/or max)' +
+    ' / block_entity_at (a cell carries block entity data, optionally of a given kind).',
   parameters: obj(
     {
       claims: arr(
@@ -196,7 +208,16 @@ export const verifyTool = defineTool<{ claims: Claim[] }>({
             check: {
               type: 'string',
               description: 'Check type.',
-              enum: ['block_at', 'air_at', 'count', 'supported', 'symmetric'],
+              enum: [
+                'block_at',
+                'air_at',
+                'count',
+                'supported',
+                'symmetric',
+                'entity_at',
+                'entity_count',
+                'block_entity_at',
+              ],
             },
             pos: vec3('Coordinate used by block_at / air_at.'),
             expect: blockRef(
@@ -205,6 +226,10 @@ export const verifyTool = defineTool<{ claims: Claim[] }>({
                 'so `minecraft:oak_stairs[facing=west]` checks the facing without pinning half/shape.',
             ),
             block: str('Block name used by count.'),
+            type: str(
+              'Entity type used by entity_at (what entity_at expects) and entity_count (what it counts), ' +
+                'e.g. "minecraft:oak_boat". **Not** a block name — entities are a separate layer from blocks.',
+            ),
             from: vec3('Region start for count / supported / symmetric.'),
             to: vec3('Region end for count / supported / symmetric.'),
             min: int('Lower bound for count.'),
@@ -381,6 +406,75 @@ function checkClaim(store: WorldStore, claim: Claim, index: number): ClaimResult
         label: `${id} symmetric along ${axis}=${c}`,
         pass: mismatches === 0,
         detail: mismatches === 0 ? undefined : `${mismatches} mismatches, e.g. ${firstMismatch}`,
+      }
+    }
+    /**
+     * 实体层的读回。**这是 `place_entity` 之后能过完成闸门的唯一途径**：
+     * 闸门只认 `mutating && result.data.readback === true`（loop.ts），
+     * 而方块类的 claim 读不到实体——没有这三条，模型改完实体就只能连吃两次
+     * nudge，然后以 `unverified` 收场。
+     */
+    case 'entity_at': {
+      if (claim.pos === undefined) return { label: id, pass: false, detail: 'entity_at requires pos' }
+      const pos = toPos(claim.pos, 'pos')
+      const here = store.entities.at(pos)
+      const wanted = claim.type !== undefined ? normalizeEntityName(claim.type) : claim.expect !== undefined ? normalizeEntityName(claim.expect) : undefined
+      const matched = wanted === undefined ? here : here.filter((entity) => entity.type === wanted)
+      return {
+        label: `${id} entity_at [${pos.x},${pos.y},${pos.z}]${wanted !== undefined ? ` == ${wanted}` : ''}`,
+        pass: matched.length > 0,
+        detail:
+          matched.length > 0
+            ? undefined
+            : here.length === 0
+              ? 'no entity in that cell'
+              : `that cell holds ${here.map((entity) => entity.type).join(', ')}`,
+      }
+    }
+    case 'entity_count': {
+      const wanted =
+        claim.type !== undefined
+          ? normalizeEntityName(claim.type)
+          : claim.expect !== undefined
+            ? normalizeEntityName(claim.expect)
+            : undefined
+      if (wanted === undefined) {
+        return { label: id, pass: false, detail: 'entity_count requires type (the entity type to count)' }
+      }
+      const bounds = regionOf(claim)
+      let count = 0
+      for (const entity of store.entities.list()) {
+        if (entity.type !== wanted) continue
+        if (bounds !== undefined && !inside(bounds, Math.floor(entity.x), Math.floor(entity.y), Math.floor(entity.z))) {
+          continue
+        }
+        count++
+      }
+      const min = claim.min ?? 0
+      const max = claim.max ?? Number.POSITIVE_INFINITY
+      const pass = count >= min && count <= max
+      return {
+        label: `${id} entity_count ${wanted} in [${min},${max === Number.POSITIVE_INFINITY ? 'inf' : max}]`,
+        pass,
+        detail: pass ? undefined : `actual is ${count}`,
+      }
+    }
+    case 'block_entity_at': {
+      if (claim.pos === undefined) {
+        return { label: id, pass: false, detail: 'block_entity_at requires pos' }
+      }
+      const pos = toPos(claim.pos, 'pos')
+      const entity = store.blockEntities.at(pos)
+      const wanted = claim.expect !== undefined ? normalizeEntityName(claim.expect) : undefined
+      const pass = entity !== undefined && (wanted === undefined || entity.kind === wanted)
+      return {
+        label: `${id} block_entity_at [${pos.x},${pos.y},${pos.z}]${wanted !== undefined ? ` == ${wanted}` : ''}`,
+        pass,
+        detail: pass
+          ? undefined
+          : entity === undefined
+            ? 'no block entity in that cell'
+            : `actual is ${entity.kind}`,
       }
     }
     default:

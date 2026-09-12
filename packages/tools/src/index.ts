@@ -10,6 +10,7 @@ export * from './tools/analyze.js'
 export * from './docs.js'
 export * from './tools/fixstates.js'
 export * from './tools/notes.js'
+export * from './tools/entities.js'
 
 import { ToolRegistry } from './registry.js'
 import {
@@ -29,6 +30,13 @@ import {
   sliceTool,
   verifyTool,
 } from './tools/inspect.js'
+import {
+  editBlockEntityTool,
+  getBlockEntityTool,
+  listEntitiesTool,
+  placeEntityTool,
+  removeEntityTool,
+} from './tools/entities.js'
 import { screenshotTool, setCameraTool, undoRedoTools } from './tools/view.js'
 import { copyRegionTool, pasteRegionTool } from './tools/transform.js'
 import { replaceBlocksTool, runBatchTool } from './tools/batch.js'
@@ -56,12 +64,19 @@ export function createDefaultRegistry(): ToolRegistry {
     .register(fixStatesTool)
     .register(eraserTool)
     .register(placeBlockTool)
+    // 实体与方块实体排在方块创建之后：它们形状相近（都是"创建一个东西"），
+    // 但一格可以叠多个实体、方块实体则必须挂在方块上——顺序让模型先看到方块那条路
+    .register(placeEntityTool)
+    .register(editBlockEntityTool)
+    .register(removeEntityTool)
     .register(sliceTool)
     .register(measureTool)
     .register(verifyTool)
     .register(getBlockTool)
     .register(getRegionTool)
     .register(searchBlocksTool)
+    .register(listEntitiesTool)
+    .register(getBlockEntityTool)
     .register(analyzeStructureTool)
     .register(screenshotTool)
     .register(setCameraTool)

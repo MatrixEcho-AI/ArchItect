@@ -30,6 +30,60 @@ const run = (
   )
 
 describe('完成闸门（harness 层强制"写后读"）', () => {
+
+  it('**放了实体却不读回 → 被驳回**（实体层与方块层共用同一道闸门）', async () => {
+    const session = makeSession()
+    const events: AgentEvent[] = []
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: 'place_entity', args: { entities: [{ type: 'minecraft:oak_boat', at: [1, 1, 1] }] } }] },
+      { text: '船放好了。' },
+      {
+        toolCalls: [
+          {
+            name: 'verify',
+            args: { claims: [{ check: 'entity_at', pos: [1, 1, 1], type: 'minecraft:oak_boat' }] },
+          },
+        ],
+      },
+      { text: '读回确认过了。' },
+    ])
+    const state = await run(session, provider, { onEvent: (e) => events.push(e) })
+
+    expect(events.filter((e) => e.type === 'nudge')).toHaveLength(1)
+    expect(state.stopReason).toBe('completed')
+    expect(state.finalText).toContain('读回确认过了')
+  })
+
+  it('实体的改动**始终不读回** → 提醒用尽后以 unverified 收场，不假装完成', async () => {
+    const session = makeSession()
+    const events: AgentEvent[] = []
+    const provider = new ScriptedProvider([
+      { toolCalls: [{ name: 'place_entity', args: { entities: [{ type: 'minecraft:oak_boat', at: [1, 1, 1] }] } }] },
+      { text: '做完了。' },
+      { text: '真的做完了。' },
+      { text: '非常确定做完了。' },
+    ])
+    const state = await run(session, provider, { onEvent: (e) => events.push(e) })
+
+    // 一次 nudge 之后模型还是不肯读回：**不许**以 completed 收尾
+    expect(events.filter((e) => e.type === 'nudge').length).toBeGreaterThanOrEqual(1)
+    expect(state.stopReason).toBe('unverified')
+  })
+
+  it('失败的实体写入不欠读回（`mutating` 但 `ok:false` 不算改动）', async () => {
+    const session = makeSession()
+    const events: AgentEvent[] = []
+    const provider = new ScriptedProvider([
+      // 类型拼错 → 工具返回 ok:false，世界一点没变
+      { toolCalls: [{ name: 'place_entity', args: { entities: [{ type: 'minecraft:oak_bot', at: [1, 1, 1] }] } }] },
+      { text: '没放成，我换个说法。' },
+    ])
+    const state = await run(session, provider, { onEvent: (e) => events.push(e) })
+
+    expect(events.filter((e) => e.type === 'nudge')).toHaveLength(0)
+    expect(state.stopReason).toBe('completed')
+  })
+
   it('改了东西却直接说完成 → 被驳回并要求 verify', async () => {
     const session = makeSession()
     const events: AgentEvent[] = []

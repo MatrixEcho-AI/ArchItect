@@ -1,4 +1,11 @@
-import type { ClipRegion, EditLog, ReplaySession, WorldStore, WriteResult } from '@architect/core'
+import type {
+  ClipRegion,
+  EditLog,
+  ReplaySession,
+  SparseWrite,
+  WorldStore,
+  WriteResult,
+} from '@architect/core'
 
 import type { JsonSchema } from './schema.js'
 
@@ -22,6 +29,8 @@ export type ToolErrorCode =
   | 'UNKNOWN_TOOL'
   | 'INVALID_ARGS'
   | 'UNKNOWN_BLOCK'
+  /** 实体类型认不出来（**不是** UNKNOWN_BLOCK：两者的候选来源与自纠路径都不同）。 */
+  | 'UNKNOWN_ENTITY'
   | 'OUT_OF_VOLUME'
   | 'NEEDS_CONFIRM'
   | 'TOO_LARGE'
@@ -141,8 +150,23 @@ export interface ToolContext {
     get(): string | undefined
     set(next: string | undefined): void
   }
-  /** 记录一条 EditOp。mutating 工具写入成功后必须调用。 */
-  record: (tool: string, args: unknown, result: WriteResult) => void
+  /**
+   * 记录一条 EditOp。mutating 工具写入成功后必须调用。
+   *
+   * `result` 可以是 `undefined`——意思是**这一笔没有方块写入**（只动实体层）。
+   * 逼调用方去造一个空的 `WriteResult` 来占位的话，那种占位物迟早会被人图省事
+   * 填上一个真的结果，于是日志里记下一笔并不存在的方块改动（见 `EditLog.record`）。
+   *
+   * `sparse` 是那两层稀疏数据里**工具主动写**的部分：实体全在这里（`WorldStore`
+   * 根本不知道工具放了什么），方块实体只有非剪除的那一半在这里（剪除那一半跟着
+   * `WriteResult` 回来，因为只有 store 知道哪个格子上原本挂着东西）。
+   */
+  record: (
+    tool: string,
+    args: unknown,
+    result: WriteResult | undefined,
+    sparse?: SparseWrite,
+  ) => void
   /**
    * 截图实现。由调用方注入，避免 tools 包绑死某个渲染后端。
    *

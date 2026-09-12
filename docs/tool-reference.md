@@ -28,12 +28,17 @@
 | [`fix_states`](#fix_states) | ✅ | — | Repair block states that are locally inconsistent with their neighbours: fence /… |
 | [`erase`](#erase) | ✅ | ⚠️ | Delete blocks inside a box (equivalent to fill_box + mode=destroy, but more dire… |
 | [`place_block`](#place_block) | ✅ | — | Place a **single** block. |
+| [`place_entity`](#place_entity) | ✅ | — | Place one or more **entities** (boats, minecarts, armour stands, item frames…) i… |
+| [`edit_block_entity`](#edit_block_entity) | ✅ | — | Write the block entity data on one cell — sign text, banner patterns, container … |
+| [`remove_entity`](#remove_entity) | ✅ | ⚠️ | Remove entities, either by the ids that place_entity / list_entities gave you, o… |
 | [`slice`](#slice) | — | — | Render one slice as an **ASCII plan view** (with coordinate rulers and a legend)… |
 | [`measure`](#measure) | — | — | World size and material histogram: bounding box, width/height/depth, total non-a… |
 | [`verify`](#verify) | — | — | **Structured self-check**: submit a set of "expectations"; the engine judges eac… |
 | [`get_block`](#get_block) | — | — | Read the block at a single cell (returns the full state string, e.g. |
 | [`get_region`](#get_region) | — | — | Render a region layer by layer as ASCII (equivalent to calling slice per layer a… |
 | [`search_blocks`](#search_blocks) | — | — | Search available blocks by name substring (e.g. |
+| [`list_entities`](#list_entities) | — | — | List the entities in the world (or in a box), with their ids, types, positions a… |
+| [`get_block_entity`](#get_block_entity) | — | — | Read the block entity data hanging on one cell — sign text, banner patterns, con… |
 | [`analyze_structure`](#analyze_structure) | — | — | Building linter (read-only, does not change the world). |
 | [`screenshot`](#screenshot) | — | — | Render a screenshot for you to look at. |
 | [`set_camera`](#set_camera) | — | — | Position the camera explicitly and KEEP it for every later screenshot. |
@@ -161,6 +166,48 @@ Place a **single** block. Use it only when you really need to change one cell (e
 | `pos` | 数组<整数> | ✅ | 3..3 项 | — | block coordinate [x,y,z] |
 | `block` | 字符串 | ✅ | — | — | Block reference. |
 
+## `place_entity`
+
+```
+Place one or more **entities** (boats, minecarts, armour stands, item frames…) into the world.
+This is the only tool that creates entities. It does not touch blocks, so an entity can sit in the same cell as whatever you already built.
+Positions are **integer cells**; `offset` moves within the cell in 1/16ths and defaults to the cell centre sitting on the floor.
+**One call = one revision = one undo step**, so place a whole row of eight boats in a single call instead of eight calls.
+The result lists the ids it assigned — keep them if you want to move or remove those entities later.
+Entities are **not** shown in `measure`; use `list_entities` to see them and `verify` with an entity_at claim to read them back.
+```
+
+| 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
+|------|------|:----:|-------------|------|------|
+| `entities` | 对象数组 | ✅ | 1..256 项 | — | The entities to place. A row of eight boats is eight entries **in one call**. |
+
+`entities[]` 的每一项：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|:----:|------|
+| `type` | 字符串 | ✅ | Entity type, e.g. "minecraft:oak_boat" — **not** a block name. Unknown types come back with suggestions; entities are counted separately from blocks. |
+| `at` | 数组<整数> | ✅ | The cell to place it in. |
+| `offset` | 数组<整数> | — | Offset within the cell in 1/16ths, each 0..15. Default [8,0,8] = centred, on the floor. Raise y to hang something (an item frame is usually at y=8). |
+| `facing` | 枚举 | — | Cardinal facing; ignored when yaw is given. north = -Z, south = +Z, east = +X, west = -X. |
+| `yaw` | 整数 | — | Facing as a 0..15 step of 22.5°: 0 = south (+Z), 4 = west, 8 = north, 12 = east. Overrides facing. |
+| `pitch` | 数字 | — | Pitch in degrees. |
+| `data` | 对象 | — | Extra payload for this entity type (armour stand pose, item frame contents, custom name…). Stored verbatim and written out to .schem / .litematic, so it must be NBT-representable: no null, no mixed-type arrays. |
+
+## `edit_block_entity`
+
+```
+Write the block entity data on one cell — sign text, banner patterns, container contents, skull owner…
+The cell must already hold a block that carries a block entity (a chest, a sign, a banner…); putting one on stone is rejected rather than stored, because the game would drop it and the file would look fine.
+The kind is derived from the block, so you never write it — putting sign text on a chest is not something you can express.
+The payload is stored verbatim and later written to .schem / .litematic, so it must be NBT-representable (no null, no mixed-type arrays).
+```
+
+| 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
+|------|------|:----:|-------------|------|------|
+| `at` | 数组<整数> | ✅ | 3..3 项 | — | The cell (integer block coordinates). |
+| `data` | 对象 | ✅ | — | — | The payload to store. Replaces the existing payload unless merge is true. |
+| `merge` | 布尔 | — | — | — | Merge into the existing payload instead of replacing it. Default false. |
+
 ## 破坏性编辑
 
 会删掉已有内容，触发确认阈值时需要先解释清楚再带 `confirm: true` 重发。
@@ -231,6 +278,19 @@ Delete blocks inside a box (equivalent to fill_box + mode=destroy, but more dire
 | `to` | 数组<整数> | ✅ | 3..3 项 | — | end [x,y,z] |
 | `confirm` | 布尔 | — | — | — | Explicitly confirm an operation that exceeds the threshold. Decide after reading the dry-run preview. |
 
+## `remove_entity`
+
+```
+Remove entities, either by the ids that place_entity / list_entities gave you, or everywhere inside a box.
+This never touches blocks — removing the water under a boat is `erase`, removing the boat is this.
+Prefer a single call with several ids over several calls: one call is one revision and one undo step.
+```
+
+| 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
+|------|------|:----:|-------------|------|------|
+| `ids` | 数组<字符串> | — | — | — | Entity ids to remove (as returned by place_entity or list_entities). |
+| `region` | 对象 | — | — | — | A closed box in world coordinates. |
+
 ## 检视（只读，不产生 revision）
 
 读回与定位。**精确改格子必须靠 `slice` 的 ASCII 图，不能靠数截图里的像素。**
@@ -282,7 +342,7 @@ World size and material histogram: bounding box, width/height/depth, total non-a
 **Structured self-check**: submit a set of "expectations"; the engine judges each one pass/fail and reports the actual value.
 After any modification call it to read back the result before claiming completion — **it is forbidden to say "done" without reading back**.
 Before calling it you must write down your expectations in claims; if you cannot, you have not thought through what you are doing.
-Available checks: block_at (a cell is a given block — write properties in brackets to also constrain them, e.g. `minecraft:oak_stairs[facing=west]`; properties you omit are not constrained) / air_at (a cell is air) / count (the count of a block is within a range)/ supported (no floating blocks in a region — floating means the whole column below is empty down to the reference region floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane).
+Available checks: block_at (a cell is a given block — write properties in brackets to also constrain them, e.g. `minecraft:oak_stairs[facing=west]`; properties you omit are not constrained) / air_at (a cell is air) / count (the count of a block is within a range)/ supported (no floating blocks in a region — floating means the whole column below is empty down to the reference region floor AND nothing sits directly above; a ceiling on a wall or a hanging lantern is fine) / symmetric (symmetric across a plane) / entity_at (an entity of a given type is in a cell — **use this after place_entity**) / entity_count (how many entities of a type are in a region; give min and/or max) / block_entity_at (a cell carries block entity data, optionally of a given kind).
 ```
 
 | 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
@@ -297,6 +357,7 @@ Available checks: block_at (a cell is a given block — write properties in brac
 | `pos` | 数组<整数> | — | Coordinate used by block_at / air_at. |
 | `expect` | 字符串 | — | Expected block for block_at. With no brackets only the block name is compared. With brackets, **every property you write must match** and properties you omit are ignored — so `minecraft:oak_stairs[facing=west]` checks the facing without pinning half/shape. |
 | `block` | 字符串 | — | Block name used by count. |
+| `type` | 字符串 | — | Entity type used by entity_at (what entity_at expects) and entity_count (what it counts), e.g. "minecraft:oak_boat". **Not** a block name — entities are a separate layer from blocks. |
 | `from` | 数组<整数> | — | Region start for count / supported / symmetric. |
 | `to` | 数组<整数> | — | Region end for count / supported / symmetric. |
 | `min` | 整数 | — | Lower bound for count. |
@@ -337,6 +398,31 @@ Search available blocks by name substring (e.g. "stairs", "planks", "oak"). Use 
 |------|------|:----:|-------------|------|------|
 | `query` | 字符串 | ✅ | — | — | Search substring, case-insensitive. |
 | `limit` | 整数 | — | ≥ 1 | — | Maximum number to return, default 20. |
+
+## `list_entities`
+
+```
+List the entities in the world (or in a box), with their ids, types, positions and facing.
+Use it to get the ids before remove_entity, and to check what is already there before adding more.
+This is a plain listing, **not** a verification — read back with `verify` (entity_at / entity_count) before claiming you are done.
+```
+
+| 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
+|------|------|:----:|-------------|------|------|
+| `region` | 对象 | — | — | — | A closed box in world coordinates. |
+| `type` | 字符串 | — | — | — | Only list this entity type, e.g. "minecraft:oak_boat". |
+| `limit` | 整数 | — | 1..512 | — | Maximum number of entities to list, default 64. |
+
+## `get_block_entity`
+
+```
+Read the block entity data hanging on one cell — sign text, banner patterns, container contents, skull owner…
+Returns the kind and the stored payload, or says there is none. Block entities only exist on blocks that carry them (a chest, a sign, a banner…); putting one on stone is rejected rather than stored.
+```
+
+| 参数 | 类型 | 必填 | 取值 / 范围 | 默认 | 说明 |
+|------|------|:----:|-------------|------|------|
+| `at` | 数组<整数> | ✅ | 3..3 项 | — | The cell (integer block coordinates). |
 
 ## `analyze_structure`
 

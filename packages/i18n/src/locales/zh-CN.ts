@@ -219,6 +219,7 @@ export const zhCN = {
     UNKNOWN_TOOL: '没有叫 {{name}} 的工具。可用工具：{{available}}',
     INVALID_ARGS: '参数不合法：{{detail}}',
     UNKNOWN_BLOCK: '未知方块 {{name}}，是否想用：{{suggestions}}',
+    UNKNOWN_ENTITY: '未知实体类型 {{name}}，是否想用：{{suggestions}}',
     OUT_OF_VOLUME: '{{count}} 个方块超出建造范围被裁剪',
     NEEDS_CONFIRM: '这会改动 {{count}} 个方块（超过 {{threshold}}），需要确认',
     TOO_LARGE: '范围太大：{{count}} 个方块，上限 {{limit}}',

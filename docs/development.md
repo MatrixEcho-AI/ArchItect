@@ -20,7 +20,7 @@ packages/
   core       体素内核 · 状态编解码 · 几何算子 · 世界存储 · 历史回放 · 朝向变换 · linter
   mcai       .mcai 容器 · 对话与截图存档 · 崩溃恢复 WAL
   render     软件光栅器 · 原版方块模型网格化 · 纹理图集 · 相机与叠加层 · 正交射线拾取 · PNG 编解码
-  tools      24 个 LLM 工具 · JSON Schema 校验 · 文档生成
+  tools      29 个 LLM 工具 · JSON Schema 校验 · 文档生成
   interop    .schem / .litematic / .obj · 版本迁移
   agent      Agent 循环 · 完成闸门 · Provider 适配与能力发现
   i18n       中文优先的文案层（zh-CN 是基准表）

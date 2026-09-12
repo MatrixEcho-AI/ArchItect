@@ -1,5 +1,5 @@
 import { EditLog, measure, ReplaySession, WorldStore } from '@architect/core'
-import type { Bounds, OpSource, Palette, WriteResult } from '@architect/core'
+import type { Bounds, OpSource, Palette, SparseWrite, WriteResult } from '@architect/core'
 import {
   cameraForShot,
   bakedColorTexturePack,
@@ -172,8 +172,8 @@ export class AgentSession {
         },
       },
       correlationId: 'init',
-      record: (tool, args, result) => {
-        this.record(tool, args, result, LLM_ACTOR)
+      record: (tool, args, result, sparse) => {
+        this.record(tool, args, result, LLM_ACTOR, sparse)
       },
       shoot: (request) => this.shoot(request),
     }
@@ -186,16 +186,26 @@ export class AgentSession {
    * 看到"写入后的版本"和"日志长度"的地方。曾经把它写在这一层，结果是任何
    * 自己拼 `ToolContext` 的宿主都绕过了它，留下一份有两条同号 op 的日志。
    */
-  private record(tool: string, args: unknown, result: WriteResult, who: Actor): void {
-    this.log.record(result, {
-      tool,
-      args,
-      correlationId: this.ctx.correlationId,
-      source: who.source,
-      actor: who.actor,
-      worldRevision: this.store.revision,
-      ...(this.options.now !== undefined ? { ts: this.options.now() } : {}),
-    })
+  private record(
+    tool: string,
+    args: unknown,
+    result: WriteResult | undefined,
+    who: Actor,
+    sparse?: SparseWrite,
+  ): void {
+    this.log.record(
+      result,
+      {
+        tool,
+        args,
+        correlationId: this.ctx.correlationId,
+        source: who.source,
+        actor: who.actor,
+        worldRevision: this.store.revision,
+        ...(this.options.now !== undefined ? { ts: this.options.now() } : {}),
+      },
+      sparse ?? {},
+    )
   }
 
   /** 开始新的一轮：同一次 LLM 响应里的多个 op 会共享这个 id，便于整轮回滚。 */
@@ -212,9 +222,15 @@ export class AgentSession {
    *
    * `who` 默认是"人"，因为会走这条路的都是人在改（模型走的是工具）。
    */
-  applyEdit(tool: string, args: unknown, run: () => WriteResult, who: Actor = USER_ACTOR): WriteResult {
+  applyEdit(
+    tool: string,
+    args: unknown,
+    run: () => WriteResult | undefined,
+    who: Actor = USER_ACTOR,
+    sparse?: SparseWrite,
+  ): WriteResult | undefined {
     const result = run()
-    this.record(tool, args, result, who)
+    this.record(tool, args, result, who, sparse)
     return result
   }
 

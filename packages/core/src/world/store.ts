@@ -329,30 +329,43 @@ export class WorldStore {
   }
 
   /**
-   * 提交一笔**只有实体层**的写入：应用差分、把版本号推进一格、返回推进后的版本。
+   * 提交一笔**只有实体层**的写入。`commitSparse` 的简写，见那里的说明。
+   */
+  commitEntities(changes: readonly EntityChange[]): number {
+    return this.commitSparse({ entities: changes })
+  }
+
+  /**
+   * 提交一笔**稀疏层**写入：应用两层差分、把版本号推进**一格**、返回推进后的版本。
    *
    * 为什么需要它：`store.revision` 是"世界对应哪个版本"的**唯一游标**，而
    * `EditLog.record` 会校验 `rev === worldRevision`（D-58）。方块写入由
    * `writeBlocks` 在内部 `currentRevision++`，所以那条路自洽；而"只放一条船、
    * 一个方块都不动"没有任何方块写入，版本号没人推——不补这一下，日志与游标
-   * 当场脱节，`record` 直接抛错。
+   * 当场脱节，`record` 直接抛错。告示牌文字那种"只改方块实体"的写入同理。
    *
-   * **一笔 op 只能推进一次版本。** 所以这个方法是给"只有实体"的写入用的；
-   * 将来若有一个工具同时改方块和实体，正确做法是**先**把实体落进
-   * `store.entities`、再调 `writeBlocks`（让方块那次推进版本），
-   * 然后把实体差分作为第三个参数交给 `EditLog.record` —— 一条 op、一个版本、三层。
+   * **一笔 op 只能推进一次版本**，所以两层在**一次调用**里一起提交。
+   * 将来若有一个工具同时改方块与稀疏层，正确做法是**先**把稀疏层落进 store、
+   * 再调 `writeBlocks`（让方块那次推进版本），然后把差分作为 `SparseWrite`
+   * 交给 `EditLog.record` —— 一条 op、一个版本、三层。
    *
    * 空差分不推进版本、不产生 op，与 `writeBlocks` 对空操作的态度一致
    * （revision 是截图缓存与 stale 判断的键，无谓地 +1 会让所有缓存失效）。
    *
-   * `changes` 通常已经由工具层通过 `entities.set()` / `remove()` 落进去了
-   * （它需要那些方法的返回值来决定"到底有没有变"）。这里再应用一次是**幂等的**
-   * ——`applyChanges` 的语义就是"把世界置为 `after`"——好处是 replay 路径与
-   * 工具路径调的是同一个函数，而不是"一个 apply 一个 apply"。
+   * `changes` 通常已经由工具层通过 `set()` / `remove()` 落进去了（它需要那些
+   * 方法的返回值来决定"到底有没有变"）。这里再应用一次是**幂等的**——
+   * `applyChanges` 的语义就是"把世界置为 `after`"——好处是 replay 路径与工具路径
+   * 调的是同一个函数，而不是"一个 apply 一个 apply"。
    */
-  commitEntities(changes: readonly EntityChange[]): number {
-    if (changes.length === 0) return this.currentRevision
-    this.entities.applyChanges(changes)
+  commitSparse(changes: {
+    entities?: readonly EntityChange[]
+    blockEntities?: readonly BlockEntityChange[]
+  }): number {
+    const entities = changes.entities ?? []
+    const blockEntities = changes.blockEntities ?? []
+    if (entities.length === 0 && blockEntities.length === 0) return this.currentRevision
+    if (entities.length > 0) this.entities.applyChanges(entities)
+    if (blockEntities.length > 0) this.blockEntities.applyChanges(blockEntities)
     this.currentRevision++
     return this.currentRevision
   }

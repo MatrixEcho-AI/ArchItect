@@ -213,6 +213,7 @@ export const enUS = {
     UNKNOWN_TOOL: 'No tool named {{name}}. Available tools: {{available}}',
     INVALID_ARGS: 'Invalid arguments: {{detail}}',
     UNKNOWN_BLOCK: 'Unknown block {{name}}. Did you mean: {{suggestions}}',
+    UNKNOWN_ENTITY: 'Unknown entity type {{name}}. Did you mean: {{suggestions}}',
     OUT_OF_VOLUME: '{{count}} block(s) fell outside the build area and were clipped',
     NEEDS_CONFIRM: 'This would change {{count}} block(s) (over the {{threshold}} threshold) — confirmation required',
     TOO_LARGE: 'Selection too large: {{count}} block(s), limit is {{limit}}',

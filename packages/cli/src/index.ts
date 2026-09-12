@@ -59,7 +59,7 @@ import type {
 } from '@architect/agent'
 import {
   DATA_VERSION_1_21_4,
-  exportLitematic,
+  exportLitematicDetailed,
   exportObj,
   exportSchematic,
   importSchematicInto,
@@ -929,16 +929,23 @@ async function cmdExport(inv: Invocation): Promise<number> {
   }
 
   if (format === 'litematic') {
-    const bytes = exportLitematic(store, { name: project.manifest.name, author: 'ArchItect' })
-    await writeFile(inv.out, bytes)
+    const result = exportLitematicDetailed(store, { name: project.manifest.name, author: 'ArchItect' })
+    await writeFile(inv.out, result.bytes)
     out(t('cli.export.litematic'))
     out(
       t('cli.export.litematicLine', {
         size: `${size.x}x${size.y}x${size.z}`,
         path: inv.out,
-        kb: (bytes.length / 1024).toFixed(1),
+        kb: (result.bytes.length / 1024).toFixed(1),
       }),
     )
+    if (result.entities > 0 || result.blockEntities > 0) {
+      out(t('cli.export.sparseLine', { entities: result.entities, blockEntities: result.blockEntities }))
+    }
+    if (result.problems.length > 0) {
+      out(t('cli.export.problemsHeader', { n: result.problems.length }))
+      for (const problem of result.problems.slice(0, 12)) out(`    ${problem}`)
+    }
     out(t('cli.export.litematicNote'))
     return 0
   }

@@ -1,9 +1,12 @@
 import { DEFAULT_HARD_LIMIT } from '@architect/core'
 import type { Bounds, WorldStore } from '@architect/core'
 
+import { collectSparse, exportBoundsOf } from './collect.js'
+import { compoundFromJson, compoundToJson } from './json-nbt.js'
 import {
   asCompound,
   asInt,
+  asNumberList,
   asString,
   asCompoundList,
   asUnsignedLongArray,
@@ -11,6 +14,7 @@ import {
   compound,
   compoundList,
   int,
+  list,
   long,
   longArray,
   readNbt,
@@ -19,7 +23,12 @@ import {
 } from './nbt.js'
 import type { NbtTree, Tag } from './nbt.js'
 import { DATA_VERSION_1_21_4 } from './schematic.js'
-import type { SchematicBlock, SchematicData } from './schematic.js'
+import type {
+  SchematicBlock,
+  SchematicBlockEntity,
+  SchematicData,
+  SchematicEntity,
+} from './schematic.js'
 
 /**
  * Litematica（`.litematic`）读写。
@@ -45,6 +54,10 @@ export interface LitematicRegion {
   size: [number, number, number]
   /** 区域原点（`Position`），通常是负坐标。 */
   position: [number, number, number]
+  /** 实体，位置**相对区域原点**（与 `.schem` 用同一个中间表示）。 */
+  entities?: SchematicEntity[]
+  /** 方块实体，位置相对区域原点。 */
+  blockEntities?: SchematicBlockEntity[]
 }
 
 export interface LitematicData {
@@ -61,6 +74,8 @@ export interface WriteLitematicInput {
     blocks: Iterable<SchematicBlock>
     size: [number, number, number]
     position?: [number, number, number]
+    entities?: Iterable<SchematicEntity>
+    blockEntities?: Iterable<SchematicBlockEntity>
   }>
   name?: string
   author?: string
@@ -135,11 +150,35 @@ export function writeLitematic(input: WriteLitematicInput): Uint8Array {
         paletteEntries.push(splitState(block.state))
         paletteIndex.set(block.state, slot)
       }
-      // 与 .schem 同样的顺序：x + z*Width + y*Width*Length
+      // 与 `.schem` 同样的顺序：x + z*Width + y*Width*Length
       indices[block.x + block.z * width + block.y * width * length] = slot
       totalBlocks++
     }
     totalVolume += width * height * length
+
+    /**
+     * 两层稀疏数据。**两处与 Sponge 不同的约定**，取自 Litematica 自己的序列化代码
+     * （`LitematicaSchematic.getEntitiesAsListData` / `getBlockEntitiesAsListData`）：
+     *
+     * - 键是**小写 `id`**（原版实体/方块实体的 NBT 就叫这个），不是 Sponge 的 `Id`；
+     * - 实体的位置写 `Pos` = **double 列表**，而方块实体的位置写 **`x`/`y`/`z` 三个 int**
+     *   （`DataTypeUtils.putVec3i`），**不是** Sponge 那种 `Pos` 数组。
+     *
+     * 两个列表都**总是写**（哪怕空）——Litematica 就是这么干的，而 `.litematic`
+     * 的读方不一定容忍缺字段。
+     */
+    const entityTags: NbtTree[] = [...(region.entities ?? [])].map((entity) => ({
+      ...compoundFromJson(entity.data),
+      id: string(entity.id),
+      Pos: list('double', entity.pos),
+    }))
+    const tileEntityTags: NbtTree[] = [...(region.blockEntities ?? [])].map((entity) => ({
+      ...compoundFromJson(entity.data),
+      id: string(entity.id),
+      x: int(entity.pos[0]),
+      y: int(entity.pos[1]),
+      z: int(entity.pos[2]),
+    }))
 
     // 元素是**裸字段表**，不是 compound 标签——见 `compoundList` 的说明
     const paletteTags: NbtTree[] = paletteEntries.map((entry) => {
@@ -153,8 +192,8 @@ export function writeLitematic(input: WriteLitematicInput): Uint8Array {
       Size: compound({ x: int(width), y: int(height), z: int(length) }),
       BlockStatePalette: compoundList(paletteTags),
       BlockStates: longArray(packBlockStates([...indices], paletteEntries.length)),
-      Entities: compoundList([]),
-      TileEntities: compoundList([]),
+      Entities: compoundList(entityTags),
+      TileEntities: compoundList(tileEntityTags),
       PendingBlockTicks: compoundList([]),
       PendingFluidTicks: compoundList([]),
     })
@@ -246,7 +285,13 @@ export async function readLitematic(bytes: Uint8Array): Promise<LitematicData> {
       const x = rest - z * size[0]
       blocks.push({ x, y, z, state })
     }
-    regions.push({ blocks, size, position })
+    regions.push({
+      blocks,
+      size,
+      position,
+      entities: readLitematicEntities(region['Entities']),
+      blockEntities: readLitematicBlockEntities(region['TileEntities']),
+    })
   }
 
   const metadata = asCompound(child(root, 'Metadata'))
@@ -267,9 +312,24 @@ export interface ExportLitematicOptions {
   mcDataVersion?: number
 }
 
-/** 从世界导出（单区域，内容包围盒就是那个区域）。 */
+/** 从世界导出（单区域，内容包围盒与两层稀疏数据的并集就是那个区域）。 */
 export function exportLitematic(store: WorldStore, options: ExportLitematicOptions = {}): Uint8Array {
-  const region = options.region ?? store.contentBounds()
+  return exportLitematicDetailed(store, options).bytes
+}
+
+/**
+ * 与 `exportLitematic` 相同，但把两层稀疏数据的数量、以及"附加数据转不成 NBT"的
+ * 原因一起交出来。
+ *
+ * 为什么要有这一版：`.schem` 那条路（`exportSchematic`）本来就是这么返回的，
+ * 两种格式该一致；而"转不了就说出来"是这个仓库对互操作的硬要求——
+ * JSON 分不出 byte/short/int/float/double，猜出来的文件在游戏里是错的。
+ */
+export function exportLitematicDetailed(
+  store: WorldStore,
+  options: ExportLitematicOptions = {},
+): { bytes: Uint8Array; size: [number, number, number]; entities: number; blockEntities: number; problems: string[] } {
+  const region = options.region ?? exportBoundsOf(store)
   if (region === undefined) throw new Error('世界是空的，没有可导出的内容')
   const size: [number, number, number] = [
     region.max.x - region.min.x + 1,
@@ -286,12 +346,14 @@ export function exportLitematic(store: WorldStore, options: ExportLitematicOptio
       }
     }
   }
-  return writeLitematic({
-    regions: [{ name: 'Region 1', blocks, size, position: [0, 0, 0] }],
+  const { entities, blockEntities, problems } = collectSparse(store, region)
+  const bytes = writeLitematic({
+    regions: [{ name: 'Region 1', blocks, size, position: [0, 0, 0], entities, blockEntities }],
     ...(options.name !== undefined ? { name: options.name } : {}),
     ...(options.author !== undefined ? { author: options.author } : {}),
     ...(options.mcDataVersion !== undefined ? { mcDataVersion: options.mcDataVersion } : {}),
   })
+  return { bytes, size, entities: entities.length, blockEntities: blockEntities.length, problems }
 }
 
 /** `.litematic` → 与 `.schem` 通用的中间表示，这样导入逻辑只有一份。 */
@@ -305,7 +367,78 @@ export function litematicToSchematicData(data: LitematicData): SchematicData {
     formatVersion: data.version,
   }
   if (data.mcDataVersion !== undefined) output.dataVersion = data.mcDataVersion
+  // 两层稀疏数据跟着走：`.schem` 与 `.litematic` 共用同一个导入器，
+  // 少带一层就等于"从 .litematic 导入时实体不见了"
+  if (region.entities !== undefined && region.entities.length > 0) output.entities = region.entities
+  if (region.blockEntities !== undefined && region.blockEntities.length > 0) {
+    output.blockEntities = region.blockEntities
+  }
   return output
+}
+
+/**
+ * `.litematic` 的实体列表。
+ *
+ * v1 是**包装**形状：`{ Pos: …, EntityData: { <原版实体 NBT> } }`；v2+ 把位置直接写进
+ * 实体自己的 NBT（`LitematicaSchematic.readEntities_v1` / `readEntities_v2` 的区别）。
+ * 两种都认——v1 的文件还在流通，而认错的代价是"实体一个都没导入"。
+ */
+function readLitematicEntities(tag: Tag | undefined): SchematicEntity[] {
+  const out: SchematicEntity[] = []
+  for (const entry of asCompoundList(tag)) {
+    const wrapper = asCompound(entry['EntityData'])
+    const source = wrapper ?? entry
+    const id = readId(source)
+    const pos = asNumberList(entry['Pos']) ?? asNumberList(source['Pos'])
+    if (id.length === 0 || pos === undefined || pos.length !== 3) continue
+    // 位置是元数据，不该同时留在附加数据里——否则模型会看到两份位置
+    out.push({ id, pos: [pos[0]!, pos[1]!, pos[2]!], data: extraOf(source, ['id', 'Id', 'Pos']) })
+  }
+  return out
+}
+
+/** 方块实体的位置是 `x`/`y`/`z` 三个 int（v1 的外层包装也是），也接受 `Pos` 两种容器。 */
+function readLitematicBlockEntities(tag: Tag | undefined): SchematicBlockEntity[] {
+  const out: SchematicBlockEntity[] = []
+  for (const entry of asCompoundList(tag)) {
+    const wrapper = asCompound(entry['TileNBT'])
+    const source = wrapper ?? entry
+    const id = readId(source)
+    const pos = readBlockPosition(entry) ?? readBlockPosition(source)
+    if (id.length === 0 || pos === undefined) continue
+    out.push({ id, pos, data: extraOf(source, ['id', 'Id', 'Pos', 'x', 'y', 'z']) })
+  }
+  return out
+}
+
+/** 原版 NBT 用小写 `id`；大写的写法也认，免得一个大小写差异让整份文件"没有实体"。 */
+function readId(entry: Record<string, Tag | undefined>): string {
+  const lower = asString(entry['id'])
+  return lower.length > 0 ? lower : asString(entry['Id'])
+}
+
+function readBlockPosition(entry: Record<string, Tag | undefined>): [number, number, number] | undefined {
+  if (entry['x'] !== undefined && entry['y'] !== undefined && entry['z'] !== undefined) {
+    return [asInt(entry['x']), asInt(entry['y']), asInt(entry['z'])]
+  }
+  const pos = asNumberList(entry['Pos'])
+  if (pos !== undefined && pos.length === 3) {
+    return [Math.trunc(pos[0]!), Math.trunc(pos[1]!), Math.trunc(pos[2]!)]
+  }
+  return undefined
+}
+
+/** 一条记录里除元数据之外的附加数据（摊平成一份 JSON）。 */
+function extraOf(
+  source: Record<string, Tag | undefined>,
+  reserved: readonly string[],
+): Record<string, unknown> {
+  const inline: Record<string, Tag | undefined> = {}
+  for (const [key, tag] of Object.entries(source)) {
+    if (reserved.includes(key)) continue
+    inline[key] = tag
+  }
+  return compoundToJson(inline)
 }
 
 // ── 内部 ──────────────────────────────────────────────────────────────────────

@@ -65,7 +65,11 @@ export function compoundToJson(tree: Record<string, Tag | undefined>): Record<st
 /** JSON 对象 → NBT compound。 */
 export function compoundFromJson(data: Record<string, unknown>): NbtTree {
   const tree: NbtTree = {}
-  for (const [key, value] of Object.entries(data)) {
+  // **按键排序**：导出必须逐字节确定（"同样的世界导出成同样的文件"是这个仓库的
+  // 硬要求），而 JSON 对象的键序取决于它是怎么被写进去的——同一个 `.schem`
+  // 经一次 `.mcai` 往返之后 `data` 的键序可能就变了，于是导出字节跟着变。
+  for (const key of Object.keys(data).sort()) {
+    const value = data[key]
     if (value === undefined) continue
     tree[key] = jsonToNbt(value)
   }

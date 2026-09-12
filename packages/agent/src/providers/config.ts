@@ -139,6 +139,19 @@ export interface ProviderConfig {
    */
   maxOutputTokens?: number
   capabilities: ProviderCapabilities
+  /**
+   * **每个模型一份价格表**（自定义端点必须能这么配）。
+   *
+   * 为什么不能只有 provider 级的一张：一个自定义端点上挂的往往是好几个模型，
+   * 价格差好几倍（同一个网关上的 flash 与 pro、或者第三方转售的不同上游）。
+   * 只按 provider 记一份的话，切模型之后表盘上的钱就是编的——而它是**刹车依据**
+   * （`--max-usd` 真的会让 agent 停下来）。
+   *
+   * 查表顺序见 `costTableFor`：先按当前 model id 精确匹配，再退到 `cost`。
+   * 键就是模型 id 原文（大小写敏感）——它是端点自己报出来的那个字符串。
+   */
+  costs?: Record<string, CostTable>
+  /** provider 级兜底价格（预设带的那份，或自定义端点只配一个价时用）。 */
   cost?: CostTable
   compat?: CompatOptions
 }

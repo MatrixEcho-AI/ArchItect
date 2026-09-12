@@ -48,6 +48,25 @@ export interface BudgetExceeded {
 export type BudgetVerdict = { ok: true } | BudgetExceeded
 
 /**
+ * 从一份 provider 配置里取出**当前模型**该用的价格表。
+ *
+ * 顺序是刻意的：先按模型 id 精确匹配 `costs`，再退到 provider 级 `cost`。
+ * 反过来的话，配了 per-model 价格也没用——兜底那张永远先命中。
+ *
+ * 只看 model id，不看 baseURL：一个端点上报的 id 已经是唯一的了，而"按端点分表"
+ * 会在用户换地址之后留下一堆对不上的旧键。
+ */
+export function costTableFor(
+  provider: { model?: string; costs?: Record<string, CostTable>; cost?: CostTable } | undefined,
+  at?: Date,
+): CostTable | undefined {
+  if (provider === undefined) return undefined
+  const model = provider.model?.trim()
+  const perModel = model !== undefined && model.length > 0 ? provider.costs?.[model] : undefined
+  return activeCostTable(perModel ?? provider.cost, at)
+}
+
+/**
  * 取**此刻生效**的那张价格表。
  *
  * DeepSeek 的价格随北京时间分时段（高峰正好是低谷的 2 倍），所以"这次花了多少"

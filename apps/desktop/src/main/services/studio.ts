@@ -1,6 +1,6 @@
 import { rm, rename, readFile, writeFile } from 'node:fs/promises'
 
-import { activeProvider, AgentSession, runAgent } from '@architect/agent'
+import { activeProvider, AgentSession, costTableFor, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
 import type { DiscoveryResult, LlmImage, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
 import { forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
@@ -342,7 +342,8 @@ export class StudioService {
       async (goal, provider, onEvent, shouldStop, history, pendingMutations) => {        // 用户设的花费上限要**真的刹车**，不能只记账。价格表来自当前 provider。
         const settings = this.chat.settingsValue
         const active = activeProvider(settings)
-        const cost = active?.cost
+        // 按**当前模型**取价格表：自定义端点一个 provider 可能挂着好几个模型
+        const cost = costTableFor(active)
         const state = await runAgent(
           {
             provider,

@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto'
 import {
   activeProvider,
   createProvider,
+  costTableFor,
   discoverProvider,
+  normalizeProviderCosts,
   resolveApiKey,
   UsageMeter,
   validateProviderConfig,
@@ -366,7 +368,15 @@ export class ChatController {
    * 没有加密能力时返回一条 issue，并明确告诉用户改用环境变量——而不是悄悄写明文。
    */
   saveProvider(config: ProviderConfig, apiKeyPlain?: string): SettingsView {
-    const target: ProviderConfig = { ...config }
+    /**
+     * **归一价格表的内存形状**（`cost` 与 `costs` 只留该留的那个）。
+     *
+     * 界面送来的是**文件形状**的配置，而内存里我们按 `costs` 给"按模型分表"，
+     * 好让界面与查表都只看一个字段。不归一的话，"刚保存的那一份"会用文件形状
+     * 留在内存里——界面读不到价格，用户以为丢了，再点一次保存就真的写没了。
+     * 解析与保存共用 `applyCostShape`，形状必然一致（见那里的注释）。
+     */
+    const target: ProviderConfig = normalizeProviderCosts({ ...config })
     if (apiKeyPlain !== undefined && apiKeyPlain.trim().length > 0) {
       const id = config.id
       if (this.secrets.set(id, apiKeyPlain.trim())) {
@@ -552,8 +562,12 @@ export class ChatController {
     }
   }
 
+  /**
+   * 此刻该用哪张价格表：**按当前模型查**（自定义端点一个 provider 挂多个模型，
+   * 价格可能差几倍）。查表规则见 `costTableFor`。
+   */
   private activeCost(): CostTable | undefined {
-    return activeProvider(this.settings)?.cost
+    return costTableFor(activeProvider(this.settings))
   }
 
   private blocking(): string[] {

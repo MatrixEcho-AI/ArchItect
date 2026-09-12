@@ -960,3 +960,176 @@ body,
 .md a:hover {
   text-decoration: underline;
 }
+
+/*
+ * ── 模型设置（列表 + 展开编辑） ─────────────────────────────────────────────
+ *
+ * 用户拿 DeepSeek harness 的模型配置对照过来的版式：一行一个 provider、左边名字
+ * 右边操作、状态点看能不能用。所以这里刻意**不用卡片阴影**——那会把每一行画成
+ * 一张独立的卡，而它们是一个列表里的条目。分隔靠 1px 边框与展开时的描边。
+ *
+ * 这一块全在 `.ant-modal` 里，而 `styles.css` 是全局表：所以每个类名都带
+ * `provider-` / `cost-` 前缀，免得跟别处的 `.provider` 撞上。
+ */
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.provider-card {
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--ant-color-bg-container);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+/* 没展开的卡可以整块点开编辑，所以给个手型；展开之后里面有自己的控件，去掉。 */
+.provider-card:not(.is-open) {
+  cursor: pointer;
+}
+
+.provider-card:not(.is-open):hover {
+  border-color: var(--ant-color-primary-border);
+}
+
+/* 「使用中」那一行要有明确的视觉归属，不然用户看不出对话会发给谁。 */
+.provider-card.is-active {
+  border-color: var(--ant-color-primary);
+  box-shadow: 0 0 0 2px var(--ant-color-primary-border);
+}
+
+.provider-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.provider-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* 预设标签（DeepSeek / OpenAI / Ollama）。custom 不显示——那不是个"牌子"。 */
+.provider-tag {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--ant-color-fill-secondary);
+  color: var(--ant-color-text-secondary);
+}
+
+/*
+ * 状态点。绿＝密钥与模型都齐了。**只看"有 key"是不够的**：模型还没选的时候
+ * 对话根本发不出去，那时候亮绿灯就是在骗人。
+ */
+.provider-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ant-color-text-quaternary);
+  flex: none;
+}
+
+.provider-dot.is-ready {
+  background: var(--ant-color-success);
+}
+
+.provider-active-tag {
+  font-size: 11px;
+  color: var(--ant-color-primary);
+}
+
+/* 第二行：当前模型 / 缺什么。**要能省略**——自定义端点的模型 id 可能很长。 */
+.provider-meta {
+  font-size: 11.5px;
+  color: var(--ant-color-text-secondary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-missing {
+  color: var(--ant-color-warning);
+}
+
+.provider-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--ant-color-border-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 「自定义设置」那行折叠开关：整行可点，箭头指示展开方向。 */
+.provider-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--ant-color-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.provider-advanced-toggle:hover {
+  color: var(--ant-color-primary);
+}
+
+.provider-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--ant-color-fill-quaternary);
+}
+
+/* ── 按模型定价 ─────────────────────────────────────────────────────────── */
+
+.cost-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cost-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+}
+
+/*
+ * 一行价格：模型 id 占满剩余宽度，三个价格各 74px，加一个删除。
+ * 用 grid 而不是 flex：模型 id 要能缩（`minmax(0, 1fr)`），flex 里它会被
+ * `InputNumber` 的最小宽度顶出去，于是这一行在窄一点的窗口里横向溢出。
+ */
+.cost-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 76px 76px auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.cost-legend {
+  font-size: 11px;
+  color: var(--ant-color-text-quaternary);
+}
+
+/* 添加按钮那四个：虚线框，与上面实线的 provider 卡区分开（"这是新增"）。 */
+.add-provider {
+  border-style: dashed;
+}
+
+.add-provider:hover {
+  border-style: solid;
+}

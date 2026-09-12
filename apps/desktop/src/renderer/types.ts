@@ -172,7 +172,11 @@ export interface ProviderView {
     source: string
     probedAt?: string
   }
+  /** provider 级兜底价格（预设带的那份）。 */
   cost?: { inPerMTok: number; outPerMTok: number; cacheReadPerMTok?: number }
+  /** **按模型**的价格表。查表顺序见 `costTableFor`：先精确匹配当前模型，再退到 `cost`。 */
+  costs?: Record<string, { inPerMTok: number; outPerMTok: number; cacheReadPerMTok?: number }>
+  compat?: Record<string, unknown>
   hasKey: boolean
   envName?: string
 }

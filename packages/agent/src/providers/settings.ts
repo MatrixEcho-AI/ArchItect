@@ -12,7 +12,7 @@
 import { t } from '@architect/i18n'
 
 import { envKeyRef, configFromPreset, PROVIDER_PRESETS, validateProviderConfig } from './config.js'
-import type { PresetKey, ProviderConfig } from './config.js'
+import type { CostTable, PresetKey, ProviderConfig } from './config.js'
 import type { Budget } from '../usage.js'
 
 export const SETTINGS_VERSION = 1
@@ -195,16 +195,8 @@ function parseProvider(raw: unknown, index: number, issues: SettingsIssue[]): Pr
     model: typeof entry['model'] === 'string' ? entry['model'].trim() : '',
     capabilities: parseCapabilities(entry['capabilities'], fallback.capabilities),
   }
-  if (entry['cost'] !== null && typeof entry['cost'] === 'object') {
-    const cost = entry['cost'] as Record<string, unknown>
-    if (typeof cost['inPerMTok'] === 'number' && typeof cost['outPerMTok'] === 'number') {
-      config.cost = {
-        inPerMTok: cost['inPerMTok'],
-        outPerMTok: cost['outPerMTok'],
-        ...(typeof cost['cacheReadPerMTok'] === 'number' ? { cacheReadPerMTok: cost['cacheReadPerMTok'] } : {}),
-      }
-    }
-  }
+  applyCostShape(config, entry['cost'])
+
   if (entry['compat'] !== null && typeof entry['compat'] === 'object') {
     config.compat = entry['compat'] as ProviderConfig['compat']
   }
@@ -223,6 +215,77 @@ function parseProvider(raw: unknown, index: number, issues: SettingsIssue[]): Pr
     issues.push({ field: `providers[${index}].${problem.field}`, message: problem.message })
   }
   return config
+}
+
+/**
+ * 把配置里那两种价格写法归一成**一种内存形状**。
+ *
+ * 文件里两种写法同名（`cost`），靠"输入价与输出价**同时**是数字"区分：
+ *
+ * - 是 → provider 级的一张表（预设与老文件）。**若已知模型名，仍归一成按模型那张
+ *   map**——否则界面读 `costs` 而内存里只有 `cost`，价格表会在打开对话框时看着是空的。
+ *   拿不到模型名就留在 `cost` 里：那时没有键可用，查表与界面都会退到 provider 级。
+ * - 不是 → 按模型分表，逐项解析；半个表（缺输入或输出价）整张丢掉。
+ *
+ * **解析与保存必须走同一个函数。** 这条踩过：`parseProvider` 归一了，而
+ * `saveProvider` 是把配置直接塞进内存的（不走解析），于是"刚保存的那一份"用的是
+ * 文件形状、界面读不到，用户看到价格凭空消失；再点一次保存就真的写没了。
+ */
+export function applyCostShape(config: ProviderConfig, raw: unknown): void {
+  if (raw === null || typeof raw !== 'object') return
+  const entry = raw as Record<string, unknown>
+  if (typeof entry['inPerMTok'] === 'number' && typeof entry['outPerMTok'] === 'number') {
+    const table = parseCostTable(entry)
+    if (table === undefined) return
+    const model = config.model.trim()
+    if (model.length > 0) config.costs = { [model]: table }
+    else config.cost = table
+    return
+  }
+  const costs: Record<string, CostTable> = {}
+  for (const [model, value] of Object.entries(entry)) {
+    if (value === null || typeof value !== 'object') continue
+    const table = parseCostTable(value as Record<string, unknown>)
+    if (table !== undefined) costs[model] = table
+  }
+  if (Object.keys(costs).length > 0) config.costs = costs
+}
+
+/**
+ * 落盘前再归一一次。
+ *
+ * 存在的理由：`saveProvider` 收到的是**界面拼出来的一份配置**，它只保证"文件形状对"，
+ * 不保证内存形状对。归一的规则只写在 `applyCostShape` 一处，这里复用同一份——
+ * 于是"启动读文件"与"设置里点保存"两条路得到的内存形状必然一致。
+ */
+export function normalizeProviderCosts(config: ProviderConfig): ProviderConfig {
+  const flat = config.cost
+  const perModel = config.costs
+  delete config.cost
+  delete config.costs
+  if (perModel !== undefined) {
+    config.costs = perModel
+    if (flat !== undefined) config.cost = flat
+    return config
+  }
+  applyCostShape(config, flat)
+  return config
+}
+
+/**
+ * 一张价格表。缺 `inPerMTok` / `outPerMTok` 就**整张丢掉**——半个价格表会让
+ * "这次花了多少"变成编出来的数字，而那个数字是刹车依据。
+ *
+ * 只解析低谷价与缓存价：高峰价在文件里也有（DeepSeek 预设那份），但用户手填的
+ * 价格从界面上只填三个数，所以这里只认这三个。
+ */
+function parseCostTable(raw: Record<string, unknown>): CostTable | undefined {
+  if (typeof raw['inPerMTok'] !== 'number' || typeof raw['outPerMTok'] !== 'number') return undefined
+  return {
+    inPerMTok: raw['inPerMTok'],
+    outPerMTok: raw['outPerMTok'],
+    ...(typeof raw['cacheReadPerMTok'] === 'number' ? { cacheReadPerMTok: raw['cacheReadPerMTok'] } : {}),
+  }
 }
 
 function parseCapabilities(raw: unknown, fallback: ProviderConfig['capabilities']): ProviderConfig['capabilities'] {
@@ -246,9 +309,30 @@ function parseCapabilities(raw: unknown, fallback: ProviderConfig['capabilities'
   }
 }
 
-/** 序列化。缩进 2 空格——这个文件是给人看、给人手改的。 */
+/**
+ * 序列化。缩进 2 空格——这个文件是给人看、给人手改的。
+ *
+ * 有一处**必须改写**：内存里按模型分的价格表叫 `costs`，而文件里它就叫 `cost`
+ * （两种写法同名字段，靠"输入价与输出价是不是数字"区分，见 `parseProvider`）。
+ * 直接 `JSON.stringify(settings)` 会把 `costs` 原样写出去，于是**自己写出来的文件
+ * 自己读不回来**——按模型的价格表在下次启动时静默消失。这条是往返测试抓出来的。
+ *
+ * 所以这里深拷一份再改名，而不是让内存里的字段也叫 `cost`：`ProviderConfig.cost`
+ * 是 provider 级兜底，两者必须能同时存在。
+ */
 export function serializeSettings(settings: ProviderSettings): string {
-  return `${JSON.stringify(settings, null, 2)}\n`
+  const onDisk = {
+    ...settings,
+    providers: settings.providers.map((provider) => {
+      const { costs, ...rest } = provider
+      if (costs === undefined) return rest
+      // 两张表同时存在时**并起来**而不是让后者盖掉前者：provider 级那张是兜底，
+      // 丢掉它会让"没单独配价的模型"突然没有价格
+      const merged = provider.cost !== undefined ? { ...provider.cost, ...costs } : costs
+      return { ...rest, cost: merged }
+    }),
+  }
+  return `${JSON.stringify(onDisk, null, 2)}\n`
 }
 
 /** 把一个 provider 写回设置（按 id upsert）。 */

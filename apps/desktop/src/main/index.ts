@@ -1076,38 +1076,79 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     );
 
     /**
-     * **设置对话框里不该有探针日志，也不该有"测试连接"按钮**（用户定的：那是给维护
-     * 这个程序的人看的，不是给配模型的人看的，详细日志在 CLI 的 architect providers）。
+     * **模型设置是"列表 + 展开编辑"**（用户拿 DeepSeek harness 的配置对照过来的要求）：
+     * 一行一个 provider、带状态点、点「编辑」才展开表单，底下压着「自定义设置」。
      *
-     * 这条断言的价值全在**反向**：它钉住"别再加回来"。所以判据是"按钮在、日志在、
-     * 字段也在"，而不是"对话框打得开"——只查打得开的话，加回一整个日志面板照样过。
-     * 顺带证明 openSettings() 那条路还活着（它同时是挡住发送时那条横幅的入口）。
+     * 这里**不点「添加」**：addProvider 会往真实设置文件里加一条并落盘，而冒烟测试
+     * 不该改用户的配置（demo 跑的是他本机的设置）。所以加号按钮只做存在性断言，
+     * 新增那条链路由 chat.test.ts 覆盖。展开看表单是纯界面操作，不落盘。
      *
-     * 它**不点「应用」**：那会在真实配置上发起一次网络探测（挑模型那一步会在服务端
-     * 花掉一次调用），而且用户这台机器上跑的可能是真端点。应用那条路只能靠单元测试
-     * 与人工验，冒烟测不碰。
+     * **展开后必须能读到 #cfg-baseurl / #cfg-model / #btn-add-price**（在
+     * 「自定义设置」里）：地址、模型名与按模型的价格表就是这次要保住的东西，
+     * 折叠着不查的话，把整块删掉也能过。
+     *
+     * 它**不点「保存」**：那会发起一次真实的网络探测（挑模型那一步会在服务端花掉
+     * 一次调用），用户这台机器上连的可能是真端点。保存那条路只能靠单元测试与人工验。
      */
     const settingsBtn = document.querySelector('#btn-settings');
     if (settingsBtn !== null && settingsBtn.disabled !== true) {
       settingsBtn.click();
       for (let i = 0; i < 8; i++) await frames();
       const modal = document.querySelector('.ant-modal');
-      const hasField = (id) => document.querySelector('#' + id) !== null;
+      const cards = document.querySelectorAll('.provider-card');
       check(
-        'settings-dialog-clean',
+        'settings-provider-list',
         modal !== null &&
-          hasField('cfg-baseurl') &&
-          hasField('cfg-model') &&
-          hasField('cfg-key') &&
+          cards.length > 0 &&
+          document.querySelector('#btn-add-deepseek') !== null &&
+          document.querySelector('#btn-add-openai') !== null &&
+          document.querySelector('#btn-add-ollama') !== null &&
+          document.querySelector('#btn-add-custom') !== null &&
           document.querySelector('#btn-test') === null &&
           document.querySelector('#probe-log') === null,
         modal === null
           ? '对话框没打开'
-          : '字段 ' + (hasField('cfg-baseurl') && hasField('cfg-model') && hasField('cfg-key') ? '在' : '缺') +
+          : cards.length + ' 个 provider 条目' +
+              ' / 四个添加按钮 ' +
+              (['btn-add-deepseek', 'btn-add-openai', 'btn-add-ollama', 'btn-add-custom'].every(
+                (id) => document.querySelector('#' + id) !== null,
+              )
+                ? '在'
+                : '缺') +
               ' / 测试连接按钮 ' + (document.querySelector('#btn-test') === null ? '已移除' : '还在') +
               ' / 探针日志 ' + (document.querySelector('#probe-log') === null ? '已移除' : '还在'),
       );
-      // 关掉，后面几条断言要读的不是这一层
+
+      // 展开第一条（点它自己的「编辑」，不是点卡片——点卡片是"换成用它"）
+      const firstEdit = document.querySelector('.provider-card .ant-btn[id^="btn-edit-"]');
+      if (firstEdit !== null) firstEdit.click();
+      const expanded = await waitFor(() => document.querySelector('#cfg-key') !== null);
+      check(
+        'settings-provider-form',
+        expanded &&
+          document.querySelector('#cfg-preset') !== null &&
+          document.querySelector('#btn-advanced') !== null &&
+          document.querySelector('#cfg-baseurl') === null,
+        expanded
+          ? '表单展开，自定义设置默认收起=' + (document.querySelector('#cfg-baseurl') === null)
+          : '点了「编辑」但表单没出来',
+      );
+
+      const advanced = document.querySelector('#btn-advanced');
+      if (advanced !== null) advanced.click();
+      const openedAdvanced = await waitFor(() => document.querySelector('#btn-add-price') !== null);
+      check(
+        'settings-provider-advanced',
+        openedAdvanced &&
+          document.querySelector('#cfg-baseurl') !== null &&
+          document.querySelector('#cfg-model') !== null &&
+          document.querySelector('#btn-add-price') !== null &&
+          document.querySelector('#cfg-usd') !== null,
+        openedAdvanced
+          ? '地址 / 模型名 / 加价格行 / 用量上限 都在'
+          : '展开自定义设置后没读到价格表与地址字段',
+      );
+
       const cancel = document.querySelector('#btn-settings-cancel');
       if (cancel !== null) cancel.click();
       for (let i = 0; i < 8; i++) await frames();

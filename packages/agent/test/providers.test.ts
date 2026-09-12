@@ -9,12 +9,14 @@ import {
   checkBudget,
   configFromPreset,
   costOf,
+  costTableFor,
   createProvider,
   defaultSettings,
   discoverProvider,
   emptyUsage,
   envKeyRef,
   isPeakHour,
+  normalizeProviderCosts,
   listModels,
   parseSettings,
   pickModel,
@@ -840,6 +842,140 @@ describe('设置文件读写（D-13 两条红线）', () => {
     expect(overridden.settings.providers[0]?.maxOutputTokens).toBe(32000)
   })
 
+  /**
+   * 价格表两种写法都得认，而且**要能原样往返**——设置文件是给人手改的，
+   * 界面写进去的东西被下一次解析丢掉的话，用户会看到价格莫名消失。
+   */
+  it('价格表：provider 级与**按模型分表**两种写法都能往返', () => {
+    const one = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        {
+          id: 'gw',
+          preset: 'custom',
+          baseURL: 'https://gw.example',
+          model: 'a',
+          cost: { inPerMTok: 0.5, outPerMTok: 1.5, cacheReadPerMTok: 0.05 },
+        },
+      ],
+    })
+    // **归一成按模型的那张 map**：内存里"按模型"只有一种形状，否则文件里那张表
+    // 在界面上会显示成空的（键 `cost` 装的是 map，而界面读的是 `costs`）
+    expect(one.settings.providers[0]?.costs).toEqual({
+      a: { inPerMTok: 0.5, outPerMTok: 1.5, cacheReadPerMTok: 0.05 },
+    })
+    // 还没有模型名时没有键可用 → 留在 provider 级那张表里
+    const noModel = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        { id: 'gw', preset: 'custom', baseURL: 'https://gw.example', cost: { inPerMTok: 0.5, outPerMTok: 1.5 } },
+      ],
+    })
+    expect(noModel.settings.providers[0]?.costs).toBeUndefined()
+    expect(noModel.settings.providers[0]?.cost).toEqual({ inPerMTok: 0.5, outPerMTok: 1.5 })
+
+    const many = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        {
+          id: 'gw',
+          preset: 'custom',
+          baseURL: 'https://gw.example',
+          model: 'a',
+          cost: {
+            a: { inPerMTok: 0.5, outPerMTok: 1.5 },
+            b: { inPerMTok: 5, outPerMTok: 15, cacheReadPerMTok: 0.5 },
+          },
+        },
+      ],
+    })
+    expect(many.settings.providers[0]?.costs).toEqual({
+      a: { inPerMTok: 0.5, outPerMTok: 1.5 },
+      b: { inPerMTok: 5, outPerMTok: 15, cacheReadPerMTok: 0.5 },
+    })
+    expect(many.settings.providers[0]?.cost).toBeUndefined()
+
+    // 再序列化一次、再解析：按模型那张表还在
+    const again = parseSettings(JSON.parse(serializeSettings(many.settings)))
+    expect(again.settings.providers[0]?.costs).toEqual(many.settings.providers[0]?.costs)
+
+    // 某个模型的 id 恰好叫 `inPerMTok` 或 `outPerMTok` 时不能把整张表误判成
+    // provider 级——判据要求**两个**都是数字，就是这个原因
+    const collision = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        {
+          id: 'gw',
+          preset: 'custom',
+          baseURL: 'https://gw.example',
+          model: 'inPerMTok',
+          cost: { inPerMTok: { inPerMTok: 1, outPerMTok: 2 } },
+        },
+      ],
+    })
+    expect(collision.settings.providers[0]?.costs).toEqual({ inPerMTok: { inPerMTok: 1, outPerMTok: 2 } })
+    expect(collision.settings.providers[0]?.cost).toBeUndefined()
+  })
+
+  it('**保存时也要归一**：手拼的文件形状配置塞回内存后，界面读得到价格', () => {
+    /**
+     * 这条守的是一条真机上量到的数据丢失：`parseProvider` 只在启动读文件时跑，
+     * 而 `saveProvider` 是把配置直接塞进内存的。于是"刚保存的那一份"用的是文件形状
+     * （`cost`），而界面读 `costs` —— 价格看着是空的，用户再点一次保存就真写没了。
+     * 所以落盘/入内存前必须走同一个 `applyCostShape`。
+     */
+    const config = configFromPreset('custom', { id: 'gw', model: 'm1' })
+    config.cost = { m1: { inPerMTok: 3, outPerMTok: 4 } } as unknown as ProviderConfig['cost']
+    const normalized = normalizeProviderCosts(config)
+    expect(normalized.costs).toEqual({ m1: { inPerMTok: 3, outPerMTok: 4 } })
+    expect(normalized.cost).toBeUndefined()
+
+    // 单张表（老写法）进来也一样归一到按模型那张 map
+    const single = configFromPreset('custom', { id: 'gw2', model: 'm2' })
+    single.cost = { inPerMTok: 1, outPerMTok: 2 }
+    expect(normalizeProviderCosts(single).costs).toEqual({ m2: { inPerMTok: 1, outPerMTok: 2 } })
+
+    // 已经归一过的再归一一次不炸、也不丢
+    const twice = normalizeProviderCosts(normalizeProviderCosts(configFromPreset('custom', { id: 'gw3', model: 'm3' })))
+    expect(twice.costs).toBeUndefined()
+  })
+
+  it('半个价格表整张丢掉：缺输入或输出价会让"花了多少"变成编的数', () => {
+    const { settings } = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        {
+          id: 'gw',
+          preset: 'custom',
+          baseURL: 'https://gw.example',
+          model: 'a',
+          cost: {
+            good: { inPerMTok: 1, outPerMTok: 2 },
+            missingOut: { inPerMTok: 1 },
+            notAnObject: 'cheap',
+            empty: {},
+          },
+        },
+      ],
+    })
+    expect(settings.providers[0]?.costs).toEqual({ good: { inPerMTok: 1, outPerMTok: 2 } })
+    // 一个能用的都没有 → 不写这个字段，于是表盘显示 token 数而不是 $0.00
+    const none = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        { id: 'gw', preset: 'custom', baseURL: 'https://gw.example', model: 'a', cost: { bad: { inPerMTok: 1 } } },
+      ],
+    })
+    expect(none.settings.providers[0]?.costs).toBeUndefined()
+    expect(none.settings.providers[0]?.cost).toBeUndefined()
+  })
+
   it('**丢掉手改 json 塞进来的明文密钥**并报告', () => {
     const raw = {
       version: 1,
@@ -958,6 +1094,55 @@ describe('成本记账', () => {
     expect(costOf(totals, table, peak)).toBeCloseTo(2 * USD_PER_CNY, 10)
     expect(costOf(totals, table, off)).toBeCloseTo(1 * USD_PER_CNY, 10)
     expect(costOf(totals, table, peak)! / costOf(totals, table, off)!).toBeCloseTo(2, 10)
+  })
+
+  /**
+   * **按模型定价**（自定义端点的要求）。
+   *
+   * 一个自定义端点上挂的往往是好几个模型、价格差几倍，而表盘上的钱是 `--max-usd`
+   * 的刹车依据——按 provider 只记一份，切模型之后给出的就是编的数字。
+   */
+  describe('按模型的价格表', () => {
+    const cheap = { inPerMTok: 0.1, outPerMTok: 0.2 }
+    const dear = { inPerMTok: 10, outPerMTok: 20 }
+
+    const provider = {
+      model: 'cheap-model',
+      costs: { 'cheap-model': cheap, 'dear-model': dear },
+      cost: { inPerMTok: 99, outPerMTok: 99 },
+    }
+
+    it('当前模型命中哪张表就用哪张，**不会**被 provider 级兜底抢走', () => {
+      expect(costTableFor(provider)).toBe(cheap)
+      expect(costTableFor({ ...provider, model: 'dear-model' })).toBe(dear)
+    })
+
+    it('模型没配价就退到 provider 级兜底', () => {
+      expect(costTableFor({ ...provider, model: 'unknown' })).toBe(provider.cost)
+      expect(costTableFor({ model: 'x', cost: cheap })).toBe(cheap)
+    })
+
+    it('两边都没有 → undefined（表盘显示 token 数，而不是编一个 $0.00）', () => {
+      expect(costTableFor({ model: 'x' })).toBeUndefined()
+      expect(costTableFor(undefined)).toBeUndefined()
+    })
+
+    it('模型名前后有空格也能对上（界面上的输入框很容易带进来）', () => {
+      expect(costTableFor({ ...provider, model: ' dear-model ' })).toBe(dear)
+    })
+
+    it('查表时**高峰/低谷**照样生效——按模型分表不是绕开分时段的旁路', () => {
+      const table = {
+        inPerMTok: 1,
+        outPerMTok: 1,
+        peak: { inPerMTok: 2, outPerMTok: 2 },
+        peakHours: { timeZone: 'Asia/Shanghai', weekdays: [1, 2, 3, 4, 5], ranges: [[9, 12]] as const },
+      }
+      // 北京时间周三 10:00 → 高峰
+      const at = new Date('2026-03-04T02:00:00Z')
+      expect(costTableFor({ model: 'm', costs: { m: table } }, at)?.inPerMTok).toBe(2)
+      expect(costTableFor({ model: 'm', costs: { m: table } }, new Date('2026-03-04T12:00:00Z'))?.inPerMTok).toBe(1)
+    })
   })
 
   it('周末没有高峰价', () => {

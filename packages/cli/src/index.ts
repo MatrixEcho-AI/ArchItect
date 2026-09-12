@@ -27,6 +27,7 @@ import {
   activeProvider,
   AgentSession,
   costOf,
+  costTableFor,
   createProvider,
   discoverProvider,
   envKeyRef,
@@ -1414,7 +1415,7 @@ async function resolveProvider(inv: Invocation): Promise<ResolvedProvider | stri
   return {
     provider: createProvider(config, { ...(apiKey !== undefined ? { apiKey } : {}) }),
     config,
-    ...(config.cost !== undefined ? { cost: config.cost } : {}),
+    ...(costTableFor(config) !== undefined ? { cost: costTableFor(config) } : {}),
     notes,
   }
 }

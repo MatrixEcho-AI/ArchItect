@@ -696,6 +696,20 @@ describe('StudioService：保存是原子替换', () => {
     await expect(access(`${path}.tmp`), '临时文件没清掉').rejects.toThrow()
   })
 
+  it('**两次保存撞在一起时都存得到**，不互相盖临时文件', async () => {
+    // 两次保存共用同一个 `<目标>.tmp`。不串行化的话，慢的那次会把快的那次写好的
+    // 临时文件盖掉：一次 rename 拿到别人的内容、另一次对着不存在的文件报错。
+    const studio = makeStudio()
+    studio.demo()
+    const path = join(workspace, 'concurrent.mcai')
+    const results = await Promise.all([studio.save(path), studio.save(path)])
+    expect(results).toEqual([path, path])
+    expect(unpackProject(new Uint8Array(await readFile(path))).manifest.revision).toBe(
+      studio.state().revision,
+    )
+    await expect(access(`${path}.tmp`), '临时文件没清掉').rejects.toThrow()
+  })
+
   it('**写临时文件失败时不毁掉上一份工程**（保存是原子替换）', async () => {
     // 关键：让**这一次**保存的内容与上一次不同，否则「目标没被改」这件事无法观察。
     const studio = makeStudio()

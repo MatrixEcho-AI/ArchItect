@@ -1,7 +1,9 @@
-import { mkdtempSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { WorldStore } from '@architect/core'
+import { DATA_VERSION_1_21_4, exportSchematic } from '@architect/interop'
 import { openProject } from '@architect/mcai'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -41,6 +43,56 @@ function makeStudio(steps = 3): StudioService {
   }
   return studio
 }
+
+describe('换工程之后的 WAL 基准', () => {
+  it('**导入之后 WAL 换到新基准**，新世界的第一笔编辑要进 WAL', async () => {
+    // 导入 = 换了一个工程，基准是 rev 0。少一次 retarget，WAL 里还留着上一个工程的
+    // 基准（这里停在 7），而新世界的第一笔编辑是 rev 1——`op.rev > baseRevision`
+    // 不成立，改动**永远不进 WAL**，崩溃时静默丢失。
+    const studio = makeStudio(7)
+    studio.attachAutosave(make())
+    // **先存一次**：只有 `onSaved` / `retarget` 会推 WAL 的基准，`autosaveNow()` 不会。
+    // 存过之后基准才是 7，下面这条测试才真的在验「导入有没有把它换掉」。
+    await studio.save(join(dir, 'before.mcai'))
+    expect(studio.autosaveNow(), '刚存完不该有待记的 op').toBe(0)
+
+    const source = new WorldStore({
+      minecraftVersion: '1.21.4',
+      volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 15, y: 15, z: 15 } },
+    })
+    source.write(
+      (emit) => {
+        for (let x = 0; x < 3; x++) emit(x, 0, 0)
+      },
+      source.palette.indexOf('minecraft:stone'),
+      { confirm: true },
+    )
+    const schemPath = join(dir, 'in.schem')
+    writeFileSync(
+      schemPath,
+      exportSchematic(source, {
+        dataVersion: DATA_VERSION_1_21_4,
+        metadata: { Name: 't', Author: 'a' },
+      }).bytes,
+    )
+
+    const imported = await studio.importModel(schemPath)
+    expect(imported.state.revision, '导入应当把游标拉回 0').toBe(0)
+
+    // 导入之后改一格：它必须进 WAL
+    const store = studio.agentSession.store
+    const result = store.write((emit) => emit(0, 0, 0), store.palette.indexOf('minecraft:gold_block'), {
+      confirm: true,
+    })
+    studio.agentSession.log.record(result, {
+      tool: 'place_block',
+      args: { pos: [0, 0, 0] },
+      source: 'llm',
+      actor: 'assistant',
+    })
+    expect(studio.autosaveNow(), '导入之后的编辑没进 WAL（基准还停在上一个工程）').toBe(1)
+  })
+})
 
 describe('保存之后的 WAL 基准', () => {
   it('**撤销之后再保存，基准取的是世界游标而不是日志长度**', async () => {

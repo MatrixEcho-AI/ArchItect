@@ -42,6 +42,7 @@ API Key 只存在本机加密存储里，不写进 `.mcai`。命令行下用 `pn
 - **回看某一步：** 拖动时间线，或点「编辑记录」里的一条。停在历史版本上时发送框会锁住，先点「回到最新」再继续。
 - **移动视角：** 视口是自由相机——`WASD` 走、空格上升、Shift 下降、拖动转头、滚轮变焦、双击回到自动取景。顶栏的「机位」下拉里有等轴测与各立面的预设。
 - **打开与保存：** 顶栏的「打开…」与「保存…」读写 `.mcai` 工程。
+- **导出：** 顶栏的「导出…」是个三选一的下拉——`.schem`（WorldEdit）、`.litematic`（Litematica）、`.obj`（三维软件）。
 - **导入：** 顶栏的「导入…」读入 `.schem` 或 `.litematic`，之后可以继续编辑或导出。
 
 ## 导出
@@ -109,12 +110,6 @@ pnpm architect build "造一座 9x9 的林间小屋，云杉木板墙、圆石�
 
 Copyright (C) 2026 ArchItect contributors
 
-本项目以 **GNU 通用公共许可证第 3 版**发布，SPDX 标识 `GPL-3.0-only`，全文见
-[`LICENSE`](LICENSE)。它是自由软件：你可以自由使用、修改和再分发，但分发衍生作品时
-必须以同一许可开放源代码，并且不提供任何担保。各 `package.json` 里的 `license` 字段
-与这里一致。
+本项目以 **GPL v3**发布，它是自由软件：你可以自由使用、修改和再分发，但分发衍生作品时必须以同一许可开放源代码，并且不提供任何担保。
 
-第三方组件保留各自的许可，本项目的 GPL 不改变它们：`packages/render/src/vendor/prismarine/`
-下 vendored 的 `prismarine-viewer` mesher 是 MIT（版权与全文见该目录内的 `LICENSE`）；
-其余运行时依赖（`minecraft-data`、`prismarine-*`、`fflate`、`i18next`、React、antd、
-three 等）均为 MIT 或同等宽松许可，与 GPLv3 兼容。
+第三方组件保留各自的许可，与 GPL v3 兼容。

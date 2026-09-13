@@ -104,3 +104,17 @@ pnpm architect build "造一座 9x9 的林间小屋，云杉木板墙、圆石�
 | [`docs/prompt-library.md`](docs/prompt-library.md) | 建筑风格需求模板：住宅 / 公共建筑 / 结构装饰 / 修问题 |
 | [`examples/README.md`](examples/README.md) | 示例工程怎么看、怎么重新生成 |
 | [`plan.md`](plan.md) | 设计文档：世界模型、格式、渲染、工具语义、Agent 循环、决策记录 |
+
+## 许可
+
+Copyright (C) 2026 ArchItect contributors
+
+本项目以 **GNU 通用公共许可证第 3 版**发布，SPDX 标识 `GPL-3.0-only`，全文见
+[`LICENSE`](LICENSE)。它是自由软件：你可以自由使用、修改和再分发，但分发衍生作品时
+必须以同一许可开放源代码，并且不提供任何担保。各 `package.json` 里的 `license` 字段
+与这里一致。
+
+第三方组件保留各自的许可，本项目的 GPL 不改变它们：`packages/render/src/vendor/prismarine/`
+下 vendored 的 `prismarine-viewer` mesher 是 MIT（版权与全文见该目录内的 `LICENSE`）；
+其余运行时依赖（`minecraft-data`、`prismarine-*`、`fflate`、`i18next`、React、antd、
+three 等）均为 MIT 或同等宽松许可，与 GPLv3 兼容。

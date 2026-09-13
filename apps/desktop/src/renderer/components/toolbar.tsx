@@ -1,4 +1,4 @@
-import { Button, Flex, Tooltip } from 'antd'
+import { Button, Dropdown, Flex, Tooltip } from 'antd'
 import {
   ExportOutlined,
   FolderOpenOutlined,
@@ -11,6 +11,8 @@ import {
 } from '@ant-design/icons'
 import { t } from '@architect/i18n'
 
+import { EXPORT_FORMATS } from '../../shared/export-formats.js'
+import type { ExportFormat } from '../../shared/export-formats.js'
 import type { StudioState } from '../types.js'
 import type { MessageKey } from '@architect/i18n'
 
@@ -33,6 +35,9 @@ import type { MessageKey } from '@architect/i18n'
  * 4. **「设置」从隐藏改回可见，并用齿轮图标放到右上角**（`#btn-settings`）。
  *    "配置模型 API"此前只能从对话里那条"还没配模型"的横幅进，等于没配过的人
  *    才有入口、配过的人反而找不到。
+ * 5. **「导出」改成一个下拉菜单**（`.schem` / `.litematic` / `.obj` 三选一）。
+ *    此前它是直通按钮、格式写死在 `App` 里，于是界面上只能出 `.schem`。
+ *    菜单项由 `shared/export-formats.ts` 那张表推出来，见下面那段注释。
  *
  * 三个**隐藏但保留**的元素照旧，它们不是残留（`dom-ids` 测试都盯着）：
  * `#cost`（成本读数，写入点仍在）、`#status`（渲染进程里唯一读得到的相机快照，
@@ -48,7 +53,8 @@ export interface ToolbarProps {
   onNew: () => void
   onOpen: () => void
   onSave: () => void
-  onExport: () => void
+  /** 导出。**必须把选中的格式传下去**——界面不替用户决定导成什么。 */
+  onExport: (format: ExportFormat) => void
   onImport: () => void
   onUndo: () => void
   onRedo: () => void
@@ -109,7 +115,36 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
 
       <Divider />
 
-      <IconButton id="btn-export" label="menu.export" disabled={busy} onClick={props.onExport} icon={<ExportOutlined />} />
+      {/* 导出：**一个下拉，三种格式**。
+       *
+       * 以前这里是一个直通按钮，格式在 `App` 里写死成 `'schem'`——于是界面永远
+       * 出不来 `.litematic` 与 `.obj`，而三种格式服务层其实都能导。那次回归没有
+       * 任何东西报警（测试直接调服务层），所以现在菜单项从 `EXPORT_FORMATS`
+       * 推出来，**界面不再持有第二份格式名单**。
+       *
+       * `Dropdown` 外面套一层 `span` 而不是直接包住 `IconButton`：Dropdown 会
+       * 往子元素上注入 `onClick` 与 `ref`，而 `IconButton` 是"Tooltip 包 Button"
+       * 的复合组件——注入的 props 落到 Tooltip 上会不会传到 DOM，取决于 antd 的
+       * 内部实现。套一层裸 `span` 让注入目标是一个确定会渲染的 DOM 节点，
+       * 点击从 Button 冒泡上来即可，不依赖任何 ref 转发行为。 */}
+      <Dropdown
+        disabled={busy}
+        trigger={['click']}
+        menu={{
+          items: EXPORT_FORMATS.map((entry) => ({ key: entry.format, label: t(entry.label) })),
+          // `key` 是 string，这里回表里查一次而不是 `as ExportFormat`：
+          // 断言会把"表与菜单不一致"变成静默的错类型，查表则不会。
+          onClick: ({ key }) => {
+            const entry = EXPORT_FORMATS.find((item) => item.format === key)
+            if (entry !== undefined) props.onExport(entry.format)
+          },
+        }}
+      >
+        <span style={{ display: 'inline-flex' }}>
+          <IconButton id="btn-export" label="menu.export" disabled={busy} icon={<ExportOutlined />} />
+        </span>
+      </Dropdown>
+
       <IconButton id="btn-import" label="menu.import" disabled={busy} onClick={props.onImport} icon={<ImportOutlined />} />
 
       {/* ── 已按要求移除，但代码与接线都留着（恢复只需取消注释）────────────────────
@@ -198,7 +233,8 @@ function IconButton({
   label: MessageKey
   tip?: MessageKey
   disabled?: boolean
-  onClick: () => void
+  /** 省略时按钮只是一个"触发器"（导出那一个由 `Dropdown` 接管点击）。 */
+  onClick?: () => void
   icon: React.ReactNode
 }): React.JSX.Element {
   const text = t(label)

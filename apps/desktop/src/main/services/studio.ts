@@ -35,6 +35,9 @@ import {
 import type { CameraSpec, EntityRenderResult, TexturePack, WorldGeometry } from '@architect/render'
 import type { SessionCamera } from '@architect/tools'
 
+import { EXPORT_EXTENSION_STRIP } from '../../shared/export-formats.js'
+import type { ExportFormat } from '../../shared/export-formats.js'
+
 import type { AutosaveService, PendingRecovery } from './autosave.js'
 import { ChatController } from './chat.js'
 import type { ChatOptions, ChatView, SettingsView, StudioEvent, TestConnectionInput } from './chat.js'
@@ -142,8 +145,15 @@ export interface RecoverySummary {
   baseExists: boolean
 }
 
-/** 能导出成什么。GUI 的"导出…"按扩展名推断，也可以让用户显式选。 */
-export type ExportFormat = 'schem' | 'litematic' | 'obj'
+/**
+ * 能导出成什么。
+ *
+ * 定义搬到了 `src/shared/export-formats.ts`——那里同时是**界面菜单**与
+ * **保存对话框 filter** 的来源。留在这里的话，"界面能选"与"服务能导"
+ * 就又是两份可以各自漂移的名单了（这正是 `.litematic` 从界面上消失的原因）。
+ * 这里重新导出，只是为了不让既有调用点改 import 路径。
+ */
+export type { ExportFormat }
 
 /** 交互视口的背景色，与 `renderIsometric` 的默认值一致（拖动时不能闪烁变色）。 */
 const VIEWPORT_BACKGROUND = { r: 26, g: 28, b: 34 }
@@ -1554,7 +1564,7 @@ export class StudioService {
       bounds.max.y - bounds.min.y + 1,
       bounds.max.z - bounds.min.z + 1,
     ]
-    const stem = baseName.replace(/\.(schem|schematic|litematic|obj)$/i, '')
+    const stem = baseName.replace(EXPORT_EXTENSION_STRIP, '')
 
     if (format === 'schem') {
       const result = exportSchematic(store, {

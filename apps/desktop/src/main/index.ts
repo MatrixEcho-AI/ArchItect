@@ -26,21 +26,24 @@ import type {
   SliceRequest,
   ViewportRequest,
 } from './services/studio.js'
+import { EXPORT_FORMATS, exportFormatEntry, exportFormatOf } from '../shared/export-formats.js'
 
-/** 按扩展名（或 `--format` 的值）判断要导成什么。 */
-function formatOf(value: string): ExportFormat {
-  const lower = value.toLowerCase()
-  if (lower === 'litematic' || lower.endsWith('.litematic')) return 'litematic'
-  if (lower === 'obj' || lower.endsWith('.obj')) return 'obj'
-  return 'schem'
-}
+/**
+ * 按扩展名（或 `--format` 的值）判断要导成什么。
+ *
+ * **唯一真相在 `src/shared/export-formats.ts`**：界面菜单、这里的对话框 filter、
+ * 以及 `StudioService.exportModel` 收的类型全部由那一张表推出。以前这三处各写一份，
+ * 于是界面那份漂移了也没有闸门（见那个文件顶上记的事故）。
+ */
+const formatOf = exportFormatOf
 
-const extensionOf = (format: ExportFormat): string => (format === 'schem' ? 'schem' : format)
+/** 该格式在磁盘上的后缀。 */
+const extensionOf = (format: ExportFormat): string => exportFormatEntry(format).extension
 
+/** 保存对话框的 filter：名字与允许的后缀都取自同一张表。 */
 function filterOf(format: ExportFormat): { name: string; extensions: string[] } {
-  if (format === 'litematic') return { name: t('dialog.litematicFilter'), extensions: ['litematic'] }
-  if (format === 'obj') return { name: t('dialog.objFilter'), extensions: ['obj'] }
-  return { name: t('dialog.schemFilter'), extensions: ['schem'] }
+  const entry = exportFormatEntry(format)
+  return { name: t(entry.label), extensions: [entry.extension] }
 }
 
 /**
@@ -1508,15 +1511,19 @@ async function runSmoke(): Promise<void> {
   //
   // 光"能产出字节"不算过：这里每个格式都真的写盘，再把 `.schem` 读回来，
   // 确认导入后世界里确实有那么多方块。导出按钮背后的代码路径与冒烟用的是同一条。
+  //
+  // 遍历的是 `EXPORT_FORMATS` 而不是手写一份数组：冒烟测试的职责就是"每个格式都能导"，
+  // 手写一份的话，将来加第四种格式时它会安静地少测一个——而"少测一个"正是
+  // 界面上 `.litematic` 消失那次事故的形状。
   const dir = path.join(os.tmpdir(), `architect-export-${Date.now()}`)
   await fs.mkdir(dir, { recursive: true })
-  for (const format of ['schem', 'litematic', 'obj'] as const) {
-    const exported = service.exportModel(format, path.join(dir, `smoke.${format === 'litematic' ? 'litematic' : format}`))
+  for (const entry of EXPORT_FORMATS) {
+    const exported = service.exportModel(entry.format, path.join(dir, `smoke.${entry.extension}`))
     for (const file of exported.files) await fs.writeFile(file.name, file.bytes)
     const sizes = await Promise.all(
       exported.files.map(async (file) => `${path.basename(file.name)} ${(await fs.stat(file.name)).size}B`),
     )
-    lines.push(`export ${format}: ${sizes.join(' + ')} · ${exported.summary}`)
+    lines.push(`export ${entry.format}: ${sizes.join(' + ')} · ${exported.summary}`)
   }
   const before = service.state().blocks
   const imported = await service.importModel(path.join(dir, 'smoke.schem'))

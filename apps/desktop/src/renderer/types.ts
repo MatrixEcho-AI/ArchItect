@@ -9,6 +9,8 @@
 
 import type { MessageKey, MessageVars } from '@architect/i18n'
 
+import type { ExportFormat } from '../shared/export-formats.js'
+
 // ── 世界与工程状态 ────────────────────────────────────────────────────────────
 
 export interface StudioState {
@@ -383,7 +385,7 @@ export interface ArchitectBridge {
   viewport(request: ViewportRequest): Promise<ViewportFrame>
   demo(): Promise<StudioState>
   exportModel(
-    format: string,
+    format: ExportFormat,
     suggestedName?: string,
   ): Promise<{ paths: string[]; summary: string } | undefined>
   importModel(): Promise<

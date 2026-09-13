@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+import type { ExportFormat } from '../shared/export-formats.js'
+
 /**
  * 渲染进程能看到的全部能力。
  *
@@ -139,7 +141,7 @@ export interface StudioBridge {
   demo(): Promise<unknown>
 
   /** 导出成交换格式。省略 suggestedName 时主进程按当前工程名给默认值。 */
-  exportModel(format: string, suggestedName?: string): Promise<{ paths: string[]; summary: string } | undefined>
+  exportModel(format: ExportFormat, suggestedName?: string): Promise<{ paths: string[]; summary: string } | undefined>
   /** 导入外部 schematic（会替换当前工程）。 */
   importModel(): Promise<
     | {

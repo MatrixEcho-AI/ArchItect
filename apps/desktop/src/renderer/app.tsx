@@ -522,10 +522,16 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
                  `StudioService.demo()` 都没动，`--demo` 诊断开关也用着它）。
                  要恢复：把 `onDemo` 加回 props，取消 toolbar.tsx 里那段注释，
                  并把 `viewport.empty` 的文案改回去。 */
-              onExport={() =>
+              onExport={(format) =>
                 void run(t('menu.export'), async () => {
-                  // 扩展名决定格式；`.schem` / `.litematic` / `.obj` 三种
-                  const result = await window.architect.exportModel('schem')
+                  /**
+                   * 格式由顶栏那个下拉**选出来**，这里只负责转发。
+                   *
+                   * 这行曾经是写死的 `exportModel('schem')`（注释还写着"三种"），
+                   * 结果是界面上再也导不出 `.litematic` / `.obj`。
+                   * 参数不要改回字面量——`test/export-formats.test.ts` 盯着它。
+                   */
+                  const result = await window.architect.exportModel(format)
                   if (result === undefined) return // 用户取消
                   studioRef.current?.setNotice(
                     t('notice.exported', {

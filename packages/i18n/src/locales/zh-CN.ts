@@ -531,7 +531,7 @@ export const zhCN = {
       worldEdit: '在游戏里用 WorldEdit：//schem load {{name}} 然后 //paste',
       litematic: '导出 .litematic（Litematica v6）',
       litematicLine: '  {{size}} 区域   → {{path}}（{{kb}} KB）',
-      litematicNote: '位打包与 Litematica 1.16+ 一致，每格不跨 long。',
+      litematicNote: '位打包与 Litematica 一致：一条连续位流，条目可跨 long 边界。',
       mtlWritten: '同时写出 {{name}}（{{materials}} 种材质）',
       obj: '导出 .obj',
       objLine: '  {{size}} 区域   {{blocks}} 方块   {{faces}} 面   {{vertices}} 顶点',

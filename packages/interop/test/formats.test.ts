@@ -5,12 +5,63 @@ import type { Bounds } from '@architect/core'
 import { describe, expect, it } from 'vitest'
 
 import { exportLitematic, bitsFor, litematicToSchematicData, packBlockStates, readLitematic, unpackBlockStates, writeLitematic } from '../src/litematic.js'
+import { asCompound, asCompoundList, asString, asUnsignedLongArray, child, readNbt } from '../src/nbt.js'
 import { exportObj } from '../src/obj.js'
 import { importSchematicInto } from '../src/bridge.js'
 import type { SchematicBlock } from '../src/schematic.js'
 
 const volume: Bounds = { min: { x: 0, y: 0, z: 0 }, max: { x: 31, y: 31, z: 31 } }
 const makeStore = (): WorldStore => new WorldStore({ minecraftVersion: '1.21.4', volume })
+
+/**
+ * **逐位参考实现**——照着定义写，不是照着实现写。
+ *
+ * 定义：Litematica 的 `BlockStates` 是**一条连续位流**，第 i 格的第 b 位就是
+ * 全局第 `i*bits + b` 位，按小端填进 long 数组，长度 `ceil(count*bits/64)`。
+ *
+ * 它刻意写得又笨又慢（一个 bit 一个 bit 地摆），职责只有一个：
+ * **独立于 `packBlockStates` 的实现细节，把"什么是正确的位流"钉死**。
+ *
+ * 这一对（参考 vs 实现）才是拦住本次格式错误的东西：
+ *
+ * - **自测往返**（pack 完再 unpack）两套布局都自洽，永远绿；
+ * - **参考实现对拍**只在布局真的对时才绿。
+ *
+ * 曾经的实现是"每格完整落在一个 long 内"（也就是 Minecraft 原版 `BitArray` 的布局），
+ * 它与真格式在 `bits ∈ {2,4,8,16,32}` 时逐位相同——恰好覆盖了仓库里所有样例的规模，
+ * 所以六条位打包测试全绿，而任何真实建筑（调色板 > 16 项）导出的文件在
+ * Litematica 里都是一片错方块。
+ */
+function referencePack(indices: readonly number[], paletteSize: number): bigint[] {
+  const bits = bitsFor(paletteSize)
+  const words = new Array<bigint>(Math.ceil((indices.length * bits) / 64)).fill(0n)
+  for (let i = 0; i < indices.length; i++) {
+    for (let b = 0; b < bits; b++) {
+      if (((indices[i]! >> b) & 1) === 0) continue
+      const position = i * bits + b
+      const word = Math.floor(position / 64)
+      words[word] = BigInt.asUintN(64, words[word]! | (1n << BigInt(position % 64)))
+    }
+  }
+  return words.map((word) => BigInt.asIntN(64, word))
+}
+
+/** 参考实现的解包方向：从全局位流里一位一位地取回第 i 格。 */
+function referenceUnpack(longs: readonly bigint[], count: number, paletteSize: number): number[] {
+  const bits = bitsFor(paletteSize)
+  const out: number[] = []
+  for (let i = 0; i < count; i++) {
+    let value = 0
+    for (let b = 0; b < bits; b++) {
+      const position = i * bits + b
+      const word = longs[Math.floor(position / 64)]
+      if (word === undefined) continue
+      if ((BigInt.asUintN(64, word) >> BigInt(position % 64)) & 1n) value |= 1 << b
+    }
+    out.push(value)
+  }
+  return out
+}
 
 describe('.litematic 位打包', () => {
   it('位宽下限是 2，即使调色板只有一项', () => {
@@ -24,22 +75,55 @@ describe('.litematic 位打包', () => {
     expect(bitsFor(4096)).toBe(12)
   })
 
-  it('**手算对照**：2 位一格的打包，每 long 放 32 格', () => {
-    const indices = [0, 1, 2, 3, 1, 0]
-    const longs = packBlockStates(indices, 4)
-    expect(longs).toHaveLength(1)
-    // 低位到高位依次是 i=0..5 的值：00 01 10 11 01 00
-    // 从高位往低写就是 0b00_01_11_10_01_00 = 484
-    expect(longs[0]).toBe(0b00_01_11_10_01_00n)
-    expect(longs[0]).toBe(484n)
-    expect(unpackBlockStates(longs, indices.length, 4)).toEqual(indices)
+  it('**与独立逐位参考实现逐位相同**（跨全部位宽；这条才是拦住"自洽但错"的那条）', () => {
+    // 旧实现只在 bits 整除 64 时与真格式相同，即 bits ∈ {2,4,8,16,32}。
+    // 这里把每一种位宽都过一遍，重点是 3 / 5 / 6 / 7 / 9 / 10 / 12。
+    for (const paletteSize of [1, 2, 4, 5, 8, 16, 17, 32, 33, 64, 65, 128, 129, 256, 1024, 4096, 40000]) {
+      const bits = bitsFor(paletteSize)
+      for (const count of [1, 2, 13, 25, 40, 64, 65, 100, 999]) {
+        // 取值铺满 0..paletteSize-1，顺带覆盖"同一个值连着出现"与"跳着出现"
+        const indices = Array.from({ length: count }, (_, i) => (i * 7 + 3) % paletteSize)
+        const packed = packBlockStates(indices, paletteSize)
+        expect(packed, `bits=${bits} count=${count}`).toEqual(referencePack(indices, paletteSize))
+        expect(unpackBlockStates(packed, count, paletteSize)).toEqual(indices)
+        expect(referenceUnpack(packed, count, paletteSize)).toEqual(indices)
+      }
+    }
   })
 
-  it('跨 long 边界时下标不串（末尾 long 不满也不补位）', () => {
-    const perLong = Math.floor(64 / 5) // 12
+  it('**数组长度是 ceil(count*bits/64)**：末尾不补齐到整 long', () => {
+    // bits=5、count=25：连续位流要 ceil(125/64)=2 条；
+    // 而"每格不跨 long"的写法要 ceil(25/12)=3 条——长度本身就是判据。
+    expect(bitsFor(17)).toBe(5)
+    expect(packBlockStates(new Array<number>(25).fill(1), 17)).toHaveLength(2)
+
+    // bits=6、count=21：紧凑 2 条，"每格不跨 long"要 3 条
+    expect(bitsFor(33)).toBe(6)
+    expect(packBlockStates(new Array<number>(21).fill(1), 33)).toHaveLength(2)
+
+    // 反过来：bits 整除 64 时两种布局长度相同——这就是当年没被发现的原因。
+    // paletteSize=16 → bits=4，每 long 正好 16 格。
+    expect(bitsFor(16)).toBe(4)
+    expect(packBlockStates(new Array<number>(40).fill(1), 16)).toHaveLength(Math.ceil((40 * 4) / 64))
+  })
+
+  it('**跨 long 边界的那一格要真的拼接**（bits=5，第 13 格横跨两条 long）', () => {
+    // bits=5 时第 12 格占全局第 60..64 位：低 4 位在 long[0]，
+    // 最高位落到 long[1] 的第 0 位。13*5 = 65 位 → 恰好 2 条 long。
+    const indices = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0b11111]
+    const longs = packBlockStates(indices, 17)
+    expect(longs).toHaveLength(2)
+    // long[0] 的低 60 位全 0，高 4 位是那一格的低 4 位（全是 1）
+    expect(BigInt.asUintN(64, longs[0]!)).toBe(0b1111n << 60n)
+    // long[1] 只剩那一格的最高位（1）
+    expect(BigInt.asUintN(64, longs[1]!)).toBe(1n)
+    expect(referenceUnpack(longs, indices.length, 17)).toEqual(indices)
+  })
+
+  it('跨 long 边界时下标不串（40 格、bits=5）', () => {
     const indices = Array.from({ length: 40 }, (_, i) => i % 17)
     const longs = packBlockStates(indices, 17)
-    expect(longs).toHaveLength(Math.ceil(40 / perLong))
+    expect(longs).toHaveLength(Math.ceil((40 * 5) / 64))
     expect(unpackBlockStates(longs, indices.length, 17)).toEqual(indices)
   })
 
@@ -61,6 +145,7 @@ describe('.litematic 位打包', () => {
     }
     // 关键：解包要拿回原值，而不是负数
     expect(unpackBlockStates(longs, indices.length, paletteSize)).toEqual(indices)
+    expect(referenceUnpack(longs, indices.length, paletteSize)).toEqual(indices)
   })
 
   it('写出来的 long 落在有符号 64 位范围内（否则 NBT 层直接拒绝）', () => {
@@ -82,6 +167,39 @@ describe('.litematic 往返', () => {
     { x: 1, y: 0, z: 0, state: 'minecraft:oak_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]' },
     { x: 0, y: 1, z: 1, state: 'minecraft:water_cauldron[level=3]' },
   ]
+
+  it('**写进文件的 BlockStates 就是一条连续位流**（用独立参考实现解盘上的字节）', async () => {
+    // 上面那条往返用的是**我们自己的** unpack，两套布局都能自洽地读回来。
+    // 这条不一样：它把文件里真实的 long 数组取出来，用参考实现解，
+    // 再拿调色板翻回方块名——文件布局错了就在这里现形。
+    //
+    // 40 种方块 → 调色板 41 项 → bits=6（不整除 64，旧实现在这个规模上必然错位）
+    const many: SchematicBlock[] = Array.from({ length: 40 }, (_, i) => ({
+      x: i % 8,
+      y: Math.floor(i / 8),
+      z: 0,
+      state: `minecraft:block_${i}`,
+    }))
+    const size: [number, number, number] = [8, 5, 1]
+    const bytes = writeLitematic({ regions: [{ name: 'R', blocks: many, size }] })
+
+    const root = await readNbt(bytes)
+    const region = asCompound(child(child(root, 'Regions'), 'R'))!
+    const palette = asCompoundList(region['BlockStatePalette'])
+    const longs = asUnsignedLongArray(region['BlockStates'])!
+    expect(bitsFor(palette.length), '这条测试得落在 bits 不整除 64 的规模上').toBe(6)
+
+    const count = size[0] * size[1] * size[2]
+    const decoded = referenceUnpack(longs, count, palette.length)
+    for (const block of many) {
+      // 与 Litematica 相同的索引口径：x + z*W + y*W*L
+      const at = block.x + block.z * size[0] + block.y * size[0] * size[2]
+      const slot = decoded[at]!
+      expect(asString(palette[slot]?.['Name']), `(${block.x},${block.y},${block.z}) 上的方块错了`).toBe(
+        block.state,
+      )
+    }
+  })
 
   it('写读往返，状态字符串（含属性）逐格一致', async () => {
     const bytes = writeLitematic({

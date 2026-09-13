@@ -33,19 +33,44 @@ import type {
 /**
  * Litematica（`.litematic`）读写。
  *
- * ## 位打包是这里唯一有难度的东西，而且**两代格式不兼容**
+ * ## 位打包：一条**连续位流**，条目可以跨 long 边界
  *
  * `BlockStates` 是一个 long 数组，每格占 `max(2, ceil(log2(调色板大小)))` 位。
+ * Litematica 把整个数组当成**一条连续的位流**：第 i 格占全局位区间
+ * `[i*bits, (i+1)*bits)`，数组长度是 `ceil(count * bits / 64)`。一条目跨越
+ * long 边界是**正常情况**，不是例外。
  *
- * - **Version >= 4（新式，我们写 v6）**：每格必须完整落在一个 long 里，
- *   `longIndex = i / entriesPerLong`，`offset = (i % entriesPerLong) * bits`。
- * - **Version < 4（老式）**：整个数组当成一条连续位流，一个条目可以跨 long 边界。
+ * 权威依据（两代实现都是同一个算法，删改时请对着它核）：
+ *
+ * - `LitematicaBitArray`（1.21.1 线）：
+ *   `longArray = new long[roundUp(arraySize * bitsPerEntry, 64) / 64]`，
+ *   `getAt`/`setAt` 在 `startArrIndex != endArrIndex` 时把两条 long 拼起来。
+ * - `TightLongBackedIntArray`（重写线）：
+ *   `getRequiredArrayLength = roundUp(arraySize * bitsPerEntry, 64) / 64`，同一套拼接。
+ *
+ * ## 这里写错过一次，而且**自测完全测不出来**
+ *
+ * 曾经的实现是"每格完整落在一个 long 内"：`perLong = 64 / bits`，
+ * `longIndex = i / perLong`，`offset = (i % perLong) * bits`。
+ * 它看起来更简单，**而且恰好是 Minecraft 原版 `BitArray`（区块调色板）的布局**——
+ * 但 Litematica 从来不是这么写的。这个错误的形状极其隐蔽：
+ *
+ * - 自己的 pack/unpack 往返**完全自洽**，所以任何"写进去再读回来"的测试都绿；
+ * - 它与正确布局在 **`bits` 整除 64 时逐位相同**（即 `bits ∈ {2,4,8,16,32}`），
+ *   而这恰好是调色板只有 1–4 项（`bits=2`）或 5–16 项（`bits=4`）的情形——
+ *   也就是仓库里那些测试样例的规模；
+ * - 一旦调色板超过 16 项（`bits >= 5`，**任何真实建筑**），索引从 `perLong` 起
+ *   全部错位，Litematica 读出来是一片错方块。
+ *
+ * 所以判据不能是"往返一致"，只能是"与独立算出的位流逐位相同"——
+ * 见 `formats.test.ts` 里的 `referencePack`（逐位参考实现）。
+ * 这与 `plan.md` 附录 E 开头那句"往返是自洽的，错的是和别人对不对得上"是同一条教训。
  *
  * ## 另一个坑：位模式必须按**无符号**处理
  *
  * 64 位里最高位经常被用上（调色板够大时，或者最后一个 long 的高位有残留）。
  * 用带符号右移会把索引变成负数——这个 bug 只在特定调色板大小下才出现，
- * 所以测试必须**把调色板撑到触发它的规模**（见 `litematic.test.ts`）。
+ * 所以测试必须**把调色板撑到触发它的规模**（见 `formats.test.ts`）。
  */
 
 export interface LitematicRegion {
@@ -88,7 +113,21 @@ export const bitsFor = (paletteSize: number): number =>
   Math.max(2, Math.ceil(Math.log2(Math.max(1, paletteSize))))
 
 /**
- * 新式紧凑打包：每格完整落在一个 long 内。
+ * 位流要几条 long：`ceil(count * bits / 64)`。
+ *
+ * 就是 Litematica 的 `roundUp(arraySize * bitsPerEntry, 64) / 64`——**紧凑**，
+ * 末尾不补到整 long。补整是原版 `BitArray`（区块调色板）的做法，不是这个格式的。
+ */
+function longCountFor(count: number, bits: number): number {
+  return Math.ceil((count * bits) / 64)
+}
+
+/**
+ * 打包成 Litematica 的 `BlockStates`：**一条连续位流**，条目可跨 long 边界。
+ *
+ * 逐条照 `LitematicaBitArray.setAt` 的语义实现：把第 i 格写到全局位位置
+ * `i * bits`；一条目横跨两条 long 时，低位留在开始那条，溢出的高位进下一条
+ * （下一条的低 `bits - endOffset` 位先清掉再放进去）。
  *
  * 返回的是**有符号** 64 位——NBT 的 long 就是有符号的，高位被用上时
  * 无符号位模式会被 `writeUncompressed` 直接拒掉（`ERR_OUT_OF_RANGE`）。
@@ -96,29 +135,71 @@ export const bitsFor = (paletteSize: number): number =>
  */
 export function packBlockStates(indices: readonly number[], paletteSize: number): bigint[] {
   const bits = bitsFor(paletteSize)
-  const perLong = Math.floor(64 / bits)
-  const longs = new Array<bigint>(Math.ceil(indices.length / perLong)).fill(0n)
+  const width = BigInt(bits)
+  const mask = (1n << width) - 1n
+  const longs = new Array<bigint>(longCountFor(indices.length, bits)).fill(0n)
+
   for (let i = 0; i < indices.length; i++) {
-    const value = BigInt.asUintN(bits, BigInt(indices[i]!))
-    const longIndex = Math.floor(i / perLong)
-    const offset = BigInt((i % perLong) * bits)
-    longs[longIndex] = BigInt.asUintN(64, longs[longIndex]! | (value << offset))
+    const value = BigInt(indices[i]!) & mask
+    const startOffset = BigInt(i) * width
+    const startArrIndex = Number(startOffset >> 6n)
+    // 最后一位落在哪条 long 上；与 `startArrIndex` 不同就说明这一格跨了边界
+    const endArrIndex = Number(((BigInt(i) + 1n) * width - 1n) >> 6n)
+    const startBitOffset = Number(startOffset & 63n)
+
+    longs[startArrIndex] = BigInt.asUintN(
+      64,
+      longs[startArrIndex]! | (value << BigInt(startBitOffset)),
+    )
+
+    if (startArrIndex !== endArrIndex) {
+      const endOffset = 64 - startBitOffset
+      const keep = BigInt(bits - endOffset)
+      const cleared = (BigInt.asUintN(64, longs[endArrIndex]!) >> keep) << keep
+      longs[endArrIndex] = BigInt.asUintN(64, cleared | (value >> BigInt(endOffset)))
+    }
   }
+
   return longs.map((word) => BigInt.asIntN(64, word))
 }
 
-/** 解包。**必须走无符号路径**，否则最高位会被当成符号位。 */
-export function unpackBlockStates(longs: readonly bigint[], count: number, paletteSize: number): number[] {
+/**
+ * 解包。**必须走无符号路径**，否则最高位会被当成符号位。
+ *
+ * 读到的 long 比声明的格子数少时（文件被截断）**补 0 而不是抛错**——这条是明写
+ * 的行为，有测试盯着（`formats.test.ts`）。
+ */
+export function unpackBlockStates(
+  longs: readonly bigint[],
+  count: number,
+  paletteSize: number,
+): number[] {
   const bits = bitsFor(paletteSize)
-  const perLong = Math.floor(64 / bits)
-  const mask = (1n << BigInt(bits)) - 1n
+  const width = BigInt(bits)
+  const mask = (1n << width) - 1n
   const out = new Array<number>(count).fill(0)
+
   for (let i = 0; i < count; i++) {
-    const raw = longs[Math.floor(i / perLong)]
-    if (raw === undefined) break
-    const offset = BigInt((i % perLong) * bits)
-    out[i] = Number((BigInt.asUintN(64, raw) >> offset) & mask)
+    const startOffset = BigInt(i) * width
+    const startArrIndex = Number(startOffset >> 6n)
+    const endArrIndex = Number(((BigInt(i) + 1n) * width - 1n) >> 6n)
+    const startBitOffset = Number(startOffset & 63n)
+
+    const low = longs[startArrIndex]
+    if (low === undefined) break
+    const lowBits = BigInt.asUintN(64, low) >> BigInt(startBitOffset)
+
+    if (startArrIndex === endArrIndex) {
+      out[i] = Number(lowBits & mask)
+      continue
+    }
+
+    const high = longs[endArrIndex]
+    if (high === undefined) break
+    const endOffset = 64 - startBitOffset
+    out[i] = Number((lowBits | (BigInt.asUintN(64, high) << BigInt(endOffset))) & mask)
   }
+
   return out
 }
 

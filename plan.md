@@ -2570,13 +2570,29 @@ rotate 90: (x,z) → (sz-1-z, x)，尺寸变 (sz, sy, sx)
 
 ### E.2 Litematica `.litematic`：位打包，以及**必须按无符号处理**
 
-`BlockStates` 是 long 数组，每格占 `max(2, ceil(log2(调色板大小)))` 位。
-**两代打包不兼容**：
+`BlockStates` 是 long 数组，每格占 `max(2, ceil(log2(调色板大小)))` 位，
+**整个数组是一条连续位流**：第 i 格占全局位区间 `[i*bits, (i+1)*bits)`，
+数组长度 `ceil(count * bits / 64)`。**一条目跨 long 边界是正常情况。**
 
-| | 判据 | 布局 |
-|---|---|---|
-| 新式（我们写 v6） | `Version >= 4` | 每格**完整落在一个 long 内**：`longIndex = i / entriesPerLong`，`offset = (i % entriesPerLong) * bits` |
-| 老式 | `Version < 4` | 整个数组是一条连续位流，条目可跨 long 边界 |
+> ⚠️ **这一节原先写反了，2026-09 修正。** 原文说"Version >= 4 每格完整落在一个 long 内"，
+> 那是 **Minecraft 原版 `BitArray`（区块调色板）**的布局，不是 Litematica 的。
+> 按那个写的实现自测往返完全自洽，却与真格式在 `bits ≥ 5`（调色板超过 16 项，
+> 也就是**任何真实建筑**）时全部错位——Litematica 读出来是一片错方块。
+> 它在 `bits ∈ {2,4,8,16,32}` 时与真格式逐位相同，而那正是小样例的规模，
+> 所以仓库里的测试全绿。**判据只能是"与独立算出的位流逐位相同"，不能是往返一致。**
+
+权威依据（`LitematicaBitArray` 一直是这个算法，重写线的 `TightLongBackedIntArray` 同名同义）：
+
+```java
+this.longArray = new long[(int) (roundUp(arraySizeIn * bitsPerEntryIn, 64L) / 64L)];
+// getAt/setAt：startArrIndex != endArrIndex 时把两条 long 拼起来
+int endOffset = 64 - startBitOffset;
+return (int) ((this.longArray[startArrIndex] >>> startBitOffset
+            | this.longArray[endArrIndex] << endOffset) & this.maxEntryValue);
+```
+
+位宽公式与 Litematica 一致：`bits = max(2, 32 - numberOfLeadingZeros(调色板大小 - 1))`，
+下限 2（`MINIMUM_ENTRY_WIDTH`）——空区域的调色板里空气就是第 0 项。
 
 **第二个坑：最高位。** 64 位里 bit 63 经常被用上（调色板够大、或者最后一个 long 的高位有残留）。
 用带符号右移（`>>`）会补符号位，把索引变成负数——**这个 bug 只在特定调色板大小下才出现**
@@ -2589,6 +2605,19 @@ rotate 90: (x,z) → (sz-1-z, x)，尺寸变 (sz, sy, sx)
 
 时间戳固定写 0：**同样的世界必须导出逐字节相同的文件**，否则"导出是否稳定"没法测，
 也没法做内容寻址。
+
+**已核对、确认无需改的几处**（对着 1.21.1 线的 `LitematicaSchematic` 与 `SchematicMetadata`）：
+
+| 项 | 结论 |
+|---|---|
+| `Version = 6` + `SubVersion = 1` | ✅ 可读。1.21.1 写 7，但读入接受 `1..7` 且不分支；`SubVersion` 确实存在（睡眠实体位置修正后置 1） |
+| `Metadata.TotalVolume` / `TotalBlocks` = **int** | ✅ 1.21.1 线读的是 int（重写线才改成 long，别照那条改） |
+| `RegionCount` int、`TimeCreated`/`TimeModified` long、`EnclosingSize` 复合 | ✅ |
+| 实体 `id` + `Pos`（double 列表） | ✅ 1.20.5+ 的形状，DataFixer 不再介入 |
+| 方块实体：原 NBT + `x`/`y`/`z` 三个 int | ✅ |
+| 调色板 `Name` + `Properties`，空气固定在 0 | ✅ Litematica 在 `setBits` 里预注册空气 |
+| 索引顺序 `x + z*Width + y*Width*Length` | ✅ `getIndex = y*sizeLayer + z*sizeX + x`，`sizeLayer = sizeX*sizeZ` |
+| `PendingBlockTicks` / `PendingFluidTicks` 写空列表 | ✅ 读方用 `getList`，缺字段与空列表等价 |
 
 ### E.3 NBT 本身：复合列表的元素是**裸字段表**
 

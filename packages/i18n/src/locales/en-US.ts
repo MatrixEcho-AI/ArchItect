@@ -514,7 +514,7 @@ export const enUS = {
       worldEdit: 'In-game with WorldEdit: //schem load {{name}} then //paste',
       litematic: 'Exported .litematic (Litematica v6)',
       litematicLine: '  {{size}} area   → {{path}} ({{kb}} KB)',
-      litematicNote: 'Bit packing matches Litematica 1.16+: cells never span a long.',
+      litematicNote: 'Bit packing matches Litematica: one continuous bit stream, entries may span a long.',
       mtlWritten: 'Also wrote {{name}} ({{materials}} material types)',
       obj: 'Exported .obj',
       objLine: '  {{size}} area   {{blocks}} blocks   {{faces}} faces   {{vertices}} vertices',

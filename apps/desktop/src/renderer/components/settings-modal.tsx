@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Flex, Input, InputNumber, Modal, Select, Typography } from 'antd'
 import { DownOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons'
 import { getLocale, normalizeLocale, t } from '@architect/i18n'
@@ -109,14 +109,25 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   const editing: ProviderView | undefined = settings?.providers.find((p) => p.id === props.activeId)
   const activeId = settings?.activeId
 
+  /**
+   * 栏目只在「打开」这一跳上重置回「通用」。
+   *
+   * ⚠️ 不能塞进下面那个 effect：它的依赖里有 `activeId` 与 `editing`——
+   * 点「编辑」换个展开项会把它整个重跑，用户就被从模型页踢回通用页
+   * （gui-smoke 的 settings-provider-form 就是这么红的）。
+   */
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (props.open && !wasOpen.current) setSection('general')
+    wasOpen.current = props.open
+  }, [props.open])
+
   // 展开的那一个变了 / 对话框打开 → 把字段刷成它的值。**key 一律清空**。
   useEffect(() => {
     if (!props.open || settings === undefined) return
     setKeyPlain('')
     setLocale(settings.locale)
     setShowAdvanced(false)
-    // 每次打开都回到「通用」：不要记住上次停在「模型」，重新进来从第一眼那页开始
-    setSection('general')
     setForm({
       id: editing?.id ?? '',
       preset: editing?.preset ?? 'custom',

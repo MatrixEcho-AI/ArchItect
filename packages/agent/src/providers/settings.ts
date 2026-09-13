@@ -67,6 +67,13 @@ export function activeProvider(settings: ProviderSettings): ProviderConfig | und
 
 export interface SettingsIssue {
   field: string
+  /**
+   * 稳定的**机器可判**标识（就是文案表里的键）。`message` 是给人看的，会跟语言变；
+   * `code` 不变——测试、诊断、界面分支都按它断言，不按渲染后的句子。
+   *
+   * 可选：多数 issue 由 `validateProviderConfig` 产生，那里已经用 `field` 区分了。
+   */
+  code?: string
   message: string
 }
 

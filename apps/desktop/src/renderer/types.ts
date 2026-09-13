@@ -7,6 +7,8 @@
  * 抄一遍的后果是主进程改一个字段名时，只有一半的调用点会编译失败。
  */
 
+import type { MessageKey, MessageVars } from '@architect/i18n'
+
 // ── 世界与工程状态 ────────────────────────────────────────────────────────────
 
 export interface StudioState {
@@ -155,7 +157,7 @@ export interface ChatView {
   error?: string
   /** 被预算刹住的原因（如果有）。**不是故障**，界面要说清楚。 */
   ready: boolean
-  blocking: string[]
+  blocking: Array<{ key: MessageKey; params?: MessageVars }>
 }
 
 // ── 设置 ──────────────────────────────────────────────────────────────────────

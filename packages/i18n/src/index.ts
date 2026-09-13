@@ -12,8 +12,11 @@ export type { LocalizableToolError } from './errors.js'
 export const SUPPORTED_LOCALES = ['zh-CN', 'en-US'] as const
 export type Locale = (typeof SUPPORTED_LOCALES)[number]
 
-/** 中文优先（D-01）：默认与兜底都是 `zh-CN`。 */
-export const DEFAULT_LOCALE: Locale = 'zh-CN'
+/**
+ * 默认英文。开源项目的读者不一定是中文用户，所以环境没有明说中文时一律用英文；
+ * 中文只在环境说了（`LANG=zh_CN.UTF-8` 之类）或用户在设置里选了才用。
+ */
+export const DEFAULT_LOCALE: Locale = 'en-US'
 
 export interface I18nOptions {
   locale?: Locale
@@ -25,7 +28,13 @@ let ready = false
 const missing: Array<{ key: string; locale: string }> = []
 let onMissing: I18nOptions['onMissingKey']
 
-function normalize(input: string | undefined): Locale | undefined {
+/**
+ * 把一个语言标记收成受支持的语言（`zh-Hans-CN` → `zh-CN`）。认不出来返回 `undefined`。
+ *
+ * 导出是给渲染进程用的：它的 i18next 是**自己一份**，主进程初始化过不代表它初始化过，
+ * 而 `navigator.language` 在 Electron 里就是 app locale（与 `app.getLocale()` 同源）。
+ */
+export function normalizeLocale(input: string | undefined): Locale | undefined {
   if (input === undefined || input.length === 0) return undefined
   const lower = input.toLowerCase()
   if (lower.startsWith('zh')) return 'zh-CN'
@@ -34,22 +43,50 @@ function normalize(input: string | undefined): Locale | undefined {
 }
 
 /**
- * 从环境推断语言：`ARCHITECT_LANG` 优先，其次标准的 `LC_ALL` / `LC_MESSAGES` / `LANG`。
+ * 从环境推断语言：`ARCHITECT_LANG` 优先，其次标准的 `LC_ALL` / `LC_MESSAGES` / `LANG`，
+ * 最后是系统语言。**纯函数**——两个来源都由调用方传进来，测试才确定得下来。
  *
  * CLI 与 Electron 主进程共用这一条，所以 `LANG=en-US architect build` 直接出英文日志（plan §10.4-2）。
+ *
+ * **系统语言这一层是为 Windows 加的。** `LANG` 那一族在 Windows 上一个都不设，
+ * 没有这一层的话，中文 Windows 上永远是缺省的英文。Linux / macOS 上 `LANG` 是用户
+ * 的明确选择，所以排在它前面。
+ */
+export function detectLocale(env: Record<string, string | undefined>, system?: string): Locale {
+  return (
+    normalizeLocale(env['ARCHITECT_LANG']) ??
+    normalizeLocale(env['LC_ALL']) ??
+    normalizeLocale(env['LC_MESSAGES']) ??
+    normalizeLocale(env['LANG']) ??
+    normalizeLocale(system) ??
+    DEFAULT_LOCALE
+  )
+}
+
+/**
+ * `Intl` 报出来的系统语言，形如 `zh-CN` / `en-US`。浏览器与 Node 都有，不需要任何原生模块。
+ *
+ * 拿不到就返回 `undefined`（ICU 被裁掉的 Node 构建会这样），让调用方兜到 `DEFAULT_LOCALE`。
+ */
+export function systemLocale(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 实际用的那一条：把 `process.env` 与系统语言接起来。
+ *
+ * `override` 给桌面端用——Electron 的 `app.getLocale()` 反映的是系统**显示语言**，
+ * 比 ICU 的默认区域更贴近用户的选择。
  *
  * `process` 走 `globalThis` 取而不是直接引用：**这个包也会被 esbuild 打进渲染进程**，
  * 那里没有 `process`，直接写 `process.env` 会在浏览器里抛 `process is not defined`。
  */
-export function detectLocale(env?: Record<string, string | undefined>): Locale {
-  const source = env ?? nodeEnv()
-  return (
-    normalize(source['ARCHITECT_LANG']) ??
-    normalize(source['LC_ALL']) ??
-    normalize(source['LC_MESSAGES']) ??
-    normalize(source['LANG']) ??
-    DEFAULT_LOCALE
-  )
+export function resolveLocale(override?: string): Locale {
+  return detectLocale(nodeEnv(), override ?? systemLocale())
 }
 
 /** Node 下的环境变量；浏览器里返回空对象。 */
@@ -65,7 +102,7 @@ function nodeEnv(): Record<string, string | undefined> {
  */
 export function initI18n(options: I18nOptions = {}): void {
   onMissing = options.onMissingKey
-  const locale = options.locale ?? detectLocale()
+  const locale = options.locale ?? resolveLocale()
   if (ready) {
     void i18next.changeLanguage(locale)
     return
@@ -99,7 +136,7 @@ export function initI18n(options: I18nOptions = {}): void {
 /** 当前语言。 */
 export function getLocale(): Locale {
   const current = i18next.resolvedLanguage ?? i18next.language
-  return normalize(current) ?? DEFAULT_LOCALE
+  return normalizeLocale(current) ?? DEFAULT_LOCALE
 }
 
 /** 切换语言。UI 订阅后即时生效，不需要重启（plan §10.4-4）。 */

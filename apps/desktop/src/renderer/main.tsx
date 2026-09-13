@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { App as AntdApp, ConfigProvider } from 'antd'
 import enUS from 'antd/locale/en_US'
 import zhCN from 'antd/locale/zh_CN'
-import { initI18n } from '@architect/i18n'
+import { getLocale, initI18n, normalizeLocale } from '@architect/i18n'
 
 import { App } from './app.js'
 import { ARCHITECT_THEME } from './theme.js'
@@ -26,7 +26,10 @@ import './styles.css'
  *    组件里就能用 `App.useApp()` 拿到它们（不必再自己造一套提示）。
  */
 function Root(): React.JSX.Element {
-  const [locale, setLocale] = useState<Locale>('zh-CN')
+  // 首帧的语言先看系统：渲染进程的 i18next 是**自己一份**，主进程初始化过不代表它初始化过。
+  // 写死任何一种语言都会在设置读回来之前闪一下错的；`navigator.language` 在 Electron 里
+  // 就是 app locale，与主进程的 `app.getLocale()` 同源。
+  const [locale, setLocale] = useState<Locale>(normalizeLocale(navigator.language) ?? getLocale())
   const onLocaleChange = useCallback((next: Locale) => setLocale(next), [])
   // 脏活在这里、不在渲染里：渲染函数可能有副作用是 React 最忌讳的一类 bug
   useEffect(() => {

@@ -247,7 +247,8 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
               <b>{t('chat.noProvider')}</b>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {(chat?.blocking ?? []).map((item) => (
-                  <li key={item}>{item}</li>
+                  // 服务层给的是键 + 参数，句子在这里才成形——换语言不需要重新算状态
+                  <li key={item.key}>{t(item.key, item.params)}</li>
                 ))}
               </ul>
               <Button size="small" id="blocking-settings" onClick={props.onOpenSettings}>

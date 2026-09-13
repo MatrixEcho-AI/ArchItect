@@ -61,7 +61,7 @@ describe('t()', () => {
     drainMissingKeys()
   })
 
-  it('默认中文（D-01）', () => {
+  it('按当前语言取文案', () => {
     expect(t('chat.send')).toBe('发送')
     expect(t('menu.new')).toBe('新建')
   })
@@ -99,9 +99,22 @@ describe('detectLocale', () => {
     expect(detectLocale({ LC_ALL: 'en_US.UTF-8' })).toBe('en-US')
   })
 
-  it('都不认识时兜到中文', () => {
-    expect(detectLocale({ LANG: 'fr_FR.UTF-8' })).toBe(DEFAULT_LOCALE)
-    expect(detectLocale({})).toBe(DEFAULT_LOCALE)
+  it('**环境什么都不说时用系统语言**（Windows 上 LANG 那一族从来不设）', () => {
+    expect(detectLocale({}, 'zh-CN')).toBe('zh-CN')
+    expect(detectLocale({}, 'zh-Hans-CN')).toBe('zh-CN')
+    expect(detectLocale({}, 'en-GB')).toBe('en-US')
+    expect(detectLocale({}, 'fr-FR')).toBe('en-US')
+  })
+
+  it('环境变量优先于系统语言', () => {
+    expect(detectLocale({ LANG: 'en_US.UTF-8' }, 'zh-CN')).toBe('en-US')
+    expect(detectLocale({ ARCHITECT_LANG: 'zh-CN' }, 'en-US')).toBe('zh-CN')
+  })
+
+  it('都不认识时兜到英文', () => {
+    expect(DEFAULT_LOCALE).toBe('en-US')
+    expect(detectLocale({ LANG: 'fr_FR.UTF-8' })).toBe('en-US')
+    expect(detectLocale({})).toBe('en-US')
   })
 })
 

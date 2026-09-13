@@ -957,11 +957,12 @@ You are ArchItect, a design engine for Minecraft voxel architecture.
 
 [WORKFLOW] Plan -> build in stages -> screenshot + read back after each stage
            -> holistic review when complete -> revise.
-[OUTPUT LANGUAGE] Reply to the user in Chinese. Keep tool arguments and coordinates in ASCII.
+[OUTPUT LANGUAGE] Reply to the user in <the interface language>. Keep tool arguments and coordinates in ASCII.
 ```
 
-**关于 `[OUTPUT LANGUAGE]` 这一条**：prompt 是英文的，但**对用户输出的自然语言要是中文**（D-01）。
-这行必须在 prompt 里显式声明，否则模型会顺着英文 prompt 一路用英文回答。
+**关于 `[OUTPUT LANGUAGE]` 这一条**：prompt 是英文的，但**对用户输出的自然语言要跟界面语言走**（D-01）。
+这行必须在 prompt 里显式声明，否则模型会顺着英文 prompt 一路用英文回答——界面切成中文也一样。
+代价是这一行让 prompt 属于"会随运行时变"的那一类：**换语言会作废一次前缀缓存**，那一次该付。
 
 ### 9.4 写后读：提示词上怎么让 LLM 确认方块摆放
 
@@ -1416,9 +1417,11 @@ provider 在解析 `function.arguments` 时抛了一个**非重试**的 `LlmErro
 另外四行诊断信息，见 §10.1）：代价是"为什么我的石头没有纹理"不再有一行现成答案，
 要恢复就往 `renderPanel` 的 `rows` 里加回一行（`StudioState.texture` 一直都在）。
 
-### 10.4 国际化（D-01：中文优先，走 i18n）
+### 10.4 国际化（D-01：缺省英文，环境或设置说中文才用中文，走 i18n）
 
-**做法：从第一行代码起就用 `i18next` 取文案，绝不硬编码中文字符串。** 语言顺序是"中文优先"而不是"只有中文"。
+**做法：从第一行代码起就用 `i18next` 取文案，绝不硬编码中文字符串。** 缺省语言是 `en-US`——开源项目的读者不一定是中文读者；中文只在环境（`ARCHITECT_LANG`、`LANG` 一族，或系统语言）说了，或者用户在设置里选了才用。模型对用户的回话语言也跟着它走（§9.3 的 `[OUTPUT LANGUAGE]`）。
+
+**Windows 必须靠系统语言那一层**：`LANG` 那一族在 Windows 上一个都不设，所以 `resolveLocale()` 在环境变量之后还读一次 `Intl`（桌面端则由主进程传 `app.getLocale()`，那是系统**显示语言**）。
 
 落地形态是 `packages/i18n` 一个小包：`src/locales/zh-CN.ts` 是**基准表**，`en-US.ts` 用
 `satisfies DeepStrings<typeof zhCN>` 做结构约束——**哪边漏了一个键就是编译错误**，
@@ -1533,7 +1536,7 @@ ArchItect/
 | 模型/纹理资源 | `minecraft-assets` | 1.21.4 的 blocksStates / blocksModels / textureContent |
 | 几何 mesher | **vendor** `prismarine-viewer` 的 `models.js` + `modelsBuilder.js` | 653 行、**0 处 three 依赖**、MIT（§7.0.2） |
 | 导出 | `prismarine-nbt` + `prismarine-schematic` | schem / litematic 读写 |
-| 国际化 | `i18next` + `react-i18next` | 中文优先，`zh-CN` 为默认 locale（§10.4） |
+| 国际化 | `i18next` + `react-i18next` | 缺省 `en-US`；环境或设置说中文才用 `zh-CN`（§10.4） |
 | 压缩 | `zstd` (wasm/native) + node `zlib` | 世界与 patch 压缩 |
 | 哈希 | `blake3` (或 `node:crypto` sha256 兜底) | worldHash、去重 |
 | 校验 | `zod` | 工具参数、manifest、配置文件统一校验 |
@@ -1780,7 +1783,7 @@ secrets.bin
 
 | # | 决策 | 结论 | 影响 |
 |---|------|------|------|
-| D-01 | 界面语言 | **中文优先**，通过 `i18next` 走 i18n 调用，`zh-CN` 为默认 locale | §10.4；UI 文案与错误信息从一开始就过 i18n |
+| D-01 | 界面语言 | **缺省英文**，通过 `i18next` 走 i18n 调用，`en-US` 为默认 locale；环境（`ARCHITECT_LANG` / `LANG` 一族 / 系统语言）说中文、或用户在设置里选了，才用 `zh-CN` | §10.4；UI 文案与错误信息从一开始就过 i18n；**模型的回话语言也跟着界面语言走** |
 | D-02 | LLM 供应商 | **不绑定**。统一让用户配置 API；**内置 DeepSeek 预设作为默认**（D-12） | §9.5 配置驱动 + 预设模板 |
 | D-03 | 本地模型 | **接受**。与云端共用同一套 Provider 配置（OpenAI 兼容端点覆盖 Ollama / vLLM / LM Studio） | 不做特殊分支 |
 | D-04 | 真实服务器施工 | **不做**。本产品只是软件，**只预留导出功能** | 移除 `mineflayer` 依赖与 M7 施工适配器 |

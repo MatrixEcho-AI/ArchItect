@@ -174,6 +174,13 @@ export const enUS = {
       general: 'General',
       model: 'Model',
     },
+    /** The two settings on the General page. */
+    appearance: 'Appearance',
+    theme: {
+      light: 'Light',
+      dark: 'Dark',
+      auto: 'Auto (follow system)',
+    },
     preset: 'Provider',
     activeProvider: 'Active model',
     addProvider: 'Add',

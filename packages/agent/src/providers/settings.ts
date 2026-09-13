@@ -27,6 +27,8 @@ export interface ProviderSettings {
     view?: string
     /** 完成闸门（plan §9.4）。关掉它会让"我说完了"变成可接受的结束方式，默认开。 */
     requireVerification?: boolean
+    /** 浅色 / 深色 / 跟随系统。缺省 = 浅色：沿用原来的白主题，不替老用户改观瞻。 */
+    theme?: 'light' | 'dark' | 'auto'
   }
 }
 
@@ -144,11 +146,14 @@ export function parseSettings(raw: unknown): ParsedSettings {
   const ui = source['ui']
   if (ui !== null && typeof ui === 'object') {
     const record = ui as Record<string, unknown>
+    // theme 只收三个枚举值，别的（拼错、旧版本写进来的）一律丢掉而不是留一颗坏种子
+    const theme = record['theme']
     settings.ui = {
       ...(typeof record['view'] === 'string' ? { view: record['view'] } : {}),
       ...(typeof record['requireVerification'] === 'boolean'
         ? { requireVerification: record['requireVerification'] }
         : {}),
+      ...(theme === 'light' || theme === 'dark' || theme === 'auto' ? { theme } : {}),
     }
   }
 

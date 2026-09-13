@@ -55,9 +55,17 @@ export interface AppProps {
    * 这里只负责上报——`@architect/i18n` 那一半由 `t()` 自己读了。
    */
   onLocaleChange: (locale: Locale) => void
+  /**
+   * 主题设置变了往上报告（`settings.ui.theme` 的三选一）。
+   *
+   * 与语言同一条路：`ConfigProvider` 住在 `main.tsx` 的 `Root`，主题状态也只能
+   * 住在那里——`auto` 要跟系统偏好合并，而监听 `prefers-color-scheme` 是那一层的事。
+   * 这里只把**设置里的原值**报上去，解析（auto → light/dark）在 Root 做。
+   */
+  onThemeChange: (theme: 'light' | 'dark' | 'auto') => void
 }
 
-export function App({ onLocaleChange }: AppProps): React.JSX.Element {
+export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Element {
   /**
    * 当前机位预设名。**没有 UI 拥有它了**（顶栏那个下拉已按用户要求移除），
    * 但它还得留着：双击视口与机位面板的「复位」都要知道"回到哪个预设"，
@@ -260,6 +268,13 @@ export function App({ onLocaleChange }: AppProps): React.JSX.Element {
     setI18nLocale(next)
     onLocaleChange(next)
   }, [studio.settings?.locale, onLocaleChange])
+
+  // ── 主题：设置是唯一真相，`main.tsx` 的 Root 负责与系统偏好合并 ────────────
+  useEffect(() => {
+    // 没读到设置时不报：Root 的缺省是 light，与"没有设置"的含义一致
+    if (studio.settings === undefined) return
+    onThemeChange(studio.settings.ui.theme ?? 'light')
+  }, [studio.settings, onThemeChange])
 
   // ── 世界变了 → 交给外壳（换工程时它会重置相机取景） ─────────────────────────
   useEffect(() => {

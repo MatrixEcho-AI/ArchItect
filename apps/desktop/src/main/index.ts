@@ -484,7 +484,7 @@ function registerIpc(): void {
     persistSettings()
     return view
   })
-  handle('settings:setUi', (patch: { view?: string; requireVerification?: boolean }) => {
+  handle('settings:setUi', (patch: { view?: string; requireVerification?: boolean; theme?: 'light' | 'dark' | 'auto' }) => {
     const view = studio.chat.setUi(patch)
     persistSettings()
     return view
@@ -1121,6 +1121,24 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     if (settingsBtn !== null && settingsBtn.disabled !== true) {
       settingsBtn.click();
       for (let i = 0; i < 8; i++) await frames();
+
+      // 设置现在有左侧菜单（通用 / 模型），**默认落在「通用」**。
+      // 先验菜单本身与默认页，再切到「模型」页做 provider 断言。
+      const generalTab = document.querySelector('#settings-menu-general');
+      const modelTab = document.querySelector('#settings-menu-model');
+      check(
+        'settings-menu',
+        generalTab !== null &&
+          modelTab !== null &&
+          document.querySelector('#cfg-locale') !== null &&
+          document.querySelectorAll('.provider-card').length === 0,
+        generalTab === null || modelTab === null
+          ? '左侧菜单缺失'
+          : '默认页是「通用」（语言在、provider 列表不在）',
+      );
+      if (modelTab !== null) modelTab.click();
+      for (let i = 0; i < 8; i++) await frames();
+
       const modal = document.querySelector('.ant-modal');
       const cards = document.querySelectorAll('.provider-card');
       check(

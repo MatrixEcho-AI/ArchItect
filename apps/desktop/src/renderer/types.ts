@@ -201,7 +201,7 @@ export interface SettingsView {
   activeId: string
   providers: ProviderView[]
   locale: 'zh-CN' | 'en-US'
-  ui: { view?: string; requireVerification?: boolean }
+  ui: { view?: string; requireVerification?: boolean; theme?: 'light' | 'dark' | 'auto' }
   secrets: { location: string; encrypted: boolean }
   issues: Array<{ field: string; message: string }>
 }

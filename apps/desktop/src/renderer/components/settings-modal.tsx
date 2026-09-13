@@ -93,8 +93,8 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   // 与 `main.tsx` 同一个理由：这一帧还没读到设置，先跟着系统走，别闪一下错的语言
   const [locale, setLocale] = useState<Locale>(normalizeLocale(navigator.language) ?? getLocale())
   const [showAdvanced, setShowAdvanced] = useState(false)
-  /** 当前栏目。**默认模型**：从"挡住发送"的横幅进来的人是来配模型的，gui-smoke 也是。 */
-  const [section, setSection] = useState<SettingsSection>('model')
+  /** 当前栏目。**默认通用**（用户定的）：外观与语言这种"软"设置放第一眼，模型配置在第二页。 */
+  const [section, setSection] = useState<SettingsSection>('general')
 
   /** 表单里可编辑的那几项。其余（capabilities / compat / kind）保存时从 `editing` 原样带上。 */
   const [form, setForm] = useState<{
@@ -115,8 +115,8 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
     setKeyPlain('')
     setLocale(settings.locale)
     setShowAdvanced(false)
-    // 每次打开都回到「模型」：不要记住上次停在「通用」，重新进来的人多半是为模型来的
-    setSection('model')
+    // 每次打开都回到「通用」：不要记住上次停在「模型」，重新进来从第一眼那页开始
+    setSection('general')
     setForm({
       id: editing?.id ?? '',
       preset: editing?.preset ?? 'custom',
@@ -266,22 +266,46 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
 
         <div className="settings-section">
           {section === 'general' ? (
-            <Field label={t('settings.language')}>
-              <Select
-                id="cfg-locale"
-                size="small"
-                style={{ width: 110 }}
-                value={locale}
-                onChange={(next: Locale) => {
-                  setLocale(next)
-                  void window.architect.setLocale(next).then(props.onSaved)
-                }}
-                options={[
-                  { value: 'zh-CN', label: '中文' },
-                  { value: 'en-US', label: 'English' },
-                ]}
-              />
-            </Field>
+            <Flex vertical gap={12} style={{ paddingTop: 4 }}>
+              {/**
+               * 外观：浅色 / 深色 / 跟随系统。改动**立刻生效**——`setUi` 落盘后，
+               * `App` 的 effect 把新值报给 `main.tsx` 的 Root，`ConfigProvider`
+               * 换 theme，整族 CSS 变量重挂。不需要"保存"按钮。
+               */}
+              <Field label={t('settings.appearance')}>
+                <Select
+                  id="cfg-theme"
+                  size="small"
+                  style={{ width: 150 }}
+                  value={settings?.ui.theme ?? 'light'}
+                  onChange={(next: 'light' | 'dark' | 'auto') => {
+                    void window.architect.setUi({ theme: next }).then(props.onSaved)
+                  }}
+                  options={[
+                    { value: 'light', label: t('settings.theme.light') },
+                    { value: 'dark', label: t('settings.theme.dark') },
+                    { value: 'auto', label: t('settings.theme.auto') },
+                  ]}
+                />
+              </Field>
+
+              <Field label={t('settings.language')}>
+                <Select
+                  id="cfg-locale"
+                  size="small"
+                  style={{ width: 150 }}
+                  value={locale}
+                  onChange={(next: Locale) => {
+                    setLocale(next)
+                    void window.architect.setLocale(next).then(props.onSaved)
+                  }}
+                  options={[
+                    { value: 'zh-CN', label: '中文' },
+                    { value: 'en-US', label: 'English' },
+                  ]}
+                />
+              </Field>
+            </Flex>
           ) : (
             <>
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>

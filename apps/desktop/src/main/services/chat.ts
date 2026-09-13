@@ -137,7 +137,7 @@ export interface SettingsView {
   activeId: string
   providers: ProviderView[]
   locale: 'zh-CN' | 'en-US'
-  ui: { view?: string; requireVerification?: boolean }
+  ui: { view?: string; requireVerification?: boolean; theme?: 'light' | 'dark' | 'auto' }
   secrets: { location: string; encrypted: boolean }
   issues: SettingsIssue[]
 }
@@ -465,7 +465,7 @@ export class ChatController {
     return view
   }
 
-  setUi(patch: { view?: string; requireVerification?: boolean }): SettingsView {
+  setUi(patch: { view?: string; requireVerification?: boolean; theme?: 'light' | 'dark' | 'auto' }): SettingsView {
     this.settings = { ...this.settings, ui: { ...this.settings.ui, ...patch } }
     const view = this.settingsView()
     this.emitSettings(view)

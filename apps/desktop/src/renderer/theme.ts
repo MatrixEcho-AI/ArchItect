@@ -1,4 +1,10 @@
+import { theme as antdTheme } from 'antd'
 import type { ThemeConfig } from 'antd'
+
+/** 设置里的三选一。**`auto` 在渲染进程解析成 light/dark，见 `main.tsx` 的 `resolveThemeMode`。 */
+export type ThemeSetting = 'light' | 'dark' | 'auto'
+/** 解析后的二选一——antd 只认这个。 */
+export type ThemeMode = 'light' | 'dark'
 
 /**
  * antd 主题：**白色主题 + antd 默认主色**。
@@ -37,12 +43,42 @@ import type { ThemeConfig } from 'antd'
  */
 const CHROME_BG = '#eef6fd'
 
+/**
+ * 深色模式的顶栏/侧栏底色：**带一点蓝的暗色**，与浅色版的 `#eef6fd` 是同一个思路
+ * （底比卡片略深、饱和度极低），只是换成暗的方向。`#141a22` 附近是 antd 深色算法
+ * 给的默认底，这个值在它之上偏一点点蓝，让两侧的成对感保留下来。
+ */
+const CHROME_BG_DARK = '#16222e'
+
+const FONT_STACK =
+  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif"
+
+/** 两套主题共用的组件微调（尺寸与密度，与配色无关）。 */
+const COMPONENT_TWEAKS: NonNullable<ThemeConfig['components']> = {
+  // 左栏那几块是"分区"而不是卡片：不要阴影、不要圆角，只要一条分割线
+  Card: {
+    headerBg: 'transparent',
+    headerFontSize: 11,
+    paddingLG: 10,
+  },
+  // 编辑记录/直方图是密集列表，行高压到最小
+  List: {
+    itemPadding: '1px 0',
+    fontSize: 12,
+  },
+  Button: {
+    paddingInline: 10,
+    paddingInlineSM: 6,
+  },
+}
+
 export const ARCHITECT_THEME: ThemeConfig = {
   /**
    * **必须显式开启**（antd 的默认值是 `false`）。
    *
    * 开了它，antd 才会把整套 token 挂成 CSS 变量（`--ant-color-*`），而
-   * `styles.css` 里那些 `var(--ant-color-*-bg)` 正是读它。
+   * `styles.css` 里那些 `var(--ant-color-*-bg)` 正是读它。深色切换也靠它：
+   * `algorithm` 一换，变量整族跟着换，自定义样式一行都不用动。
    *
    * 这个坑值得写下来，因为它**没有任何报错**：变量不存在时 CSS 不会失败，
    * 只是回落到继承值——"卡片按角色着色"于是变成"所有卡片一个色"，从截图上
@@ -57,10 +93,10 @@ export const ARCHITECT_THEME: ThemeConfig = {
     colorBgElevated: '#ffffff',
     borderRadius: 4,
     fontSize: 13,
-    fontFamily:
-      "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+    fontFamily: FONT_STACK,
   },
   components: {
+    ...COMPONENT_TWEAKS,
     Layout: {
       headerBg: CHROME_BG,
       bodyBg: CHROME_BG,
@@ -68,20 +104,47 @@ export const ARCHITECT_THEME: ThemeConfig = {
       headerHeight: 38,
       headerPadding: '0 10px',
     },
-    // 左栏那几块是"分区"而不是卡片：不要阴影、不要圆角，只要一条分割线
-    Card: {
-      headerBg: 'transparent',
-      headerFontSize: 11,
-      paddingLG: 10,
-    },
-    // 编辑记录/直方图是密集列表，行高压到最小
-    List: {
-      itemPadding: '1px 0',
-      fontSize: 12,
-    },
-    Button: {
-      paddingInline: 10,
-      paddingInlineSM: 6,
+  },
+}
+
+/**
+ * 深色主题：**只改配色，不动结构**。
+ *
+ * `darkAlgorithm` 负责把整套 token 派生成深色（容器、边框、文字、禁用态那一整族），
+ * 我们只压两件事：布局的底换成 `CHROME_BG_DARK`，其余组件微调与浅色版共用
+ * `COMPONENT_TWEAKS`——那是尺寸与密度，不是颜色。
+ *
+ * 浅色的 `colorBgBase`/`colorBgContainer`/`colorBgElevated` 那三处白**不带过来**：
+ * 带过来深色里卡片还是白的。深色的那三族让 `darkAlgorithm` 自己派生。
+ */
+export const ARCHITECT_THEME_DARK: ThemeConfig = {
+  cssVar: true,
+  algorithm: antdTheme.darkAlgorithm,
+  token: {
+    colorBgLayout: CHROME_BG_DARK,
+    borderRadius: 4,
+    fontSize: 13,
+    fontFamily: FONT_STACK,
+  },
+  components: {
+    ...COMPONENT_TWEAKS,
+    Layout: {
+      headerBg: CHROME_BG_DARK,
+      bodyBg: CHROME_BG_DARK,
+      siderBg: CHROME_BG_DARK,
+      headerHeight: 38,
+      headerPadding: '0 10px',
     },
   },
 }
+
+/** 设置值（含 `auto`）→ 实际模式。`systemDark` 由调用方给（`main.tsx` 监听系统）。 */
+export function resolveThemeMode(setting: ThemeSetting | undefined, systemDark: boolean): ThemeMode {
+  if (setting === 'dark') return 'dark'
+  if (setting === 'auto') return systemDark ? 'dark' : 'light'
+  return 'light'
+}
+
+/** 实际模式 → antd 主题。切换走 `ConfigProvider` 的 theme prop，antd 负责重挂整套 CSS 变量。 */
+export const themeFor = (mode: ThemeMode): ThemeConfig =>
+  mode === 'dark' ? ARCHITECT_THEME_DARK : ARCHITECT_THEME

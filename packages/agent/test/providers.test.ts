@@ -851,6 +851,13 @@ describe('设置文件读写（D-13 两条红线）', () => {
     expect(round.settings.ui).toEqual(settings.ui)
   })
 
+  it('ui.theme 只收 light/dark/auto，乱写的值被丢掉（不留坏种子）', () => {
+    const base = JSON.parse(serializeSettings(defaultSettings())) as Record<string, unknown>
+    expect(parseSettings({ ...base, ui: { theme: 'dark' } }).settings.ui?.theme).toBe('dark')
+    expect(parseSettings({ ...base, ui: { theme: 'auto' } }).settings.ui?.theme).toBe('auto')
+    expect(parseSettings({ ...base, ui: { theme: 'midnight' } }).settings.ui?.theme).toBeUndefined()
+  })
+
   it('用户显式写的单轮输出上限要保留下来（以前会被静默丢掉）', () => {
     // 默认不设（D-37）；但用户自己配了压成本的上限，就必须真的发出去——
     // `parseProvider` 是重建对象的，早先这个字段在这一步被悄悄吃掉，

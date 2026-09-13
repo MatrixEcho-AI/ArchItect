@@ -178,6 +178,13 @@ export const zhCN = {
       general: '通用',
       model: '模型',
     },
+    /** 「通用」页的两项设置。 */
+    appearance: '外观',
+    theme: {
+      light: '浅色',
+      dark: '深色',
+      auto: '自动（跟随系统）',
+    },
     preset: '提供商',
     activeProvider: '当前模型',
     addProvider: '新增',

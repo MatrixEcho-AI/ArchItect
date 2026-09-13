@@ -172,7 +172,12 @@ export const zhCN = {
     actual: '实际',
   },
   settings: {
-    title: '模型',
+    title: '设置',
+    /** 左侧菜单。第一个是「通用」，模型配置在第二项。 */
+    menu: {
+      general: '通用',
+      model: '模型',
+    },
     preset: '提供商',
     activeProvider: '当前模型',
     addProvider: '新增',

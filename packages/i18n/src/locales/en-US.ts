@@ -168,7 +168,12 @@ export const enUS = {
     actual: 'actual',
   },
   settings: {
-    title: 'Model',
+    title: 'Settings',
+    /** Left-hand menu. First is General; model configuration is second. */
+    menu: {
+      general: 'General',
+      model: 'Model',
+    },
     preset: 'Provider',
     activeProvider: 'Active model',
     addProvider: 'Add',

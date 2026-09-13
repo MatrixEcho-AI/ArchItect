@@ -14,6 +14,12 @@ import type { MessageKey } from '@architect/i18n'
  * 没有任何一条 IPC 通道能把明文读回来——所以这里连"回显已保存的 key"这条路都不存在，
  * 不是"没做"。
  *
+ * ## 版式：左边菜单 + 右边内容
+ *
+ * 两个栏目：**通用**（语言）与**模型**（provider 列表）。菜单顺序是用户定的
+ * （通用在前），但**默认落页是模型**——gui-smoke 点开设置后要立刻看到 provider
+ * 列表，而"挡住发送"的横幅那条路进来的人也是为了配模型。通用离他一次点击。
+ *
  * ## 为什么是"列表 + 展开编辑"而不是一个下拉框
  *
  * 以前这里是「当前模型」下拉 + 一排字段：所有 provider 挤在同一个表单里，切一下
@@ -36,6 +42,14 @@ import type { MessageKey } from '@architect/i18n'
  * `vision` 的地方，而 `vision` 决定图发不发给模型。所以「保存」时自己补一次，
  * 见下面 `probeCurrent`。
  */
+
+/** 栏目。顺序即菜单顺序：通用在前，模型第二。 */
+type SettingsSection = 'general' | 'model'
+
+const SECTIONS = [
+  { key: 'general', label: 'settings.menu.general' },
+  { key: 'model', label: 'settings.menu.model' },
+] as const satisfies ReadonlyArray<{ key: SettingsSection; label: MessageKey }>
 
 /** 内置预设**只剩 DeepSeek**（OpenAI / Ollama 删了，要连它们就用"添加自定义提供方"）。 */
 const BUILTIN_PRESETS = ['deepseek'] as const
@@ -79,6 +93,8 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   // 与 `main.tsx` 同一个理由：这一帧还没读到设置，先跟着系统走，别闪一下错的语言
   const [locale, setLocale] = useState<Locale>(normalizeLocale(navigator.language) ?? getLocale())
   const [showAdvanced, setShowAdvanced] = useState(false)
+  /** 当前栏目。**默认模型**：从"挡住发送"的横幅进来的人是来配模型的，gui-smoke 也是。 */
+  const [section, setSection] = useState<SettingsSection>('model')
 
   /** 表单里可编辑的那几项。其余（capabilities / compat / kind）保存时从 `editing` 原样带上。 */
   const [form, setForm] = useState<{
@@ -99,6 +115,8 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
     setKeyPlain('')
     setLocale(settings.locale)
     setShowAdvanced(false)
+    // 每次打开都回到「模型」：不要记住上次停在「通用」，重新进来的人多半是为模型来的
+    setSection('model')
     setForm({
       id: editing?.id ?? '',
       preset: editing?.preset ?? 'custom',
@@ -215,37 +233,60 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
       open={props.open}
       title={t('settings.title')}
       onCancel={props.onClose}
-      width={640}
+      width={720}
       destroyOnHidden
       footer={
         <Flex justify="flex-end" gap={8} align="center">
-          <label htmlFor="cfg-locale" style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12 }}>
-            {t('settings.language')}
-          </label>
-          <Select
-            id="cfg-locale"
-            size="small"
-            style={{ width: 110 }}
-            value={locale}
-            onChange={(next: Locale) => {
-              setLocale(next)
-              void window.architect.setLocale(next).then(props.onSaved)
-            }}
-            options={[
-              { value: 'zh-CN', label: '中文' },
-              { value: 'en-US', label: 'English' },
-            ]}
-          />
-          <span style={{ flex: 1 }} />
           <Button id="btn-settings-cancel" onClick={props.onClose}>
             {t('settings.cancel')}
           </Button>
         </Flex>
       }
     >
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        {t('settings.subtitle')}
-      </Typography.Text>
+      <Flex gap={16} align="stretch" className="settings-layout">
+        {/**
+         * 左侧菜单。**顺序是用户定的**：通用在前、模型第二。
+         * 不用 antd 的 `Menu`：它带着自己的缩进/图标/折叠语义，这里只有两项，
+         * 两个按钮加一条右边框就是全部结构（样式见 styles.css 的 `.settings-menu`）。
+         */}
+        <div className="settings-menu">
+          {SECTIONS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              id={`settings-menu-${item.key}`}
+              className={`settings-menu-item${section === item.key ? ' is-active' : ''}`}
+              aria-pressed={section === item.key}
+              onClick={() => setSection(item.key)}
+            >
+              {t(item.label)}
+            </button>
+          ))}
+        </div>
+
+        <div className="settings-section">
+          {section === 'general' ? (
+            <Field label={t('settings.language')}>
+              <Select
+                id="cfg-locale"
+                size="small"
+                style={{ width: 110 }}
+                value={locale}
+                onChange={(next: Locale) => {
+                  setLocale(next)
+                  void window.architect.setLocale(next).then(props.onSaved)
+                }}
+                options={[
+                  { value: 'zh-CN', label: '中文' },
+                  { value: 'en-US', label: 'English' },
+                ]}
+              />
+            </Field>
+          ) : (
+            <>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {t('settings.subtitle')}
+              </Typography.Text>
 
       <div className="provider-list">
         {(settings?.providers ?? []).map((provider) => {
@@ -556,6 +597,10 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
         >
           {t('settings.addCustom')}
         </Button>
+      </Flex>
+            </>
+          )}
+        </div>
       </Flex>
     </Modal>
   )

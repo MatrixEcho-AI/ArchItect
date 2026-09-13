@@ -962,6 +962,57 @@ body,
 }
 
 /*
+ * ── 设置对话框的左侧菜单 ────────────────────────────────────────────────────
+ *
+ * 用户定的版式：设置不再只有"模型"一个栏目，左边一列菜单（通用 / 模型），
+ * 右边才是内容。没用 antd 的 `Menu`——那东西带着缩进、图标、折叠三套语义，
+ * 而这里只有两项；两个按钮 + 一条右边框就是全部。前缀 `settings-menu-`
+ * 与 `provider-` / `cost-` 同理，避免在全局样式表里撞名。
+ */
+.settings-layout {
+  /* 菜单与内容**等高拉伸**：右边框要通到底，短一截会像没画完 */
+  min-height: 160px;
+}
+
+.settings-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 92px;
+  flex: none;
+  border-right: 1px solid var(--ant-color-border-secondary);
+  padding-right: 12px;
+}
+
+.settings-menu-item {
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--ant-color-text-secondary);
+  cursor: pointer;
+}
+
+.settings-menu-item:hover {
+  background: var(--ant-color-fill-tertiary);
+}
+
+/* 当前栏目要看得出"我在这儿"：底色 + 加粗 + 正文色，三样一起才够显眼。 */
+.settings-menu-item.is-active {
+  background: var(--ant-color-fill-secondary);
+  color: var(--ant-color-text);
+  font-weight: 600;
+}
+
+/* 内容区。`min-width: 0`：flex 子项默认不肯收缩，provider 表单会被它顶出框。 */
+.settings-section {
+  flex: 1;
+  min-width: 0;
+}
+
+/*
  * ── 模型设置（列表 + 展开编辑） ─────────────────────────────────────────────
  *
  * 用户拿 DeepSeek harness 的模型配置对照过来的版式：一行一个 provider、左边名字

@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { createDefaultRegistry, renderToolReference } from '@architect/tools'
+import { createDefaultRegistry, DOC_LOCALES, DOC_PATHS, renderToolReference } from '@architect/tools'
 
 /**
  * 生成文档。
@@ -17,9 +17,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const check = process.argv.includes('--check')
 
 const registry = createDefaultRegistry()
-const targets: Array<{ path: string; content: string }> = [
-  { path: join(root, 'docs/tool-reference.md'), content: renderToolReference(registry) },
-]
+// 一种语言一份。工具描述（正文）两种语言里都是英文——它是给 LLM 的 prompt；
+// 只有外壳文案跟语言走，所以两份放两个文件，而不是把同一段正文抄两遍。
+const targets: Array<{ path: string; content: string }> = DOC_LOCALES.map((locale) => ({
+  path: join(root, DOC_PATHS[locale]),
+  content: renderToolReference(registry, locale),
+}))
 
 let stale = 0
 for (const target of targets) {

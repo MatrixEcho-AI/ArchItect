@@ -1,8 +1,16 @@
-# 参与开发
+# 参与开发 / Development
+
+### [中文](#%E4%B8%AD%E6%96%87) | [English](#english)
+
+---
+
+<div lang="zh-CN">
+
+## 中文
 
 面向要改这个项目的人。只想用的话看根目录的 [`README.md`](../README.md)。
 
-## 提交前检查
+### 提交前检查
 
 ```bash
 pnpm install
@@ -13,15 +21,15 @@ pnpm docs:check && pnpm bake:check   # 两个「生成物有没有过期」的�
 
 `pnpm test` 里已经含文档一致性与真实 HTTP 的端到端，但**类型检查不在里面**，所以上面几条都要跑。
 
-## 工程结构
+### 工程结构
 
 ```
 packages/
-  core       体素内核 · 状态编解码 · 几何算子 · 世界存储 · 历史回放 · 朝向变换 · linter
+  core       体素内核 · 状态编解码 · 几何算子 · 实体与方块实体（entity / block entity 存储） · 世界存储 · 历史回放 · 朝向变换 · linter
   mcai       .mcai 容器 · 对话与截图存档 · 崩溃恢复 WAL
-  render     软件光栅器 · 原版方块模型网格化 · 纹理图集 · 相机与叠加层 · 正交射线拾取 · PNG 编解码
-  tools      29 个 LLM 工具 · JSON Schema 校验 · 文档生成
-  interop    .schem / .litematic / .obj · 版本迁移
+  render     软件光栅器 · 原版方块模型网格化 · 实体网格化与绘制 · 纹理图集 · 相机与叠加层 · 正交射线拾取 · PNG 编解码
+  tools      29 个 LLM 工具（含实体五件：place_entity / edit_block_entity / remove_entity / list_entities / get_block_entity） · JSON Schema 校验 · 文档生成
+  interop    .schem / .litematic / .obj · 版本迁移 · 实体读写
   agent      Agent 循环 · 完成闸门 · Provider 适配与能力发现
   i18n       中文优先的文案层（zh-CN 是基准表）
   cli        无头命令行
@@ -38,14 +46,14 @@ React 之外**（`viewport-shell.ts`）。拖动的每个像素都不进 `useSta
 一次，高频的那一半留给按帧合流的命令式代码。文案一律走 `t()`（键是编译期校验的点分
 路径），语言切换同时驱动 `@architect/i18n` 与 antd 的 `ConfigProvider`。
 
-## 上下文策略：按 provider 分两套
+### 上下文策略：按 provider 分两套
 
 Ollama 那类本地 provider **没有前缀缓存**，harness 会自动切到保守策略：只保留最近 6 轮、
 最多 3 张截图，并在历史里留一句「前面 N 轮被裁掉了」。反过来，有前缀缓存的 provider
 （DeepSeek）**一轮都不裁**——剪掉一张旧图省下的钱，比把它后面十万 token 的缓存打掉亏掉的
 钱少三个数量级。判据在 `packages/agent/src/context.ts`，两套只在其中一套上跑。
 
-## 常用命令
+### 常用命令
 
 | 命令 | 作用 |
 |------|------|
@@ -64,20 +72,20 @@ Ollama 那类本地 provider **没有前缀缓存**，harness 会自动切到保
 | `pnpm icon` | 重新生成应用图标（代码画的等轴测方块，1024×1024 PNG） |
 | `pnpm --filter @architect/desktop package:dir` | 打一个不打签名、不做安装包的目录版（验打包用） |
 
-## 生成物与一致性闸门
+### 生成物与一致性闸门
 
 仓库里有三份**生成物**进了版本库，各自有闸门守着它不过期：
 
 | 生成物 | 谁生成 | 谁守 |
 |--------|--------|------|
-| `docs/tool-reference.md` | `pnpm docs:gen`（从工具 JSON Schema） | `scripts/gen-docs.ts --check` + `pnpm test` |
+| `docs/tool-reference.md` + `docs/tool-reference.zh-CN.md`（每种语言一份） | `pnpm docs:gen`（从工具 JSON Schema） | `scripts/gen-docs.ts --check` + `pnpm test` |
 | `packages/render/data/<版本>/*.json` | `pnpm bake:gen`（从 `minecraft-assets`） | `scripts/bake-render-data.ts --check` + `pnpm test` |
 | `packages/render/test/golden/*.png` | `ARCHITECT_UPDATE_GOLDEN=1` 重签 | golden 测试逐字节比对 |
 
 前两份是**整串相等**比对（生成侧恒用 `\n`），所以仓库里有一份 `.gitattributes` 把检出换行符钉成 LF——
 没有它的话，Windows 上全新 clone 出来就必红，而且报的是「文档过期」这种误导人的话。
 
-## 桌面端调试开关
+### 桌面端调试开关
 
 都要先 `pnpm --filter @architect/desktop build`。它们可以**叠加**，比如 `--no-webgl --drag-test`
 验的是「没有 WebGL 时拖动还能不能用」：
@@ -102,7 +110,7 @@ npx --no-install electron . --demo --paint-test            # 合成一次「人�
 拖动降分辨率），并在对话面板上明说这件事。模型截图那条路不受影响——它本来就
 优先走渲染进程的 WebGL，拿不到才退回软件光栅器。
 
-## 打包
+### 打包
 
 ```bash
 pnpm --filter @architect/desktop package          # dmg / nsis / AppImage
@@ -138,3 +146,169 @@ pnpm icon                                         # 重新生成图标（apps/de
 | `minecraft-assets` 只带 1.21.4 的方块贴图（其余版本的贴图目录约 280 MB 不进包；**所有版本的 `*.json` 都留着**，`index.js` 静态 require 它们） | ~300 MB |
 | `three` 挪到 devDependencies（它已被 esbuild 打进渲染进程的 bundle，运行时不需要再躺一份） | ~13 MB |
 | 自己的渲染元数据改成烘出来的 2.3 MB JSON（`pnpm bake:gen`），不再把资源包整个拖进主进程 | ~65 MB |
+
+</div>
+
+---
+
+<div lang="English">
+
+## English
+
+For anyone changing this project. To use it, read the root [`README.md`](../README.md).
+
+### Before committing
+
+```bash
+pnpm install
+pnpm typecheck                   # 9 projects at once
+pnpm test                        # the full suite
+pnpm docs:check && pnpm bake:check   # the two "is a generated file stale" gates
+```
+
+`pnpm test` already covers documentation consistency and a real-HTTP end to end, but
+**type checking is not part of it**, so every line above has to run.
+
+### Repository layout
+
+```
+packages/
+  core       voxel kernel · state encode/decode · geometry · entities and block entities (entity / block-entity stores) · world store · replay · orientation · linter
+  mcai       .mcai container · conversation and screenshot archive · crash-recovery WAL
+  render     software rasterizer · vanilla block model meshing · entity meshing and drawing · texture atlas · camera and overlays · orthographic ray pick · PNG codec
+  tools      29 LLM tools (including the five entity tools: place_entity / edit_block_entity / remove_entity / list_entities / get_block_entity) · JSON Schema validation · document generation
+  interop    .schem / .litematic / .obj · version migration · entity read and write
+  agent      agent loop · completion gate · provider adapters and capability discovery
+  i18n       the Chinese-first message layer (zh-CN is the base table)
+  cli        headless command line
+apps/
+  desktop    Electron app (React 18 + antd 5, light theme)
+docs/        format specifications · tool reference (generated) · prompt library
+examples/    example project
+```
+
+One constraint: nothing under `packages/*` may depend on Electron or the DOM.
+
+The renderer has one hard boundary: **the three views (world, chat, settings) live in
+React; the viewport and camera do not** (`viewport-shell.ts`). No pixel of a drag goes
+through `useState` — the WebGL context is built once, and the per-frame half stays in
+imperative code that coalesces work by frame. All copy goes through `t()` (keys are
+compile-time checked dotted paths), and switching language drives both `@architect/i18n`
+and antd's `ConfigProvider`.
+
+### Context policy: two regimes, chosen per provider
+
+A local provider like Ollama **has no prefix cache**, so the harness switches to the
+conservative regime on its own: the last 6 turns, at most 3 screenshots, and one line in
+the history saying how many turns were dropped. A provider that does cache prefixes
+(DeepSeek) **drops nothing at all** — the money saved by cutting one old image is three
+orders of magnitude less than the cache it invalidates behind it. The decision lives in
+`packages/agent/src/context.ts`; only one of the two regimes ever runs.
+
+### Common commands
+
+| Command | What it does |
+|---------|--------------|
+| `pnpm test` | Every test (full enumeration, documentation consistency, **a real-HTTP end to end**) |
+| `pnpm typecheck` | Nine projects at once |
+| `pnpm docs:gen` | Regenerate the tool reference (`pnpm test` fails while it is stale). The `:gen` suffix has a reason: a bare `docs` is taken by a pnpm builtin that opens a package page |
+| `ARCHITECT_UPDATE_GOLDEN=1 pnpm test packages/render/test/golden.test.ts` | Re-sign the rasterizer golden baselines (after changing rendering; **look at the new images first**) |
+| `pnpm bake:gen` / `pnpm bake:check` | Bake render metadata from `minecraft-assets` (block states, models, block-to-texture lookup, average texture colours → `packages/render/data/<version>/*.json`); `--check` fails when stale |
+| `pnpm demo:v0` | A complete run with no API key |
+| `pnpm providers` | Probe a model endpoint: list models, choose one, measure its capabilities |
+| `npx vitest run packages/cli` | Starts a protocol-level fake model endpoint and drives the whole path through a real `architect build` (no API key needed) |
+| `pnpm bench` | Runs the golden tasks and prints a score table (real model, about $0.19 for five tasks). `--record <f.jsonl>` records every interaction; `--replay <f.jsonl>` then reruns it **with no network at all** — every number matched and 359 s became 1.7 s |
+| `pnpm architect <command>` | CLI: `info` / `ops` / `measure` / `slice` / `replay` / `shoot` / `build` / `export` / `import` |
+| `pnpm desktop` | Opens the desktop app |
+| `pnpm example` | Regenerates `examples/forest-hut.mcai` (timestamps are pinned, so the output is reproducible) |
+| `pnpm icon` | Regenerates the app icon (an isometric block drawn in code, 1024×1024 PNG) |
+| `pnpm --filter @architect/desktop package:dir` | Builds an unsigned, unpackaged directory build (to check packaging) |
+
+### Generated files and their gates
+
+Three **generated** files are committed, each with a gate that keeps it from going stale:
+
+| Generated | Produced by | Guarded by |
+|-----------|-------------|------------|
+| `docs/tool-reference.md` + `docs/tool-reference.zh-CN.md` (one per language) | `pnpm docs:gen` (from the tool JSON Schemas) | `scripts/gen-docs.ts --check` + `pnpm test` |
+| `packages/render/data/<version>/*.json` | `pnpm bake:gen` (from `minecraft-assets`) | `scripts/bake-render-data.ts --check` + `pnpm test` |
+| `packages/render/test/golden/*.png` | re-signed with `ARCHITECT_UPDATE_GOLDEN=1` | the golden test, byte for byte |
+
+The first two are compared as **whole strings** (the generators always emit `\n`), which is
+why the repository carries a `.gitattributes` that pins checkouts to LF. Without it a fresh
+clone on Windows is red immediately, and reports "the documentation is stale" — a
+misleading thing to read.
+
+### Desktop debug switches
+
+All of them need `pnpm --filter @architect/desktop build` first. They **compose**, so
+`--no-webgl --drag-test` answers "does dragging still work without WebGL":
+
+```bash
+cd apps/desktop
+npx --no-install electron . --demo --gui-smoke             # full smoke: a GPU capture plus DOM assertions (the timeline drags, the edit log opens, WASD really moves the camera, a drag turns in place); exits 1 on any failure
+npx --no-install electron . --demo --capture /tmp/gui.png  # capture the window the user sees
+npx --no-install electron . --demo --shot /tmp/eye.png     # capture **the image the model receives**
+npx --no-install electron . --demo --no-webgl              # force the software viewport (to exercise the fallback)
+npx --no-install electron . --demo --undo-test             # synthesise two undos (what a historical revision looks like)
+npx --no-install electron . --demo --paint-test            # synthesise one manual block placement
+```
+
+> `/tmp/...` above is the Linux and macOS spelling. On Windows write `%TEMP%\gui.png`:
+> `/tmp/gui.png` resolves to `tmp\gui.png` under **the current drive root** (for example `D:\tmp\gui.png`).
+
+`--capture` and `--shot` are not the same thing: `--capture` is the user's viewport, while
+`--shot` goes through `ctx.shoot` and matches the size, the overlays and the rendering path
+the model actually receives. When asking "why did the model see that", look at the `--shot`
+image first.
+
+The interface also works on a machine without WebGL: the viewport falls back to the main
+process rasterizer (slower, no antialiasing, lower resolution while dragging) and the chat
+panel says so. The model's screenshots are unaffected — that path already prefers the
+renderer's WebGL and only falls back when it cannot have it.
+
+### Packaging
+
+```bash
+pnpm --filter @architect/desktop package          # dmg / nsis / AppImage
+pnpm --filter @architect/desktop package:dir      # only the .app/.exe directory, to check packaging
+pnpm icon                                         # regenerate the icon (apps/desktop/build/icon.png)
+```
+
+**The three platforms differ a great deal** (these numbers come from one arm64 Mac):
+
+| Target | Result | Output |
+|--------|--------|--------|
+| macOS `dmg` + `zip` | built | `Architect-0.1.0-arm64.dmg` (136 MB) / `-mac.zip` (132 MB) |
+| Linux `dir` (a runnable directory) | built | `release/linux-arm64-unpacked/` (796 MB unpacked) |
+| Linux `AppImage` | blocked by the toolchain | `mksquashfs: bad CPU type in executable` |
+| Windows `nsis` / `zip` | blocked by the toolchain | `wine64: bad CPU type in executable` |
+
+The last two **are not a project configuration problem**: the `mksquashfs` and `wine64` that
+electron-builder uses on macOS are both **x86_64** binaries, and that machine has no Rosetta
+(`arch -x86_64 /usr/bin/true` reports `Bad CPU type`). Any one of these produces those two
+packages: install Rosetta; use the `electronuserland/builder` Docker image; or build on an
+x86_64 machine or CI.
+
+The icon is **drawn in code** (`scripts/make-icon.ts`, using the render package's own Canvas,
+an isometric block in the interface's own colours) rather than checked in as a binary:
+electron-builder converts that one 1024×1024 PNG into icns and ico itself.
+
+Verified: the `.app` that `--dir` produces runs `--smoke` directly (world, capture, crash
+recovery, all the way through export and import) and passes — that is, `minecraft-data`,
+`minecraft-assets` and `prismarine-*`, all marked external, are requireable from inside the
+asar.
+
+**748 MB**, down from 837 MB. The heaviest thing in the package is `minecraft-data`
+(427 MB): its `data.js` **statically `require`s across versions at load time** (reading
+1.21.4 requires `1.21.1/enchantments.json`), so **trimming it by directory is not safe** —
+tried once, and the packaged app failed to start with `Cannot find module`. What actually
+came off:
+
+| Change | Saved |
+|--------|-------|
+| `minecraft-assets` ships only the 1.21.4 block textures (the other versions' texture directories, about 280 MB, stay out; **every version's `*.json` stays**, since `index.js` statically requires them) | ~300 MB |
+| `three` moved to devDependencies (esbuild already bundles it into the renderer, so a second copy is not needed at runtime) | ~13 MB |
+| Our own render metadata became a 2.3 MB baked JSON (`pnpm bake:gen`), instead of dragging the whole resource pack into the main process | ~65 MB |
+
+</div>

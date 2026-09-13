@@ -337,8 +337,9 @@ describe('StudioService 的接线', () => {
     // （基准是 rev 0——测试里那个"文件"根本不存在——所以草稿是全部 3 步）
     expect(outcome.ops).toBe(3)
     expect(outcome.baseExists).toBe(false)
+    // 提示里带着那个**路径**（数据，不跟语言变）。句子本身由文案表负责，
+    // 这里不去匹配它的措辞。
     const notice = studio.state().notice ?? ''
-    expect(notice).toContain('已经不在原处')
     expect(notice).toContain('/tmp/gone-forever.mcai')
     // 硬着头皮"恢复"只会得到一个不是崩溃前的世界，所以这里必须什么都不做
     const before = studio.agentSession.store.contentHash()

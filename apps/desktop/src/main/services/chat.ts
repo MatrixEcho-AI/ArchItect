@@ -27,6 +27,7 @@ import type {
   UsageTotals,
 } from '@architect/agent'
 import { t } from '@architect/i18n'
+import type { MessageKey, MessageVars } from '@architect/i18n'
 import { TranscriptRecorder } from '@architect/mcai'
 import type { CaptureBundle, ChatTranscript, TranscriptRecording } from '@architect/mcai'
 import type { ToolResult } from '@architect/tools'
@@ -97,6 +98,18 @@ export interface ChatMessageView {
   ts: string
 }
 
+/**
+ * 「挡住发送」的一条原因。
+ *
+ * 存**键**而不是渲染好的句子：这些原因是**机器要判的东西**（测试、诊断、界面分支），
+ * 句子才是给人看的。渲染留给界面那一层（`t(item.key, item.params)`），
+ * 于是断言可以只看 key —— **不受界面语言影响**。
+ */
+export interface BlockingNotice {
+  key: MessageKey
+  params?: MessageVars
+}
+
 export interface ChatView {
   running: boolean
   messages: ChatMessageView[]
@@ -109,8 +122,8 @@ export interface ChatView {
   /** 被预算刹住的原因（如果有）。与 `error` 分开：这不是故障。 */
   /** provider 配置是否齐备。不齐时界面直接引导去设置，而不是等报错。 */
   ready: boolean
-  /** 配置缺什么（中文，直接显示）。 */
-  blocking: string[]
+  /** 配置缺什么。**键 + 参数**，由界面渲染成当前语言。 */
+  blocking: BlockingNotice[]
 }
 
 export interface ProviderView extends ProviderConfig {
@@ -384,6 +397,7 @@ export class ChatController {
           ...this.issues.filter((i) => i.field !== 'apiKeyRef'),
           {
             field: 'apiKeyRef',
+            code: 'desktop.chatBlocking.keychainUnavailable',
             message: t('desktop.chatBlocking.keychainUnavailable'),
           },
         ]
@@ -580,20 +594,20 @@ export class ChatController {
     return { costAmount: amount, costCurrency: currencyOf(table) }
   }
 
-  private blocking(): string[] {
+  private blocking(): BlockingNotice[] {
     const config = activeProvider(this.settings)
-    if (config === undefined) return [t('desktop.chatBlocking.noProvider')]
+    if (config === undefined) return [{ key: 'desktop.chatBlocking.noProvider' }]
     const problems = validateProviderConfig(config).filter(
       (problem) => problem.field === 'baseURL' || problem.field === 'apiKeyRef',
     )
-    const out = problems.map((p) => p.message)
+    const out: BlockingNotice[] = problems.map((p) => ({ key: p.code as MessageKey }))
     if (config.model.trim().length === 0) {
-      out.push(t('desktop.chatBlocking.needModel'))
+      out.push({ key: 'desktop.chatBlocking.needModel' })
     } else if (!this.hasKey(config)) {
       out.push(
         config.apiKeyRef.startsWith('env:')
-          ? t('desktop.chatBlocking.envKeyMissing', { name: config.apiKeyRef.slice(4) })
-          : t('desktop.chatBlocking.keyMissing'),
+          ? { key: 'desktop.chatBlocking.envKeyMissing', params: { name: config.apiKeyRef.slice(4) } }
+          : { key: 'desktop.chatBlocking.keyMissing' },
       )
     }
     return out
@@ -753,7 +767,13 @@ export class ChatController {
     }
 
     const blocking = this.blocking()
-    if (blocking.length > 0) throw new Error(blocking.join('；'))
+    if (blocking.length > 0) {
+      // `codes` 是机器可判的那一份：拒绝的**原因**不能只活在一句会跟语言变的话里
+      throw Object.assign(
+        new Error(blocking.map((item) => t(item.key, item.params)).join('；')),
+        { codes: blocking.map((item) => item.key) },
+      )
+    }
 
     const message = this.newMessage('user', goal)
     const stored: LlmImage[] = []

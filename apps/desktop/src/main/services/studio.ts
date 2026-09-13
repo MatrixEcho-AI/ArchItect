@@ -40,6 +40,22 @@ import { ChatController } from './chat.js'
 import type { ChatOptions, ChatView, SettingsView, StudioEvent, TestConnectionInput } from './chat.js'
 import { createMemorySecretStore } from './settings.js'
 
+/**
+ * 服务层抛的错，带一个**稳定的 code**（就是文案表里的键）。
+ *
+ * `message` 是给人看的、会跟语言变；`code` 不变——测试与诊断按它断言，
+ * 于是"拒绝的理由"不用靠匹配一句会变的句子来验证。
+ */
+export class StudioError extends Error {
+  override readonly name = 'StudioError'
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
 /** 传给渲染进程的完整状态快照。渲染进程不持有世界，它只是个视图。 */
 export interface StudioState {
   projectPath?: string
@@ -826,7 +842,7 @@ export class StudioService {
 
   private async saveNow(path?: string): Promise<string> {
     const target = path ?? this.projectPath
-    if (target === undefined) throw new Error(t('desktop.noSavePath'))
+    if (target === undefined) throw new StudioError('desktop.noSavePath', t('desktop.noSavePath'))
     // 对话记录与截图一起进工程文件——`.mcai` 的价值有一半在这里
     const recording = this.chat.recording()
     const bytes = packProject({
@@ -1449,18 +1465,22 @@ export class StudioService {
     const pos = { x: Math.round(request.pos[0]), y: Math.round(request.pos[1]), z: Math.round(request.pos[2]) }
 
     if (request.mode === 'break') {
-      if (!store.contains(pos)) throw new Error(t('desktop.edit.outsideBreak'))
-      if (store.isAir(pos)) throw new Error(t('desktop.edit.alreadyAir'))
+      if (!store.contains(pos)) throw new StudioError('desktop.edit.outsideBreak', t('desktop.edit.outsideBreak'))
+      if (store.isAir(pos)) throw new StudioError('desktop.edit.alreadyAir', t('desktop.edit.alreadyAir'))
       this.session.applyEdit('break_block', { pos: request.pos }, () =>
         store.write((emit) => emit(pos.x, pos.y, pos.z), 0, { mode: 'destroy', confirm: true }),
       )
     } else {
       const name = request.block
-      if (name === undefined || name.length === 0) throw new Error(t('desktop.edit.noBlockSelected'))
+      if (name === undefined || name.length === 0) {
+        throw new StudioError('desktop.edit.noBlockSelected', t('desktop.edit.noBlockSelected'))
+      }
       // `palette.indexOf` 会把认不出的名字**悄悄追加**进调色板，所以先自己验一遍。
       // 不验的话，手滑打错一个名字就会在工程里留下一项永远用不到的调色板条目
-      if (store.registry.blockByName(name) === undefined) throw new Error(t('desktop.edit.unknownBlock', { name }))
-      if (!store.contains(pos)) throw new Error(t('desktop.edit.outsidePlace'))
+      if (store.registry.blockByName(name) === undefined) {
+        throw new StudioError('desktop.edit.unknownBlock', t('desktop.edit.unknownBlock', { name }))
+      }
+      if (!store.contains(pos)) throw new StudioError('desktop.edit.outsidePlace', t('desktop.edit.outsidePlace'))
       this.session.applyEdit('place_block', { pos: request.pos, block: name }, () =>
         store.write((emit) => emit(pos.x, pos.y, pos.z), store.palette.indexOf(name), { confirm: true }),
       )
@@ -1528,7 +1548,7 @@ export class StudioService {
   ): { files: Array<{ name: string; bytes: Uint8Array }>; summary: string } {
     const store = this.session.store
     const bounds = store.contentBounds()
-    if (bounds === undefined) throw new Error(t('desktop.world.emptyExport'))
+    if (bounds === undefined) throw new StudioError('desktop.world.emptyExport', t('desktop.world.emptyExport'))
     const size: [number, number, number] = [
       bounds.max.x - bounds.min.x + 1,
       bounds.max.y - bounds.min.y + 1,

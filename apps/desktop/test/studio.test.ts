@@ -13,6 +13,21 @@ import type { StudioEvent } from '../src/main/services/chat.js'
 // 用确定性兜底配色，跳过 352MB 资源包的加载
 const makeStudio = (): StudioService => new StudioService({ plain: true })
 
+/**
+ * 跑一个应当抛错的调用，把**错误对象**拿回来。
+ *
+ * 用它而不是 `toThrow(/一句话/)`：服务层在错误上挂了**稳定的 code**，
+ * 于是"为什么被拒绝"可以按 code 断言，**与界面语言无关**。
+ */
+function caught(fn: () => unknown): Error & { code?: string; codes?: string[] } {
+  try {
+    fn()
+  } catch (error) {
+    return error as Error & { code?: string; codes?: string[] }
+  }
+  throw new Error('本该抛错，但没有抛')
+}
+
 let workspace: string
 beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), 'architect-studio-'))
@@ -357,8 +372,12 @@ describe('StudioService：撤销 / 重做', () => {
     const notice = events
       .map((event) => (event.type === 'state' ? (event.state as { notice?: string }).notice : undefined))
       .find((value) => value !== undefined)
-    expect(notice).toContain('历史版本')
-    expect(notice).toContain('2 步')
+    // 提示**发出去了**（一次性机制归服务层管）；它**说了什么**归文案表管，
+    // 所以这里只断言它描述的那个事实——落后 2 步——用的是结构化状态，不碰语言。
+    expect(notice).toBeDefined()
+    const state = studio.state()
+    expect(state.behindTip).toBe(true)
+    expect(state.totalOps - state.revision).toBe(2)
   })
 
   it('回到最新之后那道闸放开（接下来卡在"还没选模型"上是另一回事）', () => {
@@ -368,7 +387,7 @@ describe('StudioService：撤销 / 重做', () => {
     studio.seekLatest()
     expect(studio.state().behindTip).toBe(false)
     // 过了历史那道闸才会走到 ChatController 的配置检查，报的是模型没选而不是历史版本
-    expect(() => studio.send('再高一点')).toThrow(/还没选定模型/)
+    expect(caught(() => studio.send('再高一点')).codes).toContain('desktop.chatBlocking.needModel')
   })
 })
 
@@ -437,7 +456,8 @@ describe('StudioService：切片', () => {
       volume: { min: { x: 0, y: 0, z: 0 }, max: { x: 127, y: 63, z: 127 } },
     })
     const text = studio.slice({ axis: 'y', index: 0 })
-    expect(text).toContain('无法渲染切片')
+    // core 抛出来的那句话与语言无关，拿它就够证明走的确实是"太大"这条路径；
+    // 外面那层本地化的前缀归文案表管，不在这里断
     expect(text).toContain('exceeding the limit')
   })
 })
@@ -499,16 +519,23 @@ describe('StudioService：保存与打开', () => {
 })
 
 describe('StudioService：measureText', () => {
-  it('空世界给明确说明', () => {
-    expect(makeStudio().measureText()).toContain('空')
+  it('空世界：结构化数据里就是"没有包围盒、零方块"', () => {
+    const studio = makeStudio()
+    const stats = measure(studio.agentSession.store)
+    expect(stats.bounds).toBeUndefined()
+    expect(stats.blocks).toBe(0)
+    // 那句话仍然要有内容，但不拿语言断它具体说了什么
+    expect(studio.measureText().length).toBeGreaterThan(0)
   })
 
-  it('有内容时报尺寸与方块数', () => {
+  it('有内容时报出尺寸与方块数（断的是数字，不是措辞）', () => {
     const studio = makeStudio()
     studio.demo()
-    const text = studio.measureText()
-    expect(text).toContain('尺寸')
-    expect(text).toContain('方块')
+    const stats = measure(studio.agentSession.store)
+    expect(stats.blocks).toBeGreaterThan(0)
+    expect(stats.size).toBeDefined()
+    // 尺寸是**数据**：那句话里必须真的带着它，与用哪种语言写无关
+    expect(studio.measureText()).toContain(`${stats.size!.x}×${stats.size!.y}×${stats.size!.z}`)
   })
 })
 
@@ -604,9 +631,9 @@ describe('StudioService：人手接管（点哪儿改哪儿）', () => {
     }
 
     // **世界高度之外仍然明确拒绝**（不是悄悄裁掉——那样用户只会觉得"点了没反应"）
-    expect(() =>
-      studio.editBlock({ pos: [2, 5000, 2], block: 'minecraft:stone', mode: 'place' }),
-    ).toThrow(/世界高度/)
+    expect(caught(() => studio.editBlock({ pos: [2, 5000, 2], block: 'minecraft:stone', mode: 'place' })).code).toBe(
+      'desktop.edit.outsidePlace',
+    )
   })
 
   it('挖空气、放认不出的方块名都被拒绝（后者会污染调色板）', () => {
@@ -614,10 +641,10 @@ describe('StudioService：人手接管（点哪儿改哪儿）', () => {
     studio.demo()
     const empty: [number, number, number] = [2, 2, 2]
     expect(studio.agentSession.store.isAir({ x: 2, y: 2, z: 2 })).toBe(true)
-    expect(() => studio.editBlock({ pos: empty, mode: 'break' })).toThrow(/本来就是空/)
-    expect(() => studio.editBlock({ pos: [2, 2, 2], block: 'minecraft:not_a_block', mode: 'place' })).toThrow(
-      /认不出/,
-    )
+    expect(caught(() => studio.editBlock({ pos: empty, mode: 'break' })).code).toBe('desktop.edit.alreadyAir')
+    expect(
+      caught(() => studio.editBlock({ pos: [2, 2, 2], block: 'minecraft:not_a_block', mode: 'place' })).code,
+    ).toBe('desktop.edit.unknownBlock')
     // 认不出的名字**不能**被悄悄追加进调色板：`palette.indexOf` 是"没有就建一个"
     expect(studio.agentSession.store.palette.strings().some((item) => item.includes('not_a_block'))).toBe(false)
   })
@@ -625,7 +652,9 @@ describe('StudioService：人手接管（点哪儿改哪儿）', () => {
   it('还没选方块时拒绝放置', () => {
     const studio = makeStudio()
     studio.demo()
-    expect(() => studio.editBlock({ pos: [2, 2, 2], mode: 'place' })).toThrow(/还没选方块/)
+    expect(caught(() => studio.editBlock({ pos: [2, 2, 2], mode: 'place' })).code).toBe(
+      'desktop.edit.noBlockSelected',
+    )
   })
 
   it('调色板搜得到，且**短名字排在前面**（搜 stone 时 stone 该在 stone_brick_stairs 前）', () => {

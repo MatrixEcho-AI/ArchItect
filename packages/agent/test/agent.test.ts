@@ -1,4 +1,5 @@
 import { measure } from '@architect/core'
+import { initI18n } from '@architect/i18n'
 import type { Bounds } from '@architect/core'
 import { openProject, packProject } from '@architect/mcai'
 import { describe, expect, it } from 'vitest'
@@ -36,8 +37,16 @@ describe('System Prompt', () => {
     expect(prompt).toContain('NEVER guess coordinates from a screenshot')
   })
 
-  it('要求对用户说中文，但工具参数保持 ASCII', () => {
-    expect(buildSystemPrompt(base)).toContain('Reply to the user in Chinese')
+  it('**回话语言跟界面语言走**，工具参数保持 ASCII', () => {
+    initI18n({ locale: 'zh-CN' })
+    const zh = buildSystemPrompt(base)
+    expect(zh).toContain('Reply to the user in Chinese')
+    expect(zh).toContain('Keep tool arguments and coordinates in ASCII')
+
+    initI18n({ locale: 'en-US' })
+    const en = buildSystemPrompt(base)
+    expect(en).toContain('Reply to the user in English')
+    expect(en).toContain('Keep tool arguments and coordinates in ASCII')
   })
 
   it('白名单非空时列出限制', () => {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button, Flex, Input, InputNumber, Modal, Select, Typography } from 'antd'
 import { DownOutlined, PlusOutlined, RightOutlined } from '@ant-design/icons'
-import { t } from '@architect/i18n'
+import { getLocale, normalizeLocale, t } from '@architect/i18n'
 
 import type { ProviderView, SettingsView } from '../types.js'
 import type { Locale } from '@architect/i18n'
@@ -76,7 +76,8 @@ interface CostRow {
 export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
   const { settings } = props
   const [keyPlain, setKeyPlain] = useState('')
-  const [locale, setLocale] = useState<Locale>('zh-CN')
+  // 与 `main.tsx` 同一个理由：这一帧还没读到设置，先跟着系统走，别闪一下错的语言
+  const [locale, setLocale] = useState<Locale>(normalizeLocale(navigator.language) ?? getLocale())
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   /** 表单里可编辑的那几项。其余（capabilities / compat / kind）保存时从 `editing` 原样带上。 */

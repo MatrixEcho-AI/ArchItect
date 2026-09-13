@@ -366,8 +366,16 @@ export { scrubSecrets } from '../redact.js'
 /** 恰好是密钥的长相就拒绝——防止用户把 `sk-...` 粘进本该放引用的字段。 */
 const LOOKS_LIKE_SECRET = /^(sk-|sk_|Bearer\s|eyJ)[A-Za-z0-9._-]{8,}$/
 
+/** 一条配置问题。`code` 是**机器可判**的那一份（文案表里的键），`message` 给人看。 */
 export interface ConfigProblem {
   field: string
+  /**
+   * 稳定的标识，**就是文案表里那条 `agent.config.problem.*` 的键**。
+   *
+   * 有它，下游（`ChatController` 的门禁提示）就不必把一句会跟语言变的句子
+   * 当成身份来用——测试与诊断按 `code` 断言，与界面语言无关。
+   */
+  code: string
   message: string
 }
 
@@ -375,23 +383,20 @@ export interface ConfigProblem {
 export function validateProviderConfig(config: ProviderConfig): ConfigProblem[] {
   const problems: ConfigProblem[] = []
   if (config.baseURL.trim().length === 0) {
-    problems.push({ field: 'baseURL', message: t('agent.config.problem.baseUrlEmpty') })
+    problems.push({ field: 'baseURL', code: 'agent.config.problem.baseUrlEmpty', message: t('agent.config.problem.baseUrlEmpty') })
   } else if (!/^https?:\/\//i.test(config.baseURL.trim())) {
-    problems.push({ field: 'baseURL', message: t('agent.config.problem.baseUrlScheme') })
+    problems.push({ field: 'baseURL', code: 'agent.config.problem.baseUrlScheme', message: t('agent.config.problem.baseUrlScheme') })
   }
   if (LOOKS_LIKE_SECRET.test(config.apiKeyRef.trim())) {
-    problems.push({
-      field: 'apiKeyRef',
-      message: t('agent.config.problem.apiKeyRefSecret'),
-    })
+    problems.push({ field: 'apiKeyRef', code: 'agent.config.problem.apiKeyRefSecret', message: t('agent.config.problem.apiKeyRefSecret') })
   } else if (config.apiKeyRef.length > 0 && !/^(env|safe):/.test(config.apiKeyRef)) {
-    problems.push({ field: 'apiKeyRef', message: t('agent.config.problem.apiKeyRefFormat') })
+    problems.push({ field: 'apiKeyRef', code: 'agent.config.problem.apiKeyRefFormat', message: t('agent.config.problem.apiKeyRefFormat') })
   }
   if (PROVIDER_PRESETS[config.preset].requiresApiKey && config.apiKeyRef.trim().length === 0) {
-    problems.push({ field: 'apiKeyRef', message: t('agent.config.problem.apiKeyRequired') })
+    problems.push({ field: 'apiKeyRef', code: 'agent.config.problem.apiKeyRequired', message: t('agent.config.problem.apiKeyRequired') })
   }
   if (config.kind === 'anthropic') {
-    problems.push({ field: 'kind', message: t('agent.config.problem.anthropicUnsupported') })
+    problems.push({ field: 'kind', code: 'agent.config.problem.anthropicUnsupported', message: t('agent.config.problem.anthropicUnsupported') })
   }
   return problems
 }

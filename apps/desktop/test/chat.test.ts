@@ -218,7 +218,8 @@ describe('ChatController：配置门禁', () => {
     }))
     const view = controller.chatView()
     expect(view.ready).toBe(false)
-    expect(view.blocking.join(' ')).toContain('模型')
+    // 断**键**，不断渲染后的句子——句子会跟界面语言变
+    expect(view.blocking.map((item) => item.key)).toContain('desktop.chatBlocking.needModel')
   })
 
   it('缺密钥时明确说清是哪个环境变量', () => {
@@ -230,7 +231,11 @@ describe('ChatController：配置门禁', () => {
     }))
     const view = controller.chatView()
     expect(view.ready).toBe(false)
-    expect(view.blocking.join(' ')).toContain('ARCHITECT_API_KEY_NOPE')
+    // 键 + 参数分开断言：环境变量名是**数据**，不是文案
+    expect(view.blocking).toContainEqual({
+      key: 'desktop.chatBlocking.envKeyMissing',
+      params: { name: 'ARCHITECT_API_KEY_NOPE' },
+    })
   })
 
   it('配置齐备时 ready=true 且没有 blocking', () => {
@@ -407,7 +412,7 @@ describe('ChatController：设置的增删改', () => {
       usage: { in: 0, out: 0 },
     }))
     const view = controller.saveProvider({ ...deepseekWithKey().providers[0]!, apiKeyRef: '' }, 'sk-nope')
-    expect(view.issues.some((i) => i.message.includes('钥匙串不可用'))).toBe(true)
+    expect(view.issues.some((i) => i.code === 'desktop.chatBlocking.keychainUnavailable')).toBe(true)
     expect(view.providers.find((p) => p.id === 'DeepSeek')?.apiKeyRef).toBe('')
   })
 

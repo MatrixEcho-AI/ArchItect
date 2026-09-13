@@ -5,7 +5,7 @@ import { initI18n, resolveLocale, setLocale, t } from '@architect/i18n'
 import type { LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
 import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
 
-import { VIEW_PRESETS } from '@architect/render'
+import { VIEW_PRESETS, decodePng } from '@architect/render'
 // 内置资源包（真实纹理）。**不走 `@architect/render` 的默认导出**：`minecraft-assets`
 // 是 352 MB 的运行时依赖，esbuild 必须把它标成 external，所以只有主进程这个入口
 // 该知道怎么引它（见 packages/render/src/assets.ts）。
@@ -582,6 +582,10 @@ function registerIpc(): void {
                   detail: error instanceof Error ? error.message : String(error),
                 },
               ])
+        // 「采集视口」从**主进程侧**验，不在注入脚本里点按钮——那点法会让主进程往
+        // 同一个渲染进程再发一次 executeJavaScript（截图通道），而同一 frame 的
+        // 脚本执行是串行的：两边互等，死锁（第一版就这么写的，症状是"渲染进程没有回报"）。
+        checks.push(await checkGrabViewport())
         let failed = !result.ok
         for (const check of checks) {
           process.stdout.write(`[gui-smoke] ${check.ok ? '✓' : '✗'} ${check.name}: ${check.detail}\n`)
@@ -650,6 +654,62 @@ interface GuiCheck {
   name: string
   ok: boolean
   detail: string
+}
+
+/**
+ * **采集视口要真的采到内容**（空图事故的端到端闸门）。
+ *
+ * 那次事故的形状：点「拍照」出来的图只剩叠加层——视口相机（`viewportCamera()`）
+ * 不带 width/height，`applyCamera` 算出的投影矩阵整个 NaN，GPU 一个三角形都不画，
+ * 还没有任何报错。模型的 `screenshot` 工具不受影响（`cameraForShot` 给完整 spec），
+ * 所以只有用户点「拍照」才踩得到。
+ *
+ * 这里给 `grabViewport` 一份**故意不带 width/height 的透视相机**——正是那次事故的
+ * 输入形状。它画出内容，说明汇合点没再把尺寸读丢。
+ *
+ * 判据不是"出了 PNG"——空图也是一张合法 PNG——而是**数颜色**：真实建筑的截图
+ * 有几百种颜色，空图加一层标尺只有个位数。
+ */
+async function checkGrabViewport(): Promise<GuiCheck> {
+  const name = 'grab-viewport-content'
+  try {
+    const shot = await studio.grabViewport({
+      // 与渲染进程 `viewportCamera()` 同一份形状（无 width/height）。`as never`
+      // 与 IPC 入口处的 cast 同一性质：类型上说它该有尺寸，而运行时它就是没有。
+      camera: {
+        azimuth: 45,
+        elevation: 30,
+        roll: 0,
+        scale: 0,
+        perspective: { eye: [24, 18, 24], fov: 70 },
+      } as never,
+      view: 'free',
+      width: 640,
+      height: 480,
+    })
+    const image = decodePng(shot.png)
+    /**
+     * 判据不是"出了 PNG"——空图也合法——而是**画面里真有东西**：
+     * 与底色不同的像素占比。空图只有叠加层（说明文字 + 标尺线 + 坐标轴，
+     * 实测 <1%）；一座真实建筑在 640×480 里占一大块（实测约 25%）。
+     * 底色读右下角——左上角有说明文字，那里读不准。
+     */
+    const w = image.width
+    const bgIndex = (image.height - 2) * w * 4 + (w - 2) * 4
+    const bg = `${image.data[bgIndex]},${image.data[bgIndex + 1]},${image.data[bgIndex + 2]}`
+    let nonBg = 0
+    for (let i = 0; i < image.data.length; i += 4) {
+      if (`${image.data[i]},${image.data[i + 1]},${image.data[i + 2]}` !== bg) nonBg++
+    }
+    const ratio = nonBg / (w * image.height)
+    return {
+      name,
+      ok: ratio > 0.03,
+      detail: `${image.width}x${image.height} · 非底像素 ${(ratio * 100).toFixed(1)}%（<3% 就是空图）`,
+    }
+  } catch (error) {
+    return { name, ok: false, detail: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /**

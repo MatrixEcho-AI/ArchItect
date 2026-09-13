@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { measure } from '@architect/core'
 import { unpackProject } from '@architect/mcai'
+import { decodePng } from '@architect/render'
 import type { ShotInput } from '@architect/agent'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
@@ -917,5 +918,77 @@ describe('左栏的实体清单', () => {
       z: 0.5,
       yaw: 0,
     })
+  })
+})
+
+/**
+ * **采集视口（grabViewport）**：那次"拍照是空图"事故的闸门。
+ *
+ * 事故的形状：渲染进程的活相机（`viewportCamera()`）眼位是**数组**、
+ * **不带 width/height**，原样透传给下游——`eye.x` 读出 undefined、
+ * aspect 算出 NaN，投影矩阵整个 NaN，一张只剩叠加层的空图，没有任何报错。
+ * 模型截图不受影响（`cameraForShot` 给完整 spec），所以只有「拍照」踩得到。
+ *
+ * 这层测试跑在**软件光栅路径**上（plain 会话不走 GPU）——它与 GPU 共用同一份
+ * CameraSpec 语义，空图在两条路径上的成因是同一个，所以这里拦得住。
+ */
+describe('StudioService：采集视口', () => {
+  /** 渲染进程 `viewportCamera()` 的形状：数组眼位、没有 width/height。 */
+  const liveCamera = {
+    azimuth: 45,
+    elevation: 30,
+    roll: 0,
+    scale: 0,
+    perspective: { eye: [24, 18, 24] as [number, number, number], fov: 70 },
+  }
+
+  it('**事故形状的相机**也能采到内容（不只是一张空图）', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    const shot = await studio.grabViewport({
+      camera: liveCamera as never,
+      view: 'free',
+      width: 640,
+      height: 480,
+    })
+    const image = decodePng(shot.png)
+
+    // 判据不是"出了 PNG"——空图也合法——而是**画面里真有东西**。
+    // 数与底色不同的像素：空图只有叠加层（说明文字 + 坐标轴，远不到 1%），
+    // 一座真实建筑在 640×480 里占一大块。
+    const bg = `${image.data[0]},${image.data[1]},${image.data[2]}`
+    let nonBg = 0
+    const colors = new Set<number>()
+    for (let i = 0; i < image.data.length; i += 4) {
+      if (`${image.data[i]},${image.data[i + 1]},${image.data[i + 2]}` !== bg) nonBg++
+      colors.add(((image.data[i]! << 16) | (image.data[i + 1]! << 8) | image.data[i + 2]!) >>> 0)
+    }
+    const total = image.width * image.height
+    expect(nonBg / total, `采到的几乎是空图：非底 ${nonBg}/${total}、颜色 ${colors.size} 种`).toBeGreaterThan(0.05)
+  })
+
+  it('数组眼位与对象眼位采到的是**逐字节同一张图**（归一是精确的，不是近似）', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    const fromLive = await studio.grabViewport({
+      camera: liveCamera as never,
+      view: 'free',
+      width: 640,
+      height: 480,
+    })
+    // 同机位、但给的是 CameraSpec 形状（对象眼位）——归一之后两者必须逐像素一致
+    const fromSpec = await studio.grabViewport({
+      camera: {
+        azimuth: 45,
+        elevation: 30,
+        roll: 0,
+        scale: 0,
+        perspective: { eye: { x: 24, y: 18, z: 24 }, fov: 70 },
+      } as never,
+      view: 'free',
+      width: 640,
+      height: 480,
+    })
+    expect(Buffer.from(fromLive.png).equals(Buffer.from(fromSpec.png))).toBe(true)
   })
 })

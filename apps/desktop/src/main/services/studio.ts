@@ -172,6 +172,42 @@ function baseNameOf(path: string | undefined): string {
   return parts[parts.length - 1] ?? path
 }
 
+/**
+ * 「采集当前视口」的相机归一：渲染进程的 `ViewportCamera` → 完整的 `CameraSpec`。
+ *
+ * 两种形状的差别恰好都长在透视上：
+ *
+ * | | `ViewportCamera`（渲染进程的活相机） | `CameraSpec`（渲染包认的） |
+ * |---|---|---|
+ * | 眼位 | **数组** `[x,y,z]` | 对象 `{x,y,z}` |
+ * | width/height | **没有**（尺寸属于请求） | 有 |
+ *
+ * 原样混用的下场是静默的：`applyCamera` 读 `eye.x` 得 undefined（数组没有 `x`），
+ * aspect 拿 `spec.width / spec.height` 得 NaN——投影矩阵整个 NaN，一个三角形
+ * 都不画，一张只剩叠加层的空图，**没有任何报错**。那次"拍照是空图"的事故
+ * 就是这个形状，而且 GPU 与软件两条渲染路径同样中招。
+ *
+ * 归一只许发生在这一个函数里。别指望调用方填——两个调用方各自的形状都"很对"，
+ * 错只会在汇合处出现。
+ */
+function normalizeGrabCamera(camera: CameraSpec, width: number, height: number): CameraSpec {
+  const perspective = camera.perspective
+  if (perspective !== undefined) {
+    // 数组眼位是「采集当前视口」来的；对象眼位（`cameraForShot` 的模型路径）原样
+    const rawEye: unknown = perspective.eye
+    if (Array.isArray(rawEye)) {
+      const [x, y, z] = rawEye as [number, number, number]
+      return {
+        ...camera,
+        perspective: { eye: { x, y, z }, fov: perspective.fov },
+        width,
+        height,
+      }
+    }
+  }
+  return { ...camera, width, height }
+}
+
 export interface ShootRequest {
   view: string
   width: number
@@ -1157,10 +1193,23 @@ export class StudioService {
     const bounds = stats.bounds
     const last = this.session.log.at(this.session.log.length - 1)
     const highlight = last?.patch.bounds()
+    /**
+     * **先把渲染进程那份"活的"相机归一成完整的 `CameraSpec`。**
+     *
+     * 渲染进程的 `viewportCamera()` 是两处不同：眼位是**数组** `[x,y,z]`
+     * （`ViewportCamera` 的形状，见 `viewport-shell.ts`），而且**不带 width/height**
+     * （那是输出尺寸，属于这次请求）。原样透传的话，下游两个读法一起炸：
+     * `applyCamera` 读 `eye.x` 得到 undefined（数组没有 `x`），
+     * aspect 用 `spec.width / spec.height` 得到 NaN——投影矩阵整个 NaN，
+     * 一个三角形都不画，出来一张只剩叠加层的空图，而且**没有任何报错**。
+     * 那次"拍照是空图"的事故就是这个形状（GPU 与软件两条路径同样中招）。
+     *
+     * 模型的 `screenshot` 不受影响：`cameraForShot` 给的是完整 spec。
+     * 所以**只有用户点「拍照」踩得到**——这正是它活了这么久的原因。
+     */
+    const camera = normalizeGrabCamera(request.camera, request.width, request.height)
     const image = await this.session.ctx.shoot({
-      // **原样透传**：渲染进程给的就是它此刻用的那份相机（可能带 perspective），
-      // 所以采到的画面和用户屏幕上的那一帧同源。
-      camera: request.camera,
+      camera,
       view: request.view,
       width: request.width,
       height: request.height,

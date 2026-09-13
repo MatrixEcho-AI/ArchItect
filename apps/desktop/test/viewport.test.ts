@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { SoftwareViewport } from '../src/renderer/viewport.js'
 import type { SoftwareFrame, SoftwareFrameRequest, ViewportCamera } from '../src/renderer/viewport.js'
@@ -243,5 +246,39 @@ describe('SoftwareViewport：参数传递', () => {
     host.viewport.render(VIEW)
     await settle()
     expect(host.requests).toHaveLength(0)
+  })
+})
+
+/**
+ * **GPU 离屏截图必须把本次请求的尺寸合进相机 spec**（采集视口空图事故的闸门）。
+ *
+ * 那次事故的形状：`capture()` 把 `request.camera` 原样喂给 `applyCamera`，而
+ * 「采集当前视口」给的相机是 `viewportCamera()`——**不带 width/height**。
+ * 透视分支的 `aspect = spec.width / spec.height` 于是是 NaN，整个投影矩阵全是
+ * NaN，GPU 一个三角形都不画：出来一张只有叠加层的空图，没有任何报错。
+ * 模型的 `screenshot` 工具不受影响（`cameraForShot` 给的是完整 spec），
+ * 所以这条 bug 只有用户点「拍照」才踩得到——自动化里没有一条点过它。
+ *
+ * 为什么这是源码断言而不是行为测试：GPU 路径要真 WebGL 上下文，Node 里
+ * 构造不出 `SceneViewport`。行为那一半在 gui-smoke 里（真窗口点「拍照」，
+ * 断言暂存区真的出图）。这里管的是"那个汇合点不能被改回去"。
+ */
+describe('GPU 离屏截图的相机汇合点', () => {
+  const source = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'src/renderer/viewport.ts'),
+    'utf8',
+  )
+  // 只看 capture 方法体
+  const start = source.indexOf('capture(request: CaptureRequest)')
+  expect(start, '找不到 capture(request: CaptureRequest)——它被改名了吗？').toBeGreaterThan(-1)
+  const body = source.slice(start, source.indexOf('return out.toDataURL', start))
+
+  it('applyCamera 拿到的是**合了尺寸的 spec**，不是 request.camera 本体', () => {
+    expect(body, 'capture() 又把 request.camera 原样喂给 applyCamera 了').not.toContain(
+      'applyCamera(request.camera)',
+    )
+    expect(body, '找不到"把 width/height 合进相机"的那一步').toMatch(
+      /\.\.\.request\.camera,\s*width,\s*height/,
+    )
   })
 })

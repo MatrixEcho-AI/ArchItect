@@ -453,8 +453,14 @@ export class Viewport implements SceneViewport {
       depthBuffer: true,
     })
 
-    // 相机规格是主进程解算好的：连 width/height 都带着，所以投影矩阵直接用它的
-    this.applyCamera(request.camera)
+    // 进来的相机**不一定带着 width/height**：「采集当前视口」那条路给的是
+    // `viewportCamera()`——一份"活的"相机，尺寸属于这次请求，不属于相机。
+    // `applyCamera` 要用这两个数算投影（透视的 aspect、正交的 halfW/halfH），
+    // 从相机对象上读不到就是 `undefined / undefined = NaN`——整个投影矩阵全是 NaN，
+    // GPU 一个三角形都不画，出来一张只剩叠加层的"空图"，而且**没有任何报错**。
+    // 那次事故的形状就是这样，所以尺寸在这里合进 spec，只有这一个地方允许它们汇合。
+    const spec: CameraSpec = { ...request.camera, width, height }
+    const basis = this.applyCamera(spec)
     this.renderer.setRenderTarget(target)
     this.renderer.render(this.scene, this.active)
 
@@ -496,7 +502,7 @@ export class Viewport implements SceneViewport {
     }
     const overlay = new OverlayCanvas(width, height)
     overlay.data.fill(0)
-    drawOverlays(overlay, request.camera, cameraBasis(request.camera), box, request.overlays)
+    drawOverlays(overlay, spec, basis, box, request.overlays)
     const layer = document.createElement('canvas')
     layer.width = width
     layer.height = height

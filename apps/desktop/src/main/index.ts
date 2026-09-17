@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 
 import { initI18n, resolveLocale, setLocale, t } from '@architect/i18n'
 import type { LlmImage, PresetKey, ProviderConfig, ProviderSettings, ShotInput } from '@architect/agent'
-import { app, BrowserWindow, dialog as desktopDialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog as desktopDialog, ipcMain, Menu, safeStorage, shell } from 'electron'
 
 import { VIEW_PRESETS, decodePng } from '@architect/render'
 // 内置资源包（真实纹理）。**不走 `@architect/render` 的默认导出**：`minecraft-assets`
@@ -257,6 +257,29 @@ function toLlmImage(input: ChatImageInput): LlmImage {
   const comma = input.dataUrl.indexOf(',')
   const base64 = comma >= 0 ? input.dataUrl.slice(comma + 1) : input.dataUrl
   return { png: new Uint8Array(Buffer.from(base64, 'base64')), mimeType: input.mimeType }
+}
+
+/**
+ * 应用菜单：**不要 Electron 默认那套**。
+ *
+ * 非 macOS 直接置空——那里的菜单栏挂在窗口上，而默认菜单列的东西这个程序一样都
+ * 用不上（File / View / Help 里是 reload、devtools、"Learn More"），真正的动作
+ * 全在工具栏里。`setApplicationMenu(null)` 会把整条菜单栏从窗口上拿掉。
+ *
+ * macOS **不能照做**。它的菜单栏是屏幕顶部那条、由系统托管，而且 Electron 的
+ * `Cmd+C` / `Cmd+V` / `Cmd+Z` / `Cmd+Q` 这些标准快捷键是**靠菜单 role 实现的**
+ * ——把菜单置空，聊天输入框里的复制粘贴会跟着一起失效（那正是本程序重输入的地方，
+ * 界面上还专门接了粘贴事件）。所以这里只留必要的三组：应用、编辑、窗口，让快捷键
+ * 照常工作，同时又不再有默认那套 File / View / Help。
+ */
+function installApplicationMenu(): void {
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null)
+    return
+  }
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]),
+  )
 }
 
 function createWindow(): void {
@@ -1748,6 +1771,8 @@ function seedMarkdownSample(): void {
 
 void app.whenReady().then(async () => {
   if (smokeIndex >= 0) return
+  // 菜单是**应用级**的，设一次就够（`activate` 之后新建的窗口也吃这一份）
+  installApplicationMenu()
   initStudio()
   /**
    * `--demo`：启动时先把界面填上东西，便于抓图/演示。

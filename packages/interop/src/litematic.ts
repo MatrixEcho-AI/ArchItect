@@ -2,6 +2,7 @@ import { DEFAULT_HARD_LIMIT } from '@architect/core'
 import type { Bounds, WorldStore } from '@architect/core'
 
 import { collectSparse, exportBoundsOf } from './collect.js'
+import type { InteropProblem } from './collect.js'
 import { compoundFromJson, compoundToJson } from './json-nbt.js'
 import {
   asCompound,
@@ -409,7 +410,7 @@ export function exportLitematic(store: WorldStore, options: ExportLitematicOptio
 export function exportLitematicDetailed(
   store: WorldStore,
   options: ExportLitematicOptions = {},
-): { bytes: Uint8Array; size: [number, number, number]; entities: number; blockEntities: number; problems: string[] } {
+): { bytes: Uint8Array; size: [number, number, number]; entities: number; blockEntities: number; problems: InteropProblem[] } {
   const region = options.region ?? exportBoundsOf(store)
   if (region === undefined) throw new Error('世界是空的，没有可导出的内容')
   const size: [number, number, number] = [

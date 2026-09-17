@@ -243,6 +243,23 @@ export const zhCN = {
     NETWORK: '网络请求失败：{{detail}}',
     AUTH: '鉴权失败，检查 API Key',
   },
+  /**
+   * 互操作导出与存档截图自查的问题（`collectSparse` / `validateCaptures` 的产出）。
+   *
+   * `packages/*` 不依赖 i18n，那边产出的是 `{code, params}`；这句话在**显示层**
+   * 才拼出来（`localizeProblem`）。`detail` 是 json-nbt 那层的失败原因，与工具
+   * 错误里 `INVALID_ARGS` 的 detail 同一个口径：参数化的说明，不单独成键。
+   */
+  problem: {
+    entityExtra: '实体 {{id}}（{{type}}）：{{detail}}',
+    blockEntityExtra: '方块实体 {{kind}}（{{x}},{{y}},{{z}}）：{{detail}}',
+    captureShaMismatch: '截图 {{id}} 的 id 与 sha256 前缀不一致',
+    captureDuplicateId: '截图 {{id}} 在索引里出现了多次',
+    captureMissingFile: '截图 {{id}} 在索引里但没有对应文件',
+    captureSizeMismatch: '截图 {{id}} 的文件大小 {{bytes}} 与索引里的 {{listed}} 不一致',
+    captureOrphanFile: '截图 {{id}} 有文件但不在索引里',
+    captureBadEntryName: '截图条目名字不像内容寻址 id，已丢弃：{{path}}',
+  },
   cost: {
     cachedShare: '缓存命中 {{percent}}%',
     amount: '{{amount}} {{currency}}',
@@ -434,6 +451,7 @@ export const zhCN = {
       invalidSlice: '--slice 期望形如 y:3，收到 "{{raw}}"',
       benchUnknownTask: '没有叫 "{{id}}" 的黄金任务',
       fatal: '错误：{{message}}',
+      texturesMissing: '--textures 指向的路径里没有方块纹理：{{detail}}',
     },
     common: {
       yes: '是',
@@ -577,6 +595,13 @@ export const zhCN = {
     },
   },
   agent: {
+    /** 裁剪原因（`ContextPolicy.reason` 的 code 显示层）。看 `codes.ts` 的说明。 */
+    contextReason: {
+      keptByPromptCache: 'provider 有前缀缓存，裁剪会以全价重算它后面的 token',
+      capabilityUnknown: '没有 provider 能力信息，按“不裁剪”处理',
+      noPromptCache: 'provider 没有前缀缓存，旧 token 每个请求都要全价重付',
+      smallWindow: '上下文窗口只有 {{window}} token，不裁剪会直接放不下',
+    },
     config: {
       apiKeyMissing:
         '拿不到密钥：引用 {{ref}} 没有解析出值。环境变量引用需要先 export。',

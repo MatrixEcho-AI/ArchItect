@@ -236,6 +236,25 @@ export const enUS = {
     NETWORK: 'Network request failed: {{detail}}',
     AUTH: 'Authentication failed — check the API key',
   },
+  /**
+   * Problems from interop export and archive capture self-checks
+   * (produced by `collectSparse` / `validateCaptures`).
+   *
+   * `packages/*` does not depend on i18n, so they emit `{code, params}` and the
+   * sentence is assembled in the display layer (`localizeProblem`). `detail` is
+   * the json-nbt layer's failure reason — the same status as `INVALID_ARGS`'s
+   * detail in tool errors: a parametrised note, not a key of its own.
+   */
+  problem: {
+    entityExtra: 'entity {{id}} ({{type}}): {{detail}}',
+    blockEntityExtra: 'block entity {{kind}} ({{x}},{{y}},{{z}}): {{detail}}',
+    captureShaMismatch: 'screenshot {{id}}: name does not match its sha256 prefix',
+    captureDuplicateId: 'screenshot {{id}} appears in the index more than once',
+    captureMissingFile: 'screenshot {{id}} is in the index but has no file',
+    captureSizeMismatch: 'screenshot {{id}}: file size {{bytes}} does not match {{listed}} in the index',
+    captureOrphanFile: 'screenshot {{id}} has a file but is not in the index',
+    captureBadEntryName: 'screenshot entry name does not look like a content-addressed id; dropped: {{path}}',
+  },
   cost: {
     cachedShare: '{{percent}}% cached',
     amount: '{{amount}} {{currency}}',
@@ -415,6 +434,7 @@ export const enUS = {
       invalidSlice: '--slice expects something like y:3, got "{{raw}}"',
       benchUnknownTask: 'No golden task named "{{id}}"',
       fatal: 'Error: {{message}}',
+      texturesMissing: 'no block textures under the --textures path: {{detail}}',
     },
     common: {
       yes: 'yes',
@@ -560,6 +580,13 @@ export const enUS = {
     },
   },
   agent: {
+    /** Trim reasons (display layer for `ContextPolicy.reason` codes). See `codes.ts`. */
+    contextReason: {
+      keptByPromptCache: 'this provider keeps a prefix cache; trimming would bill everything after the cut at full price',
+      capabilityUnknown: 'provider capabilities are unknown, so nothing is trimmed',
+      noPromptCache: 'this provider has no prefix cache; dropped tokens are re-paid at full price on every request',
+      smallWindow: 'the context window is only {{window}} tokens; without trimming the request cannot fit',
+    },
     config: {
       apiKeyMissing:
         'Could not resolve the key: the reference {{ref}} returned no value. An environment reference needs exporting first.',

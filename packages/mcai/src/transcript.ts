@@ -44,9 +44,10 @@ export type TranscriptEvent =
    * 这一轮发出去的请求被**裁剪**过（无前缀缓存的 provider，见 plan §9.2 Regime B）。
    *
    * 必须进档案：事后看"模型为什么忘了前面那几步"，答案就在这里——
-   * 那些轮次根本没发出去。
+   * 那些轮次根本没发出去。`reason` 是**稳定的 code**（`.mcai` 是格式，跟着
+   * 界面语言漂移就错了）；句子由显示层从 code 拼出来（`localizeContextReason`）。
    */
-  | { type: 'context'; regime: string; droppedTurns: number; droppedImages: number; reason: string }
+  | { type: 'context'; regime: string; droppedTurns: number; droppedImages: number; reason: { code: string; window?: number } }
   /** 预算触顶：会话被主动刹住，不是故障。 */
   | { type: 'budget'; reason: string; detail: string; usage: { in: number; out: number; cachedIn?: number }; usd?: number }
   | { type: 'stop'; reason: string }
@@ -255,13 +256,14 @@ export class TranscriptRecorder {
         return
       case 'context':
         // 裁剪也进档案：事后看"模型为什么忘了前面那几步"，答案就在这里——
-        // 那些轮次根本没发出去（不是模型没看）
+        // 那些轮次根本没发出去（不是模型没看）。reason 存稳定的 code：
+        // 档案是格式，跟着界面语言漂移就错了。
         this.messages.push({
           id: this.nextId++,
           role: 'assistant',
           text:
             `[CONTEXT] request trimmed (${event.regime}): ${event.droppedTurns} earlier turn(s)` +
-            `${event.droppedImages > 0 ? ` and ${event.droppedImages} screenshot(s)` : ''} dropped — ${event.reason}`,
+            `${event.droppedImages > 0 ? ` and ${event.droppedImages} screenshot(s)` : ''} dropped — reason: ${event.reason.code}`,
           ts: this.now(),
           note: 'context',
         })

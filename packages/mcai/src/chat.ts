@@ -208,24 +208,39 @@ export function makeCaptureRef(
   }
 }
 
+/**
+ * 存档截图自查的一条问题。**本体是稳定的 code + 参数，不是一句话**（与 interop 的
+ * `InteropProblem` 同一个形状、同一个理由）：显示层才翻译，`.mcai` 与测试只看 code。
+ */
+export interface CaptureProblem {
+  code:
+    | 'CAPTURE_SHA_MISMATCH'
+    | 'CAPTURE_DUPLICATE_ID'
+    | 'CAPTURE_MISSING_FILE'
+    | 'CAPTURE_SIZE_MISMATCH'
+    | 'CAPTURE_ORPHAN_FILE'
+    | 'CAPTURE_BAD_ENTRY_NAME'
+  params?: Record<string, string | number>
+}
+
 /** 校验索引与文件对得上。**报出来而不是静默忽略**——少一张图是能看见的问题。 */
-export function validateCaptures(bundle: CaptureBundle): string[] {
-  const problems: string[] = []
+export function validateCaptures(bundle: CaptureBundle): CaptureProblem[] {
+  const problems: CaptureProblem[] = []
   const seen = new Set<string>()
   for (const ref of bundle.refs) {
     if (ref.id !== ref.sha256.slice(0, 16)) {
-      problems.push(`截图 ${ref.id} 的 id 与 sha256 前缀不一致`)
+      problems.push({ code: 'CAPTURE_SHA_MISMATCH', params: { id: ref.id } })
     }
-    if (seen.has(ref.id)) problems.push(`截图 ${ref.id} 在索引里出现了多次`)
+    if (seen.has(ref.id)) problems.push({ code: 'CAPTURE_DUPLICATE_ID', params: { id: ref.id } })
     seen.add(ref.id)
     const bytes = bundle.files.get(ref.id)
-    if (bytes === undefined) problems.push(`截图 ${ref.id} 在索引里但没有对应文件`)
+    if (bytes === undefined) problems.push({ code: 'CAPTURE_MISSING_FILE', params: { id: ref.id } })
     else if (bytes.length !== ref.bytes) {
-      problems.push(`截图 ${ref.id} 的文件大小 ${bytes.length} 与索引里的 ${ref.bytes} 不一致`)
+      problems.push({ code: 'CAPTURE_SIZE_MISMATCH', params: { id: ref.id, bytes: bytes.length, listed: ref.bytes } })
     }
   }
   for (const id of bundle.files.keys()) {
-    if (!seen.has(id)) problems.push(`截图 ${id} 有文件但不在索引里`)
+    if (!seen.has(id)) problems.push({ code: 'CAPTURE_ORPHAN_FILE', params: { id } })
   }
   return problems
 }
@@ -254,9 +269,9 @@ export function captureEntryPaths(bundle: CaptureBundle): string[] {
 export function collectCaptures(
   entries: Record<string, Uint8Array>,
   refs: readonly CaptureRef[],
-): { bundle: CaptureBundle; problems: string[] } {
+): { bundle: CaptureBundle; problems: CaptureProblem[] } {
   const files = new Map<string, Uint8Array>()
-  const problems: string[] = []
+  const problems: CaptureProblem[] = []
   for (const [path, data] of Object.entries(entries)) {
     if (!path.startsWith('captures/') || !path.endsWith('.png')) continue
     const id = path.slice('captures/'.length, -'.png'.length)
@@ -265,7 +280,7 @@ export function collectCaptures(
     // 条目名原样交给下一个解压这份工程的人（打开 → 另存 → 分享，恶意条目就这么
     // 传下去）。真正的 id 是 sha256 的前缀，所以只认十六进制。
     if (!/^[0-9a-f]{8,64}$/.test(id)) {
-      problems.push(`截图条目名不像内容寻址 id，已丢弃：${path}`)
+      problems.push({ code: 'CAPTURE_BAD_ENTRY_NAME', params: { path } })
       continue
     }
     files.set(id, data)

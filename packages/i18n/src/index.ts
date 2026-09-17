@@ -8,6 +8,8 @@ export { zhCN, enUS }
 export type { MessageKey, Messages, Resources } from './locales/zh-CN.js'
 export { localizeToolError, toolErrorParams } from './errors.js'
 export type { LocalizableToolError } from './errors.js'
+export { localizeContextReason, localizeProblem } from './codes.js'
+export type { LocalizableContextReason, LocalizableProblem } from './codes.js'
 
 export const SUPPORTED_LOCALES = ['zh-CN', 'en-US'] as const
 export type Locale = (typeof SUPPORTED_LOCALES)[number]

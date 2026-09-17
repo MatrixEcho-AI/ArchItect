@@ -67,7 +67,7 @@ import {
   readLitematic,
   litematicToSchematicData,
 } from '@architect/interop'
-import { initI18n, t } from '@architect/i18n'
+import { initI18n, localizeContextReason, localizeProblem, t } from '@architect/i18n'
 import { openProject, packProject, TranscriptRecorder } from '@architect/mcai'
 import type { McaiProject } from '@architect/mcai'
 
@@ -797,7 +797,7 @@ async function cmdBuild(goal: string, inv: Invocation): Promise<number> {
             out(t('cli.build.turn', { turn: event.turn }))
             break
           case 'context':
-            out(t('cli.build.context', { turns: event.droppedTurns, images: event.droppedImages, reason: event.reason }))
+            out(t('cli.build.context', { turns: event.droppedTurns, images: event.droppedImages, reason: localizeContextReason(event.reason) }))
             break
           case 'assistant':
             out(t('cli.build.assistant', { text: truncate(event.text, 200) }))
@@ -923,7 +923,7 @@ async function cmdExport(inv: Invocation): Promise<number> {
     // 但那一条的额外数据没有。不报的话用户只会觉得"我设的东西丢了"
     if (result.problems.length > 0) {
       out(t('cli.export.problemsHeader', { n: result.problems.length }))
-      for (const problem of result.problems.slice(0, 12)) out(`    ${problem}`)
+      for (const problem of result.problems.slice(0, 12)) out(`    ${localizeProblem(problem)}`)
     }
     out(t('cli.export.outLine', { path: inv.out, kb: (result.bytes.length / 1024).toFixed(1) }))
     out(t('cli.export.worldEdit', { name: basename(inv.out) }))
@@ -946,7 +946,7 @@ async function cmdExport(inv: Invocation): Promise<number> {
     }
     if (result.problems.length > 0) {
       out(t('cli.export.problemsHeader', { n: result.problems.length }))
-      for (const problem of result.problems.slice(0, 12)) out(`    ${problem}`)
+      for (const problem of result.problems.slice(0, 12)) out(`    ${localizeProblem(problem)}`)
     }
     out(t('cli.export.litematicNote'))
     return 0
@@ -1459,7 +1459,7 @@ function formatBounds(b: Bounds): string {
 function cliTexturePack(inv: { textures?: string }, version: string): TexturePack {
   if (inv.textures !== undefined) {
     const pack = texturePackAt(inv.textures)
-    if (pack === undefined) throw new Error(`--textures 指向的路径里没有方块纹理：${inv.textures}`)
+    if (pack === undefined) throw new Error(t('cli.error.texturesMissing', { detail: inv.textures }))
     return pack
   }
   return assetsTexturePack(version)

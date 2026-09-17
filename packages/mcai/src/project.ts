@@ -11,8 +11,9 @@ import {
   parseSessions,
   transcriptFromJsonl,
   transcriptToJsonl,
+  validateCaptures,
 } from './chat.js'
-import type { CaptureBundle, ChatTranscript } from './chat.js'
+import type { CaptureBundle, CaptureProblem, ChatTranscript } from './chat.js'
 import {
   createManifest,
   ENTRY_ORDER,
@@ -50,7 +51,7 @@ export interface McaiProject {
   /** `captures/`：对话里引用过的截图，内容寻址去重。 */
   captures: CaptureBundle
   /** 打开工程时发现的截图问题（索引与文件对不上之类）。不阻断打开，但要如实报告。 */
-  captureProblems: string[]
+  captureProblems: CaptureProblem[]
   /**
    * 原始 zip 条目，便于无损转发未识别的部分。
    *
@@ -347,14 +348,14 @@ const capturePathOf = (id: string): string => `captures/${id}.png`
  * 这里**只警告不抛错**：索引与文件对不上是能看见的问题，但方块数据仍然完好，
  * 为它拒绝保存整份工程是本末倒置。
  */
-function validateCapturesQuietly(bundle: CaptureBundle): string[] {
-  const problems: string[] = []
-  for (const ref of bundle.refs) {
-    const bytes = bundle.files.get(ref.id)
-    if (bytes === undefined) problems.push(`截图 ${ref.id} 在索引里但没有对应文件`)
-    else if (bytes.length !== ref.bytes) problems.push(`截图 ${ref.id} 大小与索引不一致`)
+function validateCapturesQuietly(bundle: CaptureBundle): CaptureProblem[] {
+  const problems = validateCaptures(bundle).filter(
+    (p) => p.code === 'CAPTURE_MISSING_FILE' || p.code === 'CAPTURE_SIZE_MISMATCH',
+  )
+  // mcai 不依赖 i18n，所以这条警告只报 code（稳定的诊断信息，不是给界面的文案）
+  if (problems.length > 0) {
+    process.emitWarning(`.mcai capture index problems: ${problems.map((p) => p.code).join(', ')}`)
   }
-  if (problems.length > 0) process.emitWarning(`.mcai 截图索引有问题：${problems.join('；')}`)
   return problems
 }
 

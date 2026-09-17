@@ -25,6 +25,23 @@ import type { LlmMessage } from './types.js'
 
 export type ContextRegime = 'append' | 'windowed'
 
+/**
+ * 为什么选这套策略。**code 是稳定的一等公民，句子是显示层的事**（`localizeContextReason`）：
+ * 这条 reason 会进事件流、进 `.mcai` 对话档案，还被测试断言——所以本体是 code，
+ * 界面上那句中文/英文由显示层从 `agent.contextReason.*` 拼出来。
+ */
+export type ContextReasonCode =
+  | 'KEPT_BY_PROMPT_CACHE'
+  | 'CAPABILITY_UNKNOWN'
+  | 'NO_PROMPT_CACHE'
+  | 'SMALL_CONTEXT_WINDOW'
+
+export interface ContextReason {
+  code: ContextReasonCode
+  /** 上下文窗口的 token 数（只有 SMALL_CONTEXT_WINDOW 带着它，显示层用来填 {{window}}）。 */
+  window?: number
+}
+
 export interface ContextPolicy {
   regime: ContextRegime
   /** `windowed`：保留最近几轮（一轮 = 一次 LLM 调用 + 它请求的全部工具）。 */
@@ -39,8 +56,8 @@ export interface ContextPolicy {
    * 一条结果就能把整轮挤掉。所以 B 卡得更紧，宁可让模型"缩小范围再问一次"。
    */
   toolResultChars: number
-  /** 为什么这么选。界面与日志都拿它解释行为，不要只说"策略生效了"。 */
-  reason: string
+  /** 为什么这么选。界面与日志都拿它解释行为；显示层用 `localizeContextReason` 翻译。 */
+  reason: ContextReason
 }
 
 /** 一条工具结果的默认上限（Regime A）。约 3K token。 */
@@ -57,14 +74,14 @@ const DEFAULT_KEEP_IMAGES = 3
 
 /** 有缓存就走 A：不做任何裁剪。 */
 export function appendPolicy(
-  reason = 'provider 有前缀缓存，裁剪会以全价重算它后面的 token',
+  code: ContextReasonCode = 'KEPT_BY_PROMPT_CACHE',
 ): ContextPolicy {
   return {
     regime: 'append',
     keepTurns: Number.POSITIVE_INFINITY,
     keepImages: Number.POSITIVE_INFINITY,
     toolResultChars: DEFAULT_TOOL_RESULT_CHARS,
-    reason,
+    reason: { code },
   }
 }
 
@@ -78,14 +95,14 @@ export function contextPolicyFor(
   capabilities?: { promptCache: PromptCacheMode; contextWindow?: number },
   overrides: { keepTurns?: number; keepImages?: number } = {},
 ): ContextPolicy {
-  if (capabilities === undefined) return appendPolicy('没有 provider 能力信息，按"不裁剪"处理')
+  if (capabilities === undefined) return appendPolicy('CAPABILITY_UNKNOWN')
   if (capabilities.promptCache === 'none') {
     return {
       regime: 'windowed',
       keepTurns: overrides.keepTurns ?? DEFAULT_KEEP_TURNS,
       keepImages: overrides.keepImages ?? DEFAULT_KEEP_IMAGES,
       toolResultChars: WINDOWED_TOOL_RESULT_CHARS,
-      reason: 'provider 没有前缀缓存，旧 token 每个请求都要全价重付',
+      reason: { code: 'NO_PROMPT_CACHE' },
     }
   }
   const window = capabilities.contextWindow
@@ -95,7 +112,7 @@ export function contextPolicyFor(
       keepTurns: overrides.keepTurns ?? DEFAULT_KEEP_TURNS,
       keepImages: overrides.keepImages ?? DEFAULT_KEEP_IMAGES,
       toolResultChars: WINDOWED_TOOL_RESULT_CHARS,
-      reason: `上下文窗口只有 ${window} token，不裁剪会直接放不下`,
+      reason: { code: 'SMALL_CONTEXT_WINDOW', window },
     }
   }
   return appendPolicy()

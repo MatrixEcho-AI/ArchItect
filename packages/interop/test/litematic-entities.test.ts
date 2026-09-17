@@ -169,7 +169,11 @@ describe('.litematic 的实体与方块实体', () => {
     const result = exportLitematicDetailed(store)
     expect(result.entities).toBe(1)
     expect(result.problems).toHaveLength(1)
-    expect(result.problems[0]).toMatch(/同质的/)
+    // 问题本体是稳定的 code；身份与原因在 params 里（display 层才拼句子）
+    expect(result.problems[0]).toEqual({
+      code: 'ENTITY_EXTRA_NOT_NBT',
+      params: { id: 'e_1_1', type: expect.any(String), detail: expect.stringContaining('同质的') },
+    })
   })
 
   it('悬在建筑之外的实体也会被导出', async () => {

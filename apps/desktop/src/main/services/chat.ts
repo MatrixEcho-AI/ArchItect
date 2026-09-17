@@ -26,7 +26,7 @@ import type {
   SettingsIssue,
   UsageTotals,
 } from '@architect/agent'
-import { t } from '@architect/i18n'
+import { localizeContextReason, t } from '@architect/i18n'
 import type { MessageKey, MessageVars } from '@architect/i18n'
 import { TranscriptRecorder } from '@architect/mcai'
 import type { CaptureBundle, ChatTranscript, TranscriptRecording } from '@architect/mcai'
@@ -1074,7 +1074,8 @@ export class ChatController {
             turns: event.droppedTurns,
             images:
               event.droppedImages > 0 ? t('desktop.contextImages', { count: event.droppedImages }) : '',
-            reason: event.reason,
+            // reason 是 code；句子在这里才落下（跟随界面语言，见 codes.ts）
+            reason: localizeContextReason(event.reason),
           }),
         )
         message.gate = true

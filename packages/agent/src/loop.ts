@@ -6,6 +6,7 @@ import type { ToolContext, ToolRegistry, ToolResult } from '@architect/tools'
 import { LlmError } from './types.js'
 import type { LlmDelta, LlmImage, LlmMessage, LlmProvider, LlmUsage } from './types.js'
 import { contextPolicyFor, DEFAULT_TOOL_RESULT_CHARS, windowMessages } from './context.js'
+import type { ContextReason } from './context.js'
 import type { ContextPolicy } from './context.js'
 
 export type StopReason =
@@ -60,7 +61,7 @@ export type AgentEvent =
    *
    * 只在真的丢了东西时发：没丢也发的话，事件流里会塞满"什么都没发生"。
    */
-  | { type: 'context'; regime: ContextPolicy['regime']; droppedTurns: number; droppedImages: number; reason: string }
+  | { type: 'context'; regime: ContextPolicy['regime']; droppedTurns: number; droppedImages: number; reason: ContextReason }
   | { type: 'stop'; reason: StopReason }
 
 export interface AgentOptions {

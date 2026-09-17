@@ -122,16 +122,26 @@ export function exportBoundsOf(store: WorldStore): Bounds | undefined {
   return box
 }
 
+/**
+ * 一条互操作问题。**本体是稳定的 code + 参数，不是一句话**：
+ * 显示层（CLI / 桌面端）才用 `localizeProblem` 拼句子——与上下文裁剪的
+ * `ContextReason` 同一个取舍。`interop` 不依赖 i18n，所以这里只声明结构。
+ */
+export interface InteropProblem {
+  code: 'ENTITY_EXTRA_NOT_NBT' | 'BLOCK_ENTITY_EXTRA_NOT_NBT'
+  params: { detail: string } & ({ id: string; type: string } | { kind: string; x: number; y: number; z: number })
+}
+
 export interface SparseExport {
   entities: SchematicEntity[]
   blockEntities: SchematicBlockEntity[]
   /**
-   * 附加数据转不成 NBT 而**只导出了结构**的条目（类型串 + 原因）。
+   * 附加数据转不成 NBT 而**只导出了结构**的条目（code + 那一条的身份与原因参数）。
    *
    * 这一栏存在是因为"猜"在这里是错的：JSON 分不出 byte/short/int/float/double，
    * 猜出来的文件在游戏里是错的、而在这里看不出来。转不了就说出来，别假装成功。
    */
-  problems: string[]
+  problems: InteropProblem[]
 }
 
 /**
@@ -139,7 +149,7 @@ export interface SparseExport {
  * 文件坐标（与方块同一个口径）。
  */
 export function collectSparse(store: WorldStore, region: Bounds): SparseExport {
-  const problems: string[] = []
+  const problems: InteropProblem[] = []
   const entities: SchematicEntity[] = []
   for (const entity of store.entities.list()) {
     if (!cellInside(entity.x, entity.y, entity.z, region)) continue
@@ -151,7 +161,10 @@ export function collectSparse(store: WorldStore, region: Bounds): SparseExport {
     const payload = entityExtra(entity)
     if (!canConvert(payload)) {
       // 结构照走：类型与位置还是能进游戏的，只有附加数据没有。**但上面已经报出来了**
-      problems.push(`实体 ${entity.id}（${entity.type}）：${conversionProblemOf(payload)}`)
+      problems.push({
+        code: 'ENTITY_EXTRA_NOT_NBT',
+        params: { id: entity.id, type: entity.type, detail: conversionProblemOf(payload) },
+      })
       entities.push({ id: entity.type, pos, data: {} })
       continue
     }
@@ -167,9 +180,10 @@ export function collectSparse(store: WorldStore, region: Bounds): SparseExport {
       entity.z - region.min.z,
     ]
     if (!canConvert(entity.data)) {
-      problems.push(
-        `方块实体 ${entity.kind}（${entity.x},${entity.y},${entity.z}）：${conversionProblemOf(entity.data)}`,
-      )
+      problems.push({
+        code: 'BLOCK_ENTITY_EXTRA_NOT_NBT',
+        params: { kind: entity.kind, x: entity.x, y: entity.y, z: entity.z, detail: conversionProblemOf(entity.data) },
+      })
       blockEntities.push({ id: entity.kind, pos, data: {} })
       continue
     }

@@ -2,6 +2,7 @@ import { DEFAULT_HARD_LIMIT } from '@architect/core'
 import type { Bounds, Pos, WorldStore } from '@architect/core'
 
 import { collectSparse, exportBoundsOf, insideFilter, rotationOf, withNamespace } from './collect.js'
+import type { InteropProblem } from './collect.js'
 import { migrateState } from './migrate.js'
 import { DATA_VERSION_1_21_4, readSpongeSchematic, writeSpongeSchematic } from './schematic.js'
 import type { SchematicBlock, SchematicData } from './schematic.js'
@@ -34,12 +35,12 @@ export interface ExportResult {
   /** 写进文件的方块实体数。 */
   blockEntities: number
   /**
-   * 附加数据转不成 NBT 而**只导出了结构**的条目（类型串 + 原因）。
+   * 附加数据转不成 NBT 而**只导出了结构**的条目（code + 身份与原因参数）。
    *
    * 这一栏存在是因为"猜"在这里是错的：JSON 分不出 byte/short/int/float/double，
    * 猜出来的文件在游戏里是错的、而在这里看不出来。转不了就说出来，别假装成功。
    */
-  problems: string[]
+  problems: InteropProblem[]
   /** 导出的世界坐标范围。 */
   region: Bounds
   dataVersion: number

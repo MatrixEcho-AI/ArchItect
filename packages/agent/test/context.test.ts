@@ -35,7 +35,7 @@ const policy = (overrides: Partial<ContextPolicy> = {}): ContextPolicy => ({
   keepTurns: 2,
   keepImages: 1,
   toolResultChars: 4_000,
-  reason: 'test',
+  reason: { code: 'NO_PROMPT_CACHE' }, // 测试桩：code 稳定，不造句子
   ...overrides,
 })
 
@@ -72,13 +72,15 @@ describe('上下文策略：选哪一套', () => {
     expect(chosen.regime).toBe('windowed')
     expect(chosen.keepTurns).toBe(6)
     expect(chosen.keepImages).toBe(3)
-    expect(chosen.reason).toContain('缓存')
+    // 断言 code，不断言句子：句子是显示层的事，随界面语言变（codes.ts）
+    expect(chosen.reason.code).toBe('NO_PROMPT_CACHE')
   })
 
   it('**窗口很小 → 也必须裁剪**（否则请求直接放不下，跟缓存无关了）', () => {
     const chosen = contextPolicyFor({ promptCache: 'auto', contextWindow: 8192 })
     expect(chosen.regime).toBe('windowed')
-    expect(chosen.reason).toContain('8192')
+    expect(chosen.reason.code).toBe('SMALL_CONTEXT_WINDOW')
+    expect(chosen.reason.window).toBe(8192)
   })
 
   it('能力未知 → 不裁剪（宁可多花钱，也不要在未知 provider 上悄悄丢历史）', () => {

@@ -87,14 +87,16 @@ describe('截图索引与文件必须一一对应', () => {
     const png = fakePng(2)
     const ref = makeCaptureRef(png, { revision: 1, camera: 'iso_nw', width: 8, height: 8 }, await sha256Of(png))
     expect(validateCaptures({ refs: [ref], files: new Map() })).toEqual([
-      `截图 ${ref.id} 在索引里但没有对应文件`,
+      { code: 'CAPTURE_MISSING_FILE', params: { id: ref.id } },
     ])
     expect(validateCaptures({ refs: [], files: new Map([[ref.id, png]]) })).toEqual([
-      `截图 ${ref.id} 有文件但不在索引里`,
+      { code: 'CAPTURE_ORPHAN_FILE', params: { id: ref.id } },
     ])
     // 大小不一致：换一段**长度不同**的字节（内容不同但长度相同是测不出来的）
     const differentLength = new Uint8Array(png.length + 3).fill(7)
-    expect(validateCaptures({ refs: [ref], files: new Map([[ref.id, differentLength]]) })[0]).toContain('大小')
+    const problem = validateCaptures({ refs: [ref], files: new Map([[ref.id, differentLength]]) })[0]
+    expect(problem?.code).toBe('CAPTURE_SIZE_MISMATCH')
+    expect(problem?.params).toEqual({ id: ref.id, bytes: differentLength.length, listed: png.length })
   })
 })
 
@@ -320,7 +322,7 @@ describe('.mcai 真的存下了对话记录与截图（用户要求的"含对话
     }
     const project = unpackProject((require('fflate') as typeof import('fflate')).zipSync(broken as never))
     expect(project.captureProblems.length).toBeGreaterThan(0)
-    expect(project.captureProblems[0]).toContain('没有对应文件')
+    expect(project.captureProblems[0]?.code).toBe('CAPTURE_MISSING_FILE')
     // 但方块数据仍然读出来了
     expect(project.snapshot.columns.length).toBeGreaterThan(0)
   })
@@ -422,6 +424,8 @@ describe('档案自带的用量计数（打开工程时界面不能靠猜）', (
       [],
     )
     expect([...bundle.files.keys()], '穿越条目名被收下了').toEqual(['abcdef0123456789'])
-    expect(problems.join(' ')).toContain('已丢弃')
+    // 问题本体是 code；被丢弃的**原始条目名**在 params.path 里（tests 对 code 断言，
+    // 不对句子断言——句子是显示层的事）
+    expect(problems.some((p) => p.code === 'CAPTURE_BAD_ENTRY_NAME')).toBe(true)
   })
 })

@@ -7,14 +7,16 @@ import {
 
 import {
   createFreeCamera,
+  dolly,
   dragUnitFor,
   forwardOf,
   FOV_RANGE,
   lookAtFrom,
+  look,
   moveStep,
+  orbit,
   place,
-  turn,
-  zoom,
+  track,
 } from './freecamera.js'
 import { SoftwareViewport, Viewport } from './viewport.js'
 import type { FreeCamera } from './freecamera.js'
@@ -37,9 +39,8 @@ import type { FrameSink, SceneViewport, SoftwareFrame, ViewportCamera } from './
  *   - `onStatus`：一行状态文字（走 `setStatus` 那条路）
  *
  * ⚠️ 相机的**位置**是真的（D-76 的透视投影）：`place()` 之后它就是"你站在哪"，
- * 拖动只改朝向（`turn`），WASD 改位置（`moveStep`），空格 / Shift 沿世界 Y 升降。
- * 这套语义有一整组测试钉着（`test/freecamera.test.ts` 与 gui-smoke 的 wasd-move），
- * 搬进类里时**一个符号都没动**。
+ * 右键只改朝向（`turn`），WASD 沿世界水平面移动（`moveStep`），空格 / Shift 沿世界 Y 升降。
+ * 这套语义有一整组测试钉着（`test/freecamera.test.ts` 与 gui-smoke 的 wasd-move）。
  */
 
 /**
@@ -170,6 +171,10 @@ export class ViewportShell {
   private typedEye: TypedEye | undefined
   private current: StudioState | undefined
   private sessionView = 'iso_ne'
+  /** 左键环绕与中键平移共用的观察中心；自由观察/行走后按当前视线重新建立。 */
+  private pivot: [number, number, number] | undefined
+  /** 只有双击明确选定的锚点才显示靶心；默认内容中心不额外占据画面。 */
+  private anchorVisible = false
 
   constructor(private readonly options: ViewportShellOptions) {
     this.sink = new CanvasFrameSink(options.overlay)
@@ -200,6 +205,8 @@ export class ViewportShell {
       // **位置是真实的点了**，不重置的话上一座建筑里走到的那个位置会把新打开的东西
       // 留在画面外，看上去像"打开失败了"
       delete this.camera.eye
+      this.pivot = undefined
+      this.anchorVisible = false
       this.typedEye = undefined
       this.options.onCameraChanged()
     }
@@ -252,6 +259,8 @@ export class ViewportShell {
     this.camera.roll = 0
     // 预设机位一律回到**"框住内容"**：位置丢掉，交给自动取景重新算站在哪儿
     delete this.camera.eye
+    this.pivot = undefined
+    this.anchorVisible = false
     // 换机位就丢掉"用户手填的 eye"——方向变了，那三个数不再代表当前朝向
     this.typedEye = undefined
   }
@@ -320,6 +329,7 @@ export class ViewportShell {
    * 成像不看它——透视投影只认位置与朝向。
    */
   lookAt(): [number, number, number] {
+    if (this.pivot !== undefined) return [...this.pivot]
     const eye = this.eye()
     const center = this.contentCenter()
     const distance = Math.max(
@@ -337,6 +347,7 @@ export class ViewportShell {
       roll: this.camera.roll,
       scale: 0,
       perspective: { eye: this.eye(), fov: this.camera.fov },
+      ...(this.anchorVisible && this.pivot !== undefined ? { anchor: [...this.pivot] } : {}),
     }
   }
 
@@ -442,6 +453,8 @@ export class ViewportShell {
         return false
       }
       place(this.camera, [eye[0]!, eye[1]!, eye[2]!])
+      this.pivot = [look[0]!, look[1]!, look[2]!]
+      this.anchorVisible = false
       this.typedEye = {
         eye: [eye[0]!, eye[1]!, eye[2]!],
         lookAt: [look[0]!, look[1]!, look[2]!],
@@ -452,6 +465,8 @@ export class ViewportShell {
       this.camera.azimuth = num(input.azimuth, this.camera.azimuth)
       this.camera.elevation = clampFreeElevation(num(input.elevation, this.camera.elevation))
       delete this.camera.eye
+      this.pivot = undefined
+      this.anchorVisible = false
       this.typedEye = undefined
     }
 
@@ -546,7 +561,7 @@ export class ViewportShell {
    * 方向的定义在 `turn()` 里：往右拖 = 画面里的东西跟着手往右走（相机左转）。
    * 透视下"画面往哪边走"才是手感，角度本身的符号只是实现细节。
    */
-  drag(dx: number, dy: number, altKey: boolean, viewportHeight: number): void {
+  orbitDrag(dx: number, dy: number, altKey: boolean, viewportHeight: number): void {
     if (altKey) {
       // Alt + 拖动 = 滚转。不占额外按钮：滚转是偶尔用一次的调节
       this.camera.roll = (this.camera.roll + dx * 0.4) % 360
@@ -556,17 +571,42 @@ export class ViewportShell {
     // 灵敏度按视口高度归一（固定 °/px 在窄窗口里会转得太快），再乘一个整体手感系数；
     // 两个数都在 `dragUnitFor()` 里，改动它会同步影响"拖动 = 转多少度"的单元测试
     const unit = dragUnitFor(viewportHeight)
-    // **先把相机落到一个位置上**：视角从此相对**相机自己**转（世界绕你摆）
     this.settle()
-    turn(this.camera, dx, dy, unit)
+    const pivot = this.pivot ?? this.contentCenter()
+    this.pivot = [...pivot]
+    orbit(this.camera, pivot, dx, dy, unit)
     this.pushCamera()
     this.options.onCameraChanged()
     this.requestFrame(true)
   }
 
-  /** 滚轮 = 改视场角（人不动，镜头变焦）。指数变化手感才均匀。 */
+  /** 中键拖动：把相机和环绕中心一起沿画面平移。 */
+  trackDrag(dx: number, dy: number, viewportHeight: number): void {
+    this.settle()
+    const pivot = this.pivot ?? this.lookAt()
+    this.pivot = track(this.camera, pivot, dx, dy, viewportHeight)
+    this.pushCamera()
+    this.options.onCameraChanged()
+    this.requestFrame(true)
+  }
+
+  /** 右键自由观察：相机原地转头；下次环绕从新的视线中心开始。 */
+  lookDrag(dx: number, dy: number, viewportHeight: number): void {
+    this.settle()
+    look(this.camera, dx, dy, dragUnitFor(viewportHeight))
+    this.pivot = undefined
+    this.anchorVisible = false
+    this.pushCamera()
+    this.options.onCameraChanged()
+    this.requestFrame(true)
+  }
+
+  /** 滚轮 = 沿观察中心拉近/拉远；保持 FOV，不制造广角/长焦式透视变化。 */
   wheel(deltaY: number): void {
-    zoom(this.camera, deltaY)
+    this.settle()
+    const pivot = this.pivot ?? this.lookAt()
+    this.pivot = [...pivot]
+    dolly(this.camera, pivot, deltaY)
     this.requestFrame(true)
     this.pushCamera()
     this.options.onCameraChanged()
@@ -576,6 +616,8 @@ export class ViewportShell {
   dblclick(): void {
     this.camera.roll = 0
     delete this.camera.eye
+    this.pivot = undefined
+    this.anchorVisible = false
     this.camera.fov = DEFAULT_FOV
     this.typedEye = undefined
     this.requestFrame()
@@ -583,10 +625,32 @@ export class ViewportShell {
     this.options.onCameraChanged()
   }
 
-  /** 按住的移动键集合变化时推进一帧。返回这一帧该不该继续。 */
+
+  /** 双击方块：保持相机位置不变，把该方块中心变成新的观察/环绕中心。 */
+  focusAt(point: [number, number, number]): void {
+    this.settle()
+    const eye = this.camera.eye!
+    const oriented = orientationFromEye(
+      { x: eye[0], y: eye[1], z: eye[2] },
+      { x: point[0], y: point[1], z: point[2] },
+      this.camera.roll,
+    )
+    this.camera.azimuth = oriented.azimuth
+    this.camera.elevation = clampFreeElevation(oriented.elevation)
+    this.pivot = [...point]
+    this.anchorVisible = true
+    this.typedEye = undefined
+    this.requestFrame()
+    this.pushCamera()
+    this.options.onCameraChanged()
+  }
+
+  /** 按住的移动键集合变化时推进一帧。 */
   walk(held: ReadonlySet<string>, dt: number): void {
     this.settle()
     moveStep(this.camera, held, dt, this.walkSpeed())
+    this.pivot = undefined
+    this.anchorVisible = false
     this.requestFrame(true)
   }
 

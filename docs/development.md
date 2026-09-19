@@ -246,7 +246,7 @@ All of them need `pnpm --filter @architect/desktop build` first. They **compose*
 
 ```bash
 cd apps/desktop
-npx --no-install electron . --demo --gui-smoke             # full smoke: a GPU capture plus DOM assertions (the timeline drags, the edit log opens, WASD really moves the camera, a drag turns in place); exits 1 on any failure
+npx --no-install electron . --demo --gui-smoke             # full smoke: a GPU capture plus DOM assertions (the timeline drags, the edit log opens, WASD really moves the camera, left-drag orbits); exits 1 on any failure
 npx --no-install electron . --demo --capture /tmp/gui.png  # capture the window the user sees
 npx --no-install electron . --demo --shot /tmp/eye.png     # capture **the image the model receives**
 npx --no-install electron . --demo --no-webgl              # force the software viewport (to exercise the fallback)

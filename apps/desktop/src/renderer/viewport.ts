@@ -108,6 +108,8 @@ export interface ViewportCamera {
    * 与"绕着目标转"的全部差别（前者画面会平移，后者不会）。
    */
   target?: [number, number, number]
+  /** 用户双击选定的环绕锚点；只用于交互反馈。 */
+  anchor?: [number, number, number]
 }
 
 /** 一次离屏截图的请求。相机由主进程解算好，渲染进程不重新取景。 */
@@ -157,6 +159,7 @@ export type SoftwareFrameRequest = {
   roll: number
   scale?: number
   target?: [number, number, number]
+  anchor?: [number, number, number]
   width: number
   height: number
   draft: boolean
@@ -205,6 +208,8 @@ export class Viewport implements SceneViewport {
   private active: THREE.Camera = this.ortho
   private overlay: OverlayCanvas
   private grid?: THREE.LineSegments
+  /** 工作区边框是真正的 3D 线段，必须参与深度测试。 */
+  private volumeFrame?: THREE.LineSegments
   private readonly overlayCtx: CanvasRenderingContext2D
   private opaque?: THREE.Mesh
   private translucent?: THREE.Mesh
@@ -268,6 +273,7 @@ export class Viewport implements SceneViewport {
     this.bounds = payload.bounds
     this.volume = payload.volume
     this.rebuildGrid()
+    this.rebuildVolumeFrame()
 
     /**
      * 方块与实体各建一次，形状完全一样：一张图集、一批顶点、按 tile 判据拆成
@@ -422,7 +428,7 @@ export class Viewport implements SceneViewport {
 
     const basis = this.applyCamera(spec)
     this.renderer.render(this.scene, this.active)
-    this.drawOverlay(spec, basis)
+    this.drawOverlay(spec, basis, view.anchor)
   }
 
   /**
@@ -566,7 +572,11 @@ export class Viewport implements SceneViewport {
   }
 
   /** 叠加层：标尺、坐标轴、工区线框、信息文字。投影与主进程渲染完全一致。 */
-  private drawOverlay(spec: CameraSpec, basis: ReturnType<typeof cameraBasis>): void {
+  private drawOverlay(
+    spec: CameraSpec,
+    basis: ReturnType<typeof cameraBasis>,
+    anchor: [number, number, number] | undefined,
+  ): void {
     const ctx = this.overlayCtx
     ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height)
     const bounds = this.bounds
@@ -578,10 +588,9 @@ export class Viewport implements SceneViewport {
     const options = {
       ruler: true,
       axisGizmo: true,
-      volumeBox: {
-        min: { x: this.volume.min[0], y: this.volume.min[1], z: this.volume.min[2] },
-        max: { x: this.volume.max[0], y: this.volume.max[1], z: this.volume.max[2] },
-      },
+      ...(anchor !== undefined
+        ? { anchor: { x: anchor[0], y: anchor[1], z: anchor[2] } }
+        : {}),
       caption: [
         `REV ${this.revision}  AZ ${spec.azimuth.toFixed(0)}  EL ${spec.elevation.toFixed(0)}${spec.roll !== undefined && spec.roll !== 0 ? `  RL ${spec.roll.toFixed(0)}` : ''}`,
         `BOUNDS ${bounds.min.join(',')}..${bounds.max.join(',')}`,
@@ -640,6 +649,47 @@ export class Viewport implements SceneViewport {
     )
     this.grid.frustumCulled = false
     this.scene.add(this.grid)
+  }
+
+  /** 工作区十二条棱；作为 3D 线段渲染，后侧棱会被建筑的深度挡住。 */
+  private rebuildVolumeFrame(): void {
+    if (this.volumeFrame !== undefined) {
+      this.scene.remove(this.volumeFrame)
+      this.volumeFrame.geometry.dispose()
+      ;(this.volumeFrame.material as THREE.Material).dispose()
+    }
+    const lo = this.volume.min
+    const hi = this.volume.max
+    const corners: Array<[number, number, number]> = []
+    for (let i = 0; i < 8; i++) {
+      corners.push([
+        (i & 1) === 0 ? lo[0] : hi[0],
+        (i & 2) === 0 ? lo[1] : hi[1],
+        (i & 4) === 0 ? lo[2] : hi[2],
+      ])
+    }
+    const points: number[] = []
+    for (let i = 0; i < 8; i++) {
+      for (let j = i + 1; j < 8; j++) {
+        const diff = i ^ j
+        if (diff !== 1 && diff !== 2 && diff !== 4) continue
+        points.push(...corners[i]!, ...corners[j]!)
+      }
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(points, 3))
+    this.volumeFrame = new THREE.LineSegments(
+      geometry,
+      new THREE.LineBasicMaterial({
+        color: 0x5cc8d6,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: true,
+        depthWrite: false,
+      }),
+    )
+    this.volumeFrame.frustumCulled = false
+    this.scene.add(this.volumeFrame)
   }
 
   private disposeMeshes(): void {
@@ -747,6 +797,7 @@ export class SoftwareViewport implements SceneViewport {
       view.roll.toFixed(3),
       view.scale.toFixed(3),
       view.target?.map((v) => v.toFixed(2)).join(',') ?? '-',
+      view.anchor?.map((v) => v.toFixed(2)).join(',') ?? '-',
     ].join('|')
   }
 
@@ -772,6 +823,7 @@ export class SoftwareViewport implements SceneViewport {
             roll: next.view.roll,
             ...(next.view.scale > 0 ? { scale: next.view.scale } : {}),
             ...(next.view.target !== undefined ? { target: next.view.target } : {}),
+            ...(next.view.anchor !== undefined ? { anchor: next.view.anchor } : {}),
             width,
             height,
             draft: next.draft,

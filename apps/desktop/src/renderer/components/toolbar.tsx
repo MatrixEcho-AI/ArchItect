@@ -1,9 +1,11 @@
-import { Button, Dropdown, Flex, Tooltip } from 'antd'
+import { useState } from 'react'
+import { Button, Dropdown, Flex, List, Modal, Tooltip, Typography } from 'antd'
 import {
   ExportOutlined,
   FolderOpenOutlined,
   ImportOutlined,
   PlusOutlined,
+  QuestionCircleOutlined,
   RedoOutlined,
   SaveOutlined,
   SettingOutlined,
@@ -62,6 +64,7 @@ export interface ToolbarProps {
 }
 
 export function Toolbar(props: ToolbarProps): React.JSX.Element {
+  const [helpOpen, setHelpOpen] = useState(false)
   const { state, costText, statusText } = props
   const busy = state === undefined
   return (
@@ -188,6 +191,15 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
         {costText}
       </span>
 
+      {/* 操作说明与设置同属应用级入口，放在齿轮左侧。视口内部不放 hover 浮层：
+          连续移动鼠标正是三维操作本身，提示层不能在那块区域抢画面或干扰手势。 */}
+      <IconButton
+        id="btn-viewport-help"
+        label="viewport.controls.title"
+        onClick={() => setHelpOpen(true)}
+        icon={<QuestionCircleOutlined />}
+      />
+
       {/* 设置入口：**回到可见**，而且搬到右上角。
           它与左边那组"文件/编辑"按钮不同类——那是改工程的，这是配应用自身的，
           所以中间用 `flex: 1` 撑开、单独靠右（放在两个隐藏块之后，才是真的贴右边缘）。
@@ -201,6 +213,39 @@ export function Toolbar(props: ToolbarProps): React.JSX.Element {
         onClick={props.onOpenSettings}
         icon={<SettingOutlined />}
       />
+
+      <Modal
+        title={t('viewport.controls.title')}
+        open={helpOpen}
+        onCancel={() => setHelpOpen(false)}
+        footer={null}
+        width={520}
+      >
+        <div id="viewport-help-dialog">
+          <Typography.Title level={5}>{t('viewport.controls.mouseTitle')}</Typography.Title>
+          <List
+            size="small"
+            bordered
+            dataSource={[
+              t('viewport.controls.orbit'),
+              t('viewport.controls.pan'),
+              t('viewport.controls.look'),
+              t('viewport.controls.zoom'),
+              t('viewport.controls.focus'),
+            ]}
+            renderItem={(item) => <List.Item>{item}</List.Item>}
+          />
+          <Typography.Title level={5} style={{ marginTop: 20 }}>
+            {t('viewport.controls.keyboardTitle')}
+          </Typography.Title>
+          <List
+            size="small"
+            bordered
+            dataSource={[t('viewport.controls.move'), t('viewport.controls.vertical')]}
+            renderItem={(item) => <List.Item>{item}</List.Item>}
+          />
+        </div>
+      </Modal>
 
       {/* 状态行：**隐藏**。同时它是渲染进程里唯一能读到的相机快照——
           gui-smoke 的 WASD / 空格 / 拖动方向断言都读它，所以不能删。 */}

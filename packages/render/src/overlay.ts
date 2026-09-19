@@ -33,6 +33,8 @@ export interface OverlayOptions {
   highlightColor?: Rgb
   /** 标记点（LLM 用来指认"这里"）。 */
   markers?: Marker[]
+  /** 交互视口的环绕锚点；使用细线靶心，不标注文字。 */
+  anchor?: { x: number; y: number; z: number }
   /** 左上角信息行。 */
   caption?: string[]
 }
@@ -156,8 +158,33 @@ export function drawOverlays(
     )
   }
   for (const marker of options.markers ?? []) drawMarker(canvas, camera, active, marker)
+  if (options.anchor !== undefined) drawAnchor(canvas, camera, active, options.anchor)
   if (options.axisGizmo !== false) drawAxisGizmo(canvas, active)
   if (options.caption !== undefined) drawCaption(canvas, options.caption)
+}
+
+/** 自定义环绕锚点：Ant Design 主色的硬边靶心，不使用阴影或发光。 */
+function drawAnchor(
+  canvas: Canvas,
+  camera: CameraSpec,
+  basis: CameraBasis,
+  anchor: { x: number; y: number; z: number },
+): void {
+  const p = projectPoint(anchor, camera, basis)
+  if (!onScreen(p) || (camera.perspective !== undefined && p.depth <= 0)) return
+  const color = { r: 22, g: 119, b: 255 }
+  const x = Math.round(p.x)
+  const y = Math.round(p.y)
+  const outer = 7
+  const inner = 3
+  canvas.drawLine(x - outer, y, x - inner, y, color)
+  canvas.drawLine(x + inner, y, x + outer, y, color)
+  canvas.drawLine(x, y - outer, x, y - inner, color)
+  canvas.drawLine(x, y + inner, x, y + outer, color)
+  canvas.drawLine(x, y - inner, x + inner, y, color)
+  canvas.drawLine(x + inner, y, x, y + inner, color)
+  canvas.drawLine(x, y + inner, x - inner, y, color)
+  canvas.drawLine(x - inner, y, x, y - inner, color)
 }
 
 function rulerStepFor(bounds: Bounds, options: OverlayOptions): number {

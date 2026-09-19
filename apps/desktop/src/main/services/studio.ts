@@ -233,6 +233,8 @@ export interface ViewportRequest {
   scale?: number
   /** 注视点。省略 = 内容包围盒中心（与 GPU 那条路同一套语义）。 */
   target?: [number, number, number]
+  /** 交互视口的自定义环绕锚点，仅用于绘制操作反馈。 */
+  anchor?: [number, number, number]
   /**
    * 给了它 = **透视投影**（第一人称）：相机站在 `eye`，`fov` 是垂直视场角。
    *
@@ -1396,7 +1398,9 @@ export class StudioService {
       drawOverlays(canvas, camera, basis, bounds, {
         ruler: true,
         axisGizmo: true,
-        volumeBox: store.volume,
+        ...(request.anchor !== undefined
+          ? { anchor: { x: request.anchor[0], y: request.anchor[1], z: request.anchor[2] } }
+          : {}),
         caption: [
           `REV ${store.revision}  AZ ${azimuth.toFixed(0)}  EL ${elevation.toFixed(0)}${roll !== 0 ? `  RL ${roll.toFixed(0)}` : ''}`,
           `BOUNDS ${bounds.min.x},${bounds.min.y},${bounds.min.z}..${bounds.max.x},${bounds.max.y},${bounds.max.z}`,

@@ -1337,6 +1337,39 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       blocked ? '被挡且有打开设置的按钮' : '没有被挡（模型已配置）',
     );
 
+    const viewportHelp = document.querySelector('#btn-viewport-help');
+    const viewportCanvas = document.querySelector('#canvas');
+    const viewportOverlay = document.querySelector('#overlay');
+    const settingsForHelp = document.querySelector('#btn-settings');
+    if (viewportHelp !== null) {
+      viewportHelp.click();
+      await frames();
+    }
+    const helpDialog = document.querySelector('#viewport-help-dialog');
+    const helpLeftOfSettings =
+      viewportHelp !== null &&
+      settingsForHelp !== null &&
+      viewportHelp.getBoundingClientRect().right <= settingsForHelp.getBoundingClientRect().left;
+    check(
+      'viewport-controls-help',
+      viewportHelp !== null &&
+        helpLeftOfSettings &&
+        helpDialog !== null &&
+        helpDialog.textContent.includes('单击右键') &&
+        !viewportCanvas.hasAttribute('title') &&
+        !viewportOverlay.hasAttribute('title'),
+      viewportHelp === null
+        ? '没有操作入口'
+        : '入口在设置左侧=' + helpLeftOfSettings + ' / 独立说明界面=' + (helpDialog !== null) +
+            ' / 画布 hover 提示已移除=' +
+            (!viewportCanvas.hasAttribute('title') && !viewportOverlay.hasAttribute('title')),
+    );
+    const helpClose = helpDialog === null ? null : helpDialog.closest('.ant-modal')?.querySelector('.ant-modal-close');
+    if (helpClose !== null && helpClose !== undefined) {
+      helpClose.click();
+      await frames();
+    }
+
     // **WASD 真的在移动相机**。
     // 断言的是那行隐藏的状态行——它是渲染进程里唯一读得到的相机快照，相机落地之后
     // 会写上"位置 x,y,z"。所以走一步、再走一步，那三个数必须跟着变。
@@ -1353,12 +1386,23 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       const found = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
       return found === null ? null : found.slice(1).join(',');
     };
+    const settledPosition = positionOf(await walk('w', 0));
     const afterW = positionOf(await walk('w', 8));
     const afterA = positionOf(await walk('a', 8));
+    const settledParts = settledPosition === null ? null : settledPosition.split(',');
+    const afterWParts = afterW === null ? null : afterW.split(',');
+    const afterAParts = afterA === null ? null : afterA.split(',');
     check(
       'wasd-move',
-      afterW !== null && afterA !== null && afterW !== afterA,
-      '相机位置 ' + afterW + ' →（按 A 横移）' + afterA,
+      settledParts !== null &&
+        afterWParts !== null &&
+        afterAParts !== null &&
+        settledPosition !== afterW &&
+        afterW !== afterA &&
+        settledParts[1] === afterWParts[1] &&
+        afterWParts[1] === afterAParts[1],
+      '相机位置 ' + settledPosition + ' →（按 W）' + afterW + ' →（按 A）' + afterA +
+        '，高度保持 ' + (afterWParts === null ? '?' : afterWParts[1]),
     );
 
     // **空格上升 / Shift 下降**：同一条真实键盘路径。
@@ -1392,9 +1436,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         '，水平位置保持在 ' + xzOf(rose),
     );
 
-    // **拖动 = 原地转头**：角度变了，位置一动不动。
-    // 以前拖动是"绕着画面中心转"（位置在这套语义里根本不存在），现在相机有一个真实位置，
-    // 拖动只改朝向——所以这条断言同时钉住了"拖动仍然能转"和"转的时候人不跟着飞"。
+    // **左键拖动 = 环绕建筑**：角度与位置一起变化，但观察中心不漂。
     //
     // **方向也要钉住**：往右拖 = 画面跟着手往右走 = 相机**左**转（方位角增大）。
     // 这条只能在这里验，因为"dx 有没有被取反"发生在事件接线里，单元测试测不到；
@@ -1404,17 +1446,18 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       const at = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
       return {
         azimuth: angles === null ? null : Number(angles[1]),
+        elevation: angles === null ? null : Number(angles[2]),
         position: at === null ? null : at.slice(1).join(','),
       };
     };
     const overlay = document.querySelector('#overlay');
     const rect = overlay.getBoundingClientRect();
-    const send = (type, x, y) =>
+    const send = (type, x, y, button = 0) =>
       overlay.dispatchEvent(
         new PointerEvent(type, {
           pointerId: 7,
-          button: 0,
-          buttons: type === 'pointerup' ? 0 : 1,
+          button,
+          buttons: type === 'pointerup' ? 0 : button === 2 ? 2 : button === 1 ? 4 : 1,
           clientX: x,
           clientY: y,
           bubbles: true,
@@ -1429,12 +1472,64 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     await frames();
     const afterTurn = poseOf(status === null ? '' : status.textContent);
     check(
-      'drag-turn-in-place',
+      'drag-orbit',
       beforeTurn.position !== null &&
-        beforeTurn.position === afterTurn.position &&
+        beforeTurn.position !== afterTurn.position &&
         beforeTurn.azimuth !== afterTurn.azimuth &&
         afterTurn.azimuth > beforeTurn.azimuth,
-      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°（往右拖 = 左转 = 角度增大），位置保持在 ' + beforeTurn.position,
+      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°，位置 ' + beforeTurn.position + ' → ' + afterTurn.position,
+    );
+
+    // 右键自由观察不是“抓住画面拖”：它遵循 Minecraft/FPS 方向，单击进入、再次单击退出。
+    const beforeLook = poseOf(status === null ? '' : status.textContent);
+    send('pointerdown', cx, cy, 2);
+    send('pointerup', cx + 24, cy + 18, 2);
+    send('pointermove', cx + 24, cy + 18, 2);
+    await frames();
+    const afterLook = poseOf(status === null ? '' : status.textContent);
+    const activeAfterRelease = document.body.classList.contains('free-looking');
+    send('pointerdown', cx + 24, cy + 18, 2);
+    send('pointerup', cx + 24, cy + 18, 2);
+    await frames();
+    check(
+      'right-click-free-look-toggle',
+      beforeLook.azimuth !== null &&
+        beforeLook.elevation !== null &&
+        afterLook.azimuth < beforeLook.azimuth &&
+        afterLook.elevation > beforeLook.elevation &&
+        afterLook.position === beforeLook.position &&
+        activeAfterRelease &&
+        !document.body.classList.contains('free-looking'),
+      '方位 ' + beforeLook.azimuth + '° → ' + afterLook.azimuth + '°（向右看），仰角 ' +
+        beforeLook.elevation + '° → ' + afterLook.elevation + '°（向下看），松开后仍激活=' +
+        activeAfterRelease + '，再次右击后已退出=' +
+        !document.body.classList.contains('free-looking'),
+    );
+
+    // 双击空白恢复默认取景后，滚轮应移动相机，而不是改变投影角/FOV。
+    overlay.dispatchEvent(
+      new MouseEvent('dblclick', {
+        clientX: rect.left + 8,
+        clientY: rect.top + 8,
+        bubbles: true,
+      }),
+    );
+    for (let i = 0; i < 6; i++) await frames();
+    // deltaY=0 只让自动取景相机落地，取得滚轮前的真实位置。
+    overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: 0, bubbles: true, cancelable: true }));
+    await frames();
+    const beforeWheel = poseOf(status === null ? '' : status.textContent);
+    overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: -180, bubbles: true, cancelable: true }));
+    await frames();
+    const afterWheel = poseOf(status === null ? '' : status.textContent);
+    check(
+      'wheel-dolly-after-reset',
+      beforeWheel.position !== null &&
+        afterWheel.position !== beforeWheel.position &&
+        afterWheel.azimuth === beforeWheel.azimuth &&
+        afterWheel.elevation === beforeWheel.elevation,
+      '位置 ' + beforeWheel.position + ' → ' + afterWheel.position +
+        '，方位/仰角保持 ' + afterWheel.azimuth + '°/' + afterWheel.elevation + '°',
     );
 
     /**

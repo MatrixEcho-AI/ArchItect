@@ -28,7 +28,19 @@ export const zhCN = {
   viewport: {
     status: '视角 方位 {{az}}° / 仰角 {{el}}° · {{ms}}',
     statusAt: '视角 方位 {{az}}° / 仰角 {{el}}° · 位置 {{pos}} · {{ms}}',
-    hint: 'WASD 走、空格上升、Shift 下降 · 拖动转头 · 滚轮变焦 · 双击回到自动取景',
+    hint: '左拖环绕 · 中拖平移 · 右键切换自由观察 · 滚轮缩放 · WASD 移动 · 空格上升 · Shift 下降',
+    controls: {
+      title: '视口操作',
+      mouseTitle: '鼠标',
+      keyboardTitle: '键盘',
+      orbit: '左键拖动：环绕建筑',
+      pan: '中键拖动：平移画面',
+      look: '单击右键：进入 / 退出自由观察 · Esc 退出',
+      zoom: '滚轮：拉近 / 拉远',
+      move: 'WASD：前后左右移动',
+      vertical: '空格：上升 · Shift：下降',
+      focus: '非编辑模式：双击方块聚焦 · 双击空白适应全部',
+    },
     camera: '机位',
     empty: '空世界，在右边描述你要造的建筑',
     angles: {

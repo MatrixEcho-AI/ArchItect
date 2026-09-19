@@ -448,7 +448,7 @@ export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Elem
 
   /**
    * 视口里点了一下 → 选格 → 改世界。三种手势与体素编辑器惯例一致：
-   * 点一下 = 放置（放在**命中面的外侧**那一格）、Alt/右键 = 挖掉、⌘/Ctrl = 吸取。
+   * 点一下 = 放置（放在**命中面的外侧**那一格）、Alt = 挖掉、⌘/Ctrl = 吸取。
    */
   const pick = (event: {
     clientX: number
@@ -480,7 +480,7 @@ export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Elem
         setStatus(t('palette.picked', { block: shortBlock(hit.blockId) }))
         return
       }
-      const breaking = event.altKey || event.button === 2
+      const breaking = event.altKey
       if (!breaking && !hit.placeInVolume) {
         setStatus(t('palette.outside'))
         return
@@ -499,6 +499,29 @@ export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Elem
           : t('palette.placed', { block: shortBlock(blockRef.current), pos: target.join(',') }),
       )
     })
+  }
+
+  /** 双击方块聚焦；双击空白则恢复能看见整个工程的默认取景。 */
+  const focusViewport = (event: { clientX: number; clientY: number }): void => {
+    void (async () => {
+      const overlay = document.getElementById('overlay')
+      const shell = shellRef.current
+      if (overlay === null || shell === undefined) return
+      const rect = overlay.getBoundingClientRect()
+      if (rect.width < 1 || rect.height < 1) return
+      const hit = await window.architect.pick({
+        ...shell.viewportCamera(),
+        width: Math.floor(rect.width),
+        height: Math.floor(rect.height),
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      })
+      if (hit === null) {
+        shell.dblclick()
+        return
+      }
+      shell.focusAt([hit.block[0] + 0.5, hit.block[1] + 0.5, hit.block[2] + 0.5])
+    })()
   }
 
   return (
@@ -679,6 +702,7 @@ export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Elem
                 empty={studio.state?.blocks === 0}
                 editMode={editMode}
                 onPick={pick}
+                onFocus={focusViewport}
                 onFreeView={() => {
                   if (viewRef.current === 'free') return
                   viewRef.current = 'free'

@@ -297,6 +297,8 @@ export interface ViewportRequest {
   roll?: number
   scale?: number
   target?: [number, number, number]
+  /** 交互视口的自定义环绕锚点。 */
+  anchor?: [number, number, number]
   /** 透视（第一人称）：相机站在 `eye`。不给就是正交等轴测。 */
   perspective?: { eye: [number, number, number]; fov: number }
   width: number

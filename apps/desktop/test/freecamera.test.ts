@@ -5,15 +5,20 @@ import type { CameraSpec } from '@architect/render/browser'
 
 import {
   createFreeCamera,
+  dolly,
   DRAG_SENSITIVITY,
   dragUnitFor,
   forwardOf,
+  groundForwardOf,
   FOV_RANGE,
   lookAtFrom,
+  look,
   moveStep,
+  orbit,
   pan,
   place,
   rightOf,
+  track,
   turn,
   zoom,
 } from '../src/renderer/freecamera.js'
@@ -23,7 +28,7 @@ import type { Vec3 } from '../src/renderer/freecamera.js'
  * 自由相机的**数学**。
  *
  * 断言的是四件用户能感觉到的性质：
- * 1. WASD 相对**相机自己**走（抬头按 W 会上升，横移不会改高度）；
+ * 1. WASD 像 Minecraft 一样相对相机的**水平朝向**走，俯仰不会改变高度；
  * 2. 转头是**原地**的（位置一动不动）——这正是"像 Minecraft 那样转头"与
  *    "建筑像个托盘一样自转"的全部差别；
  * 3. **拖动的方向感**：画面跟着手走（这条对着投影结果断言，见下面的用例）；
@@ -77,10 +82,10 @@ describe('自由相机', () => {
     expect(right[2]).toBeCloseTo(0, 9)
   })
 
-  it('**W 沿视线走（含俯仰）**：抬头按 W 是上升，不是贴地往前', () => {
+  it('**W 沿水平朝向走**：抬头按 W 仍贴着水平面前进', () => {
     const camera = cameraAt(0, -30)
-    const [fx, fy, fz] = forwardOf(camera)
-    expect(fy).toBeGreaterThan(0) // 抬头 → 视线朝上
+    const [fx, fy, fz] = groundForwardOf(camera)
+    expect(fy).toBe(0)
     const before = [...camera.eye!]
     moveStep(camera, new Set(['w']), 1, 2)
     const after = camera.eye!
@@ -88,7 +93,7 @@ describe('自由相机', () => {
     for (const [index, component] of [fx, fy, fz].entries()) {
       expect(after[index]! - before[index]!).toBeCloseTo(component * 2, 6)
     }
-    expect(after[1]).toBeGreaterThan(before[1]!)
+    expect(after[1]).toBe(before[1])
   })
 
   it('**A/D 是水平横移**：不管仰角多大，都不会把人带飞', () => {
@@ -104,8 +109,7 @@ describe('自由相机', () => {
    * **空格上升 / Shift 下降**。
    *
    * 两条性质缺一不可：只沿世界 Y（抬头按空格也是直着上去，不是斜着飞），
-   * 且水平位置一动不动。所以这里特意把相机设成大幅度抬头——`W` 在这种姿态下
-   * 明明会往水平方向跑，空格不该跑。
+   * 且水平位置一动不动。所以这里特意把相机设成大幅度抬头。
    */
   it('**空格上升 / Shift 下降**：沿世界 Y 直上直下，不跟视线俯仰走', () => {
     const camera = cameraAt(30, -60) // 抬着头，且不是正对着某个轴
@@ -134,7 +138,7 @@ describe('自由相机', () => {
     expect(camera.eye).toEqual(before)
   })
 
-  it('升降与前后可以叠加（空格 + W 是斜着往前上）', () => {
+  it('升降与水平前后可以叠加（空格 + W 是斜着往前上）', () => {
     const camera = cameraAt(0, 0) // 平视：W 只往前走
     const eye = camera.eye!
     const before: Vec3 = [eye[0], eye[1], eye[2]]
@@ -167,6 +171,48 @@ describe('自由相机', () => {
     const forward = forwardOf(camera)
     expect(forward[0]).toBeCloseTo(-1, 6)
     expect(forward[2]).toBeCloseTo(0, 6)
+  })
+
+  it('**右键自由观察是 Minecraft 方向**：鼠标右移向右看，下移低头', () => {
+    const camera = cameraAt(0, 0)
+    const before = [...camera.eye!]
+    look(camera, 20, 10, 1)
+    expect(camera.azimuth).toBe(-20)
+    expect(camera.elevation).toBe(8)
+    expect(camera.eye).toEqual(before)
+  })
+
+  it('**左键环绕**：观察中心与观察距离不变，相机位置随角度移动', () => {
+    const camera = cameraAt(0, 0)
+    const pivot: Vec3 = [0, 0, 0]
+    const before = [...camera.eye!]
+    orbit(camera, pivot, 90, 0, 1)
+    expect(camera.eye).not.toEqual(before)
+    expect(Math.hypot(...camera.eye!)).toBeCloseTo(10, 6)
+    expect(lookAtFrom(camera, 10)).toEqual([
+      expect.closeTo(0, 6),
+      expect.closeTo(0, 6),
+      expect.closeTo(0, 6),
+    ])
+  })
+
+  it('**中键平移**：相机和观察中心同量移动，角度与距离不变', () => {
+    const camera = cameraAt(0, 0)
+    const beforeEye = [...camera.eye!] as Vec3
+    const beforeAngles = [camera.azimuth, camera.elevation]
+    const pivot = track(camera, [0, 0, 0], 40, -20, 600)
+    const eyeDelta = camera.eye!.map((value, index) => value - beforeEye[index]!)
+    expect(pivot).toEqual([
+      expect.closeTo(eyeDelta[0]!, 9),
+      expect.closeTo(eyeDelta[1]!, 9),
+      expect.closeTo(eyeDelta[2]!, 9),
+    ])
+    expect([camera.azimuth, camera.elevation]).toEqual(beforeAngles)
+    expect(Math.hypot(
+      camera.eye![0] - pivot[0],
+      camera.eye![1] - pivot[1],
+      camera.eye![2] - pivot[2],
+    )).toBeCloseTo(10, 6)
   })
 
   /**
@@ -225,7 +271,7 @@ describe('自由相机', () => {
     expect(camera.elevation).toBe(89)
   })
 
-  it('滚轮改视场角：上滚放大（fov 变小），且夹在范围内', () => {
+  it('显式光学变焦会改变 FOV，且夹在范围内', () => {
     const camera = cameraAt(0, 0)
     const before = camera.fov
     zoom(camera, -100)
@@ -236,6 +282,24 @@ describe('自由相机', () => {
     expect(camera.fov).toBe(FOV_RANGE.min)
     zoom(camera, 100_000)
     expect(camera.fov).toBe(FOV_RANGE.max)
+  })
+
+  it('**滚轮拉近/拉远**：改变观察距离但保持 FOV 与锚点不变', () => {
+    const camera = cameraAt(0, 0)
+    const pivot: Vec3 = [0, 0, 0]
+    const fov = camera.fov
+    dolly(camera, pivot, -100)
+    const near = Math.hypot(...camera.eye!)
+    expect(near).toBeLessThan(10)
+    expect(camera.fov).toBe(fov)
+    expect(lookAtFrom(camera, near)).toEqual([
+      expect.closeTo(0, 6),
+      expect.closeTo(0, 6),
+      expect.closeTo(0, 6),
+    ])
+    dolly(camera, pivot, 100)
+    expect(Math.hypot(...camera.eye!)).toBeCloseTo(10, 6)
+    expect(camera.fov).toBe(fov)
   })
 
   it('lookAtFrom 落在视线上、距离正确（推给模型的机位用它）', () => {

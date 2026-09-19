@@ -87,6 +87,14 @@ describe('SoftwareViewport：请求合并', () => {
     expect(host.draws).toHaveLength(1)
   })
 
+  it('把双击选定的锚点转交给软件渲染路径', async () => {
+    const host = fakeHost()
+    host.viewport.resize(200, 150, 1)
+    host.viewport.render({ ...VIEW, anchor: [4.5, 8.5, 12.5] })
+    await settle()
+    expect(host.requests[0]?.anchor).toEqual([4.5, 8.5, 12.5])
+  })
+
   it('同一个版本、同一个机位、同一个尺寸 → **连问都不问**', async () => {
     const host = fakeHost()
     host.viewport.setRevision(7)

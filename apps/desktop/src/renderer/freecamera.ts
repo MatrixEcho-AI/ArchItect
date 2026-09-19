@@ -1,5 +1,5 @@
 /**
- * **第一人称自由相机**：位置是真的，朝向是自己的，投影是透视的。
+ * **可环绕、可自由观察的透视相机**：位置是真的，朝向是自己的。
  *
  * ## 为什么不能只有角度
  *
@@ -12,9 +12,9 @@
  * ```
  *
  * - **原地转头**：只改角度，`eye` 不动 → 世界从眼前扫过（而不是建筑原地自转）；
- * - **WASD**：`eye` 沿自己的轴平移 → 画面整体跟着平推；
+ * - **WASD**：像 Minecraft 一样沿世界水平面移动；抬头低头不改变行走高度；
  * - **空格 / Shift**：沿**世界 +Y** 升降（电梯，不跟视线俯仰走，见 `lift()`）；
- * - **滚轮**：改视场角（`fov`）= 变焦，人不动。
+ * - **滚轮**：沿观察中心前后移动相机；`fov` 只由机位面板显式修改。
  *
  * ## 为什么这一层不碰渲染
  *
@@ -39,7 +39,7 @@ export interface FreeCamera {
   elevation: number
   /** 绕视线轴的滚转（度）。 */
   roll: number
-  /** 垂直视场角（度）。滚轮改它 = 变焦。 */
+  /** 垂直视场角（度）。只由机位面板显式修改，普通缩放不改变投影角。 */
   fov: number
 }
 
@@ -65,10 +65,26 @@ export function forwardOf(camera: FreeCamera): Vec3 {
   return [forward.x, forward.y, forward.z]
 }
 
+/** Minecraft 式的水平前方：只取方位角，不让俯仰把 W/S 变成飞行。 */
+export function groundForwardOf(camera: FreeCamera): Vec3 {
+  const { forward } = basisFromAngles(camera.azimuth, 0, 0)
+  return [forward.x, 0, forward.z]
+}
+
 /** 相机右方（**总是水平的**：`right` 与仰角无关，所以横移不会把人带飞）。 */
 export function rightOf(camera: FreeCamera): Vec3 {
   const { right } = basisFromAngles(camera.azimuth, clampFreeElevation(camera.elevation), 0)
   return [right.x, right.y, right.z]
+}
+
+/** 相机画面里的上方（包含俯仰与滚转），用于中键平移。 */
+export function upOf(camera: FreeCamera): Vec3 {
+  const { up } = basisFromAngles(
+    camera.azimuth,
+    clampFreeElevation(camera.elevation),
+    camera.roll,
+  )
+  return [up.x, up.y, up.z]
 }
 
 /** 从相机位置沿视线前 `distance` 的那个点——推给模型当 `lookAt` 用的就是它。 */
@@ -130,6 +146,63 @@ export function turn(camera: FreeCamera, dx: number, dy: number, unit: number): 
   camera.elevation = clampFreeElevation(camera.elevation - dy * unit * 0.8)
 }
 
+/**
+ * Minecraft 式自由观察。它和“抓住世界拖”的环绕方向相反：鼠标往右就向右看，
+ * 鼠标往下就低头。位置不动，只有朝向变化。
+ */
+export function look(camera: FreeCamera, dx: number, dy: number, unit: number): void {
+  const azimuth = camera.azimuth - dx * unit
+  camera.azimuth = ((((azimuth + 180) % 360) + 360) % 360) - 180
+  camera.elevation = clampFreeElevation(camera.elevation + dy * unit * 0.8)
+}
+
+/** 左键环绕：改变朝向后，把相机放回以 `pivot` 为中心、原距离不变的球面上。 */
+export function orbit(camera: FreeCamera, pivot: Vec3, dx: number, dy: number, unit: number): void {
+  const eye = camera.eye
+  if (eye === undefined) return
+  const distance = Math.max(
+    0.001,
+    Math.hypot(eye[0] - pivot[0], eye[1] - pivot[1], eye[2] - pivot[2]),
+  )
+  turn(camera, dx, dy, unit)
+  const forward = forwardOf(camera)
+  camera.eye = [
+    pivot[0] - forward[0] * distance,
+    pivot[1] - forward[1] * distance,
+    pivot[2] - forward[2] * distance,
+  ]
+}
+
+/**
+ * 中键平移：相机与环绕中心一起移动，因此朝向、距离和构图尺度都不变。
+ * 位移按当前观察距离与视场角换算成世界单位，近看时细、远看时快。
+ */
+export function track(
+  camera: FreeCamera,
+  pivot: Vec3,
+  dx: number,
+  dy: number,
+  viewportHeight: number,
+): Vec3 {
+  const eye = camera.eye
+  if (eye === undefined) return [...pivot]
+  const distance = Math.max(
+    0.001,
+    Math.hypot(eye[0] - pivot[0], eye[1] - pivot[1], eye[2] - pivot[2]),
+  )
+  const unitsPerPixel =
+    (2 * distance * Math.tan((camera.fov * Math.PI) / 360)) / Math.max(1, viewportHeight)
+  const right = rightOf(camera)
+  const up = upOf(camera)
+  const delta: Vec3 = [
+    -right[0] * dx * unitsPerPixel + up[0] * dy * unitsPerPixel,
+    -right[1] * dx * unitsPerPixel + up[1] * dy * unitsPerPixel,
+    -right[2] * dx * unitsPerPixel + up[2] * dy * unitsPerPixel,
+  ]
+  camera.eye = [eye[0] + delta[0], eye[1] + delta[1], eye[2] + delta[2]]
+  return [pivot[0] + delta[0], pivot[1] + delta[1], pivot[2] + delta[2]]
+}
+
 /** 滚轮：改视场角。指数变化，手感才均匀（和原来的缩放一致）。 */
 export function zoom(camera: FreeCamera, deltaY: number): void {
   const fov = camera.fov * Math.exp(deltaY * 0.0015)
@@ -137,16 +210,33 @@ export function zoom(camera: FreeCamera, deltaY: number): void {
 }
 
 /**
+ * 建筑视口的滚轮缩放：改变相机到观察中心的距离，不改变 FOV。
+ * 这避免了广角/长焦式透视畸变，用户看到的是几何意义上的拉近与拉远。
+ */
+export function dolly(camera: FreeCamera, pivot: Vec3, deltaY: number): void {
+  const eye = camera.eye
+  if (eye === undefined) return
+  const offset: Vec3 = [eye[0] - pivot[0], eye[1] - pivot[1], eye[2] - pivot[2]]
+  const distance = Math.max(0.001, Math.hypot(...offset))
+  const next = Math.min(10_000, Math.max(0.25, distance * Math.exp(deltaY * 0.0015)))
+  const scale = next / distance
+  camera.eye = [
+    pivot[0] + offset[0] * scale,
+    pivot[1] + offset[1] * scale,
+    pivot[2] + offset[2] * scale,
+  ]
+}
+
+/**
  * 沿相机自己的轴平移。
  *
- * - `forward` 走**完整的三维视线**（抬头按 W 就上升）——这是游戏的飞行动作，
- *   也让"想看屋顶"不需要另一组按键；
+ * - `forward` 沿视角在**世界水平面**上的投影移动；抬头按 W 仍保持高度；
  * - `strafe` 走 `right`（水平的），所以横移永远不会把你带偏高度。
  */
 export function pan(camera: FreeCamera, forward: number, strafe: number): void {
   const eye = camera.eye
   if (eye === undefined) return
-  const f = forwardOf(camera)
+  const f = groundForwardOf(camera)
   const r = rightOf(camera)
   camera.eye = [
     eye[0] + f[0] * forward + r[0] * strafe,
@@ -175,7 +265,7 @@ export function lift(camera: FreeCamera, amount: number): void {
 /**
  * 一帧里按住了哪些移动键，走多远。
  *
- * `speed` 是**每秒多少格**。方向取自相机自己：W/S 前后（含俯仰），A/D 左右横移
+ * `speed` 是**每秒多少格**。方向取自相机的水平朝向：W/S 前后、A/D 左右横移
  * （水平），**空格上升 / Shift 下降**（沿世界 Y，见 `lift()`）。
  * 同时按住相反的方向会互相抵消——不必特判，算式本来就那样。
  * 相机还没落地时先不动（`pan` / `lift` 都是空操作），调用方会在同一帧里 `place()` 它。

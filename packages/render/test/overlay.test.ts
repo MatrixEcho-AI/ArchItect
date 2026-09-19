@@ -56,6 +56,19 @@ describe('Canvas.blend 的坐标取整（回归）', () => {
   })
 })
 
+describe('环绕锚点', () => {
+  it('按真实相机投影画出 Ant Design 主色靶心', () => {
+    const canvas = new Canvas(480, 360, BG)
+    const camera = cameraFor(HOUSE)
+    drawOverlays(canvas, camera, cameraBasis(camera), HOUSE, {
+      ruler: false,
+      axisGizmo: false,
+      anchor: { x: 7.5, y: 7.5, z: 7.5 },
+    })
+    expect(countNear(canvas, { r: 22, g: 119, b: 255 }, 0)).toBeGreaterThan(12)
+  })
+})
+
 describe('位图字体', () => {
   it('已知字形存在，未知字符用占位块', () => {
     expect(glyphFor('5').rows).toHaveLength(7)

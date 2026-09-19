@@ -52,6 +52,10 @@ body,
   cursor: grabbing;
 }
 
+body.free-looking .viewport-stage canvas {
+  cursor: none;
+}
+
 /* 编辑模式下光标换成十字：不然用户不知道"现在点一下会改东西" */
 .editing .viewport-stage canvas {
   cursor: crosshair;

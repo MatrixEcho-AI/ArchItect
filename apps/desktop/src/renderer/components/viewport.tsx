@@ -22,7 +22,7 @@ export interface ViewportProps {
   empty: boolean
   /** 编辑模式：几乎没动的按下 = 改一格。 */
   editMode: boolean
-  /** 一次"点击"（拖动距离在阈值内）。`button === 2` 或 Alt = 挖掉。 */
+  /** 一次左键"点击"（拖动距离在阈值内）。Alt = 挖掉。 */
   onPick: (event: {
     clientX: number
     clientY: number
@@ -31,6 +31,8 @@ export interface ViewportProps {
     ctrlKey: boolean
     button: number
   }) => void
+  /** 双击时尝试聚焦命中的方块；没有命中则恢复完整取景。 */
+  onFocus: (event: { clientX: number; clientY: number }) => void
   /** 自由视角下拖动过 → 下拉框不再说"等轴测 东北"。 */
   onFreeView: () => void
   /** 相机动了 → 让 React 重算机位字段与状态行。 */
@@ -45,13 +47,14 @@ export function Viewport({
   empty,
   editMode,
   onPick,
+  onFocus,
   onFreeView,
   onCameraChanged,
 }: ViewportProps): React.JSX.Element {
   const stageRef = useRef<HTMLDivElement>(null)
   // 事件处理器要读最新的 editMode / 回调，但不该因为它们的身份变化就重装监听
-  const latest = useRef({ editMode, onPick, onFreeView, onCameraChanged })
-  latest.current = { editMode, onPick, onFreeView, onCameraChanged }
+  const latest = useRef({ editMode, onPick, onFocus, onFreeView, onCameraChanged })
+  latest.current = { editMode, onPick, onFocus, onFreeView, onCameraChanged }
 
   // 容器尺寸。用 ResizeObserver 而不是 window.resize：侧栏折叠、对话框打开也会
   // 改变视口大小，而 window 尺寸没变。
@@ -116,14 +119,42 @@ export function Viewport({
     let dragAt = { x: 0, y: 0 }
     /** 累计拖动距离。**用它区分"点击"和"转视角"**：手一抖就改掉一格是最烦人的事。 */
     let moved = 0
-    /** 这次按下的是哪个键——松手时要按同一个键决定是放置还是挖掉。 */
+    /** 这次按下的是哪个键——松手时要按同一个键确认点击。 */
     let button = 0
+    let mode: 'orbit' | 'track' = 'orbit'
+    let freeLooking = false
+
+    const stopFreeLook = (): void => {
+      if (!freeLooking) return
+      freeLooking = false
+      document.body.classList.remove('free-looking')
+      if (document.pointerLockElement === overlay) void document.exitPointerLock()
+      shell.requestFrame()
+    }
 
     const onPointerDown = (event: PointerEvent): void => {
-      // 右键也接：体素编辑器的惯例是右键挖掉。下面的 contextmenu 要一起挡掉
-      if (event.button !== 0 && event.button !== 2) return
+      if (event.button !== 0 && event.button !== 1 && event.button !== 2) return
+      if (event.button === 2) {
+        if (freeLooking) {
+          stopFreeLook()
+          return
+        }
+        freeLooking = true
+        dragAt = { x: event.clientX, y: event.clientY }
+        document.body.classList.add('free-looking')
+        try {
+          const pending = overlay.requestPointerLock()
+          if (pending instanceof Promise) void pending.catch(() => undefined)
+        } catch {
+          // 合成事件或浏览器不支持 pointer lock：仍可再次右击退出
+        }
+        latest.current.onFreeView()
+        return
+      }
+      if (freeLooking) return
       dragging = true
       button = event.button
+      mode = event.button === 1 ? 'track' : 'orbit'
       moved = 0
       dragAt = { x: event.clientX, y: event.clientY }
       // **必须包起来**：`setPointerCapture` 对"没有活动指针"的指针 id 会抛
@@ -142,12 +173,18 @@ export function Viewport({
     }
 
     const onPointerMove = (event: PointerEvent): void => {
-      if (!dragging) return
-      const dx = event.clientX - dragAt.x
-      const dy = event.clientY - dragAt.y
+      const locked = document.pointerLockElement === overlay
+      const dx = locked ? event.movementX : event.clientX - dragAt.x
+      const dy = locked ? event.movementY : event.clientY - dragAt.y
       dragAt = { x: event.clientX, y: event.clientY }
+      if (freeLooking) {
+        shell.lookDrag(dx, dy, overlay.clientHeight)
+        return
+      }
+      if (!dragging) return
       moved += Math.abs(dx) + Math.abs(dy)
-      shell.drag(dx, dy, event.altKey, overlay.clientHeight)
+      if (mode === 'track') shell.trackDrag(dx, dy, overlay.clientHeight)
+      else shell.orbitDrag(dx, dy, event.altKey, overlay.clientHeight)
     }
 
     const endDrag = (event: PointerEvent): void => {
@@ -160,6 +197,7 @@ export function Viewport({
       // 编辑模式下"几乎没动"的一次按下 = 一次点击 → 改一格
       if (
         latest.current.editMode &&
+        button === 0 &&
         event.type === 'pointerup' &&
         event.button === button &&
         moved <= CLICK_SLOP
@@ -180,8 +218,26 @@ export function Viewport({
       shell.wheel(event.deltaY)
     }
 
-    const onDoubleClick = (): void => shell.dblclick()
+    const onDoubleClick = (event: MouseEvent): void => {
+      if (latest.current.editMode) return
+      latest.current.onFocus({ clientX: event.clientX, clientY: event.clientY })
+    }
     const onContextMenu = (event: MouseEvent): void => event.preventDefault()
+    const onAuxClick = (event: MouseEvent): void => {
+      if (event.button === 1) event.preventDefault()
+    }
+    /**
+     * Pointer Lock 自带 Esc 解锁；同步结束应用里的切换状态，避免光标出来后仍转头。
+     */
+    const onPointerLockChange = (): void => {
+      if (!freeLooking || document.pointerLockElement === overlay) return
+      freeLooking = false
+      document.body.classList.remove('free-looking')
+      shell.requestFrame()
+    }
+    const onEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') stopFreeLook()
+    }
 
     overlay.addEventListener('pointerdown', onPointerDown)
     overlay.addEventListener('pointermove', onPointerMove)
@@ -190,6 +246,9 @@ export function Viewport({
     overlay.addEventListener('wheel', onWheel, { passive: false })
     overlay.addEventListener('dblclick', onDoubleClick)
     overlay.addEventListener('contextmenu', onContextMenu)
+    overlay.addEventListener('auxclick', onAuxClick)
+    document.addEventListener('pointerlockchange', onPointerLockChange)
+    window.addEventListener('keydown', onEscape)
     return () => {
       overlay.removeEventListener('pointerdown', onPointerDown)
       overlay.removeEventListener('pointermove', onPointerMove)
@@ -198,7 +257,12 @@ export function Viewport({
       overlay.removeEventListener('wheel', onWheel)
       overlay.removeEventListener('dblclick', onDoubleClick)
       overlay.removeEventListener('contextmenu', onContextMenu)
+      overlay.removeEventListener('auxclick', onAuxClick)
+      document.removeEventListener('pointerlockchange', onPointerLockChange)
+      window.removeEventListener('keydown', onEscape)
+      stopFreeLook()
       document.body.classList.remove('dragging')
+      document.body.classList.remove('free-looking')
     }
   }, [shell])
 
@@ -304,9 +368,9 @@ export function Viewport({
   return (
     <div className="viewport-stage" ref={stageRef}>
       {/* three.js 画方块 */}
-      <canvas id="canvas" title={t('viewport.hint')} />
+      <canvas id="canvas" />
       {/* 叠加层单独一层 2D 画布：标尺/坐标轴/文字画在这上面，两层尺寸完全一致 */}
-      <canvas id="overlay" />
+      <canvas id="overlay" aria-label={t('viewport.hint')} />
       {empty && <div id="empty" className="viewport-empty">{t('viewport.empty')}</div>}
     </div>
   )

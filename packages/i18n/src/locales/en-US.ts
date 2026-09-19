@@ -280,6 +280,11 @@ export const enUS = {
 
     openProject: 'Open .mcai project',
     saveProject: 'Save .mcai project',
+    unsavedTitle: 'Unsaved changes',
+    unsavedMessage: 'Discard your unsaved changes and close?',
+    unsavedDetail: 'These changes will be lost. This action cannot be undone.',
+    cancelClose: 'Cancel',
+    discardAndClose: 'Discard and close',
     exportTitle: 'Export as…',
     importTitle: 'Import schematic…',
     schemFilter: 'Sponge schematic (.schem)',

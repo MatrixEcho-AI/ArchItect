@@ -283,6 +283,7 @@ function installApplicationMenu(): void {
 }
 
 function createWindow(): void {
+  let closeConfirmed = false
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 880,
@@ -300,6 +301,32 @@ function createWindow(): void {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
+  /**
+   * 明确保存之前，关闭窗口会丢掉工程里的操作、对话与备注。WAL 只负责崩溃恢复，
+   * 不能拿它冒充“已保存”；危险动作也不能成为默认按钮，避免回车误确认。
+   *
+   * 诊断运行会自己关闭窗口。若让它弹模态框，CI 与 GUI 冒烟都会一直等到超时。
+   */
+  mainWindow.on('close', (event) => {
+    const diagnostic = isDiagnosticRun(process.argv, new Set(debugFlagNames(process.argv)))
+    if (closeConfirmed || diagnostic || !studioReady || !studio.hasUnsavedChanges()) return
+
+    event.preventDefault()
+    const response = desktopDialog.showMessageBoxSync(mainWindow!, {
+      type: 'warning',
+      title: t('dialog.unsavedTitle'),
+      message: t('dialog.unsavedMessage'),
+      detail: t('dialog.unsavedDetail'),
+      buttons: [t('dialog.cancelClose'), t('dialog.discardAndClose')],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    if (response !== 1) return
+
+    closeConfirmed = true
+    mainWindow?.close()
+  })
   // 模型截图接上渲染进程里的 three.js。**接在这里而不是 `initStudio`**：
   // 工作台先建、窗口后建，接早了那时还没有窗口可问。
   // 渲染进程还没 `ready` 时 `captureInRenderer` 会自己返回 undefined，

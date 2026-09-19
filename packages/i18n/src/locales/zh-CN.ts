@@ -292,6 +292,11 @@ export const zhCN = {
 
     openProject: '打开 .mcai 工程',
     saveProject: '保存 .mcai 工程',
+    unsavedTitle: '有未保存的更改',
+    unsavedMessage: '要放弃未保存的更改并关闭吗？',
+    unsavedDetail: '关闭后，这些操作将会丢失。此操作无法撤销。',
+    cancelClose: '取消',
+    discardAndClose: '放弃更改并关闭',
     exportTitle: '导出为…',
     importTitle: '导入 schematic…',
     schemFilter: 'Sponge 结构（.schem）',

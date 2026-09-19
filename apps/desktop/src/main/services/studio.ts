@@ -3,7 +3,7 @@ import { rm, rename, readFile, writeFile } from 'node:fs/promises'
 import { activeProvider, AgentSession, costTableFor, runAgent } from '@architect/agent'
 import { t } from '@architect/i18n'
 import type { DiscoveryResult, LlmImage, SessionOptions, ShotInput, ShotRenderer } from '@architect/agent'
-import { applyOp, forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
+import { applyOp, encodeEditOp, forEachBox, forEachExtrude, forEachPlane, measure, renderSlice } from '@architect/core'
 import type { Bounds, Pos, SliceAxis, WorldStore } from '@architect/core'
 import {
   DATA_VERSION_1_21_4,
@@ -405,6 +405,15 @@ export class StudioService {
   private entityResult?: { revision: number; result: EntityRenderResult | undefined }
   private projectPath?: string
   /**
+   * 最近一次明确保存（或新建 / 打开）时的项目内容指纹。
+   *
+   * 不能只记 revision：保存 rev 5 后继续做到 rev 6，再撤销回 rev 5，世界看似回到了
+   * 保存点，但日志里仍多出一条可重做的操作；直接退出会把这条历史丢掉。操作 id 序列
+   * 能区分这种情况，也能区分“撤销后从旧版本另开分支”。对话与设计备注同样会写进
+   * `.mcai`，所以也必须算在未保存内容里。
+   */
+  private savedProjectFingerprint = ''
+  /**
    * 打开工程时收下的、**本版本不认识的 zip 条目**（`McaiProject.extra`）。
    *
    * 存着它、保存时写回去，是"格式只会加条目"这个前提成立的条件：新版本加的条目
@@ -521,6 +530,29 @@ export class StudioService {
       this.pushedOps = total
       this.emit({ type: 'revision', ...this.revisionProgress() })
     })
+    this.markProjectSaved()
+  }
+
+  /** 当前会写进 `.mcai` 的轻量身份；截图正文不重复编码，只记其稳定引用。 */
+  private projectFingerprint(): string {
+    const recording = this.chat.recording()
+    return JSON.stringify({
+      revision: this.session.store.revision,
+      // id 只是 `op_000001` 这种序号；分支改写后 id 会复用，必须比较操作正文。
+      ops: this.session.log.all().map(encodeEditOp),
+      chat: recording.transcript,
+      captures: recording.captures.refs,
+      designNotes: this.session.currentDesignNotes,
+    })
+  }
+
+  private markProjectSaved(): void {
+    this.savedProjectFingerprint = this.projectFingerprint()
+  }
+
+  /** 关闭窗口前使用；自动保存日志不等于用户明确保存工程。 */
+  hasUnsavedChanges(): boolean {
+    return this.projectFingerprint() !== this.savedProjectFingerprint
   }
 
   /** `revision` 事件的内容：版本号、op 数、以及最近那几条 op（左栏记录要立刻长出来）。 */
@@ -818,6 +850,7 @@ export class StudioService {
      * `clear()` 自己会 emit 一个 `chat` 事件，界面跟着更新——不需要在这里多推一次。
      */
     this.chat.clear()
+    this.markProjectSaved()
     /**
      * **必须自己推一次 `state`。**
      *
@@ -862,6 +895,7 @@ export class StudioService {
     this.projectName = project.manifest.name
     // 对话记录是工程文件的一半：打开时把它接回界面（消息、截图、用量）
     this.chat.load(project.chat, project.captures)
+    this.markProjectSaved()
     return this.state()
   }
 
@@ -928,6 +962,7 @@ export class StudioService {
     this.projectPath = target
     // 保存成功 = 基准推进：WAL 里这一段已经进了工程文件，不必再留着
     this.commitAutosave()
+    this.markProjectSaved()
     return target
   }
 

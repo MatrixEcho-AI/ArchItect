@@ -16,9 +16,10 @@ export const enUS = {
     failed: '{{label}} failed: {{message}}',
   },
   menu: {
+    edit: 'Edit',
     new: 'New',
     open: 'Open…',
-    save: 'Save…',
+    save: 'Save',
     demo: 'Load sample',
     settings: 'Settings…',
     export: 'Export…',
@@ -31,7 +32,19 @@ export const enUS = {
   viewport: {
     status: 'azimuth {{az}}°  elevation {{el}}° · {{ms}}',
     statusAt: 'azimuth {{az}}°  elevation {{el}}° · at {{pos}} · {{ms}}',
-    hint: 'WASD to move, Space to rise, Shift to descend · drag to turn · wheel to zoom · double-click to reset framing',
+    hint: 'Left-drag to orbit · middle-drag to pan · right-click to toggle free look · wheel to zoom · WASD to move · Space/Shift for up/down',
+    controls: {
+      title: 'Viewport controls',
+      mouseTitle: 'Mouse',
+      keyboardTitle: 'Keyboard',
+      orbit: 'Left-drag: orbit around the build',
+      pan: 'Middle-drag: pan the view',
+      look: 'Right-click: enter / exit free look · Esc to exit',
+      zoom: 'Wheel: zoom in / out',
+      move: 'WASD: move forward, back, left, and right',
+      vertical: 'Space: rise · Shift: descend',
+      focus: 'Outside edit mode: double-click a block to focus · empty space to frame all',
+    },
     camera: 'Camera',
     empty: 'Empty world — describe the building on the right',
     angles: {
@@ -268,6 +281,11 @@ export const enUS = {
 
     openProject: 'Open .mcai project',
     saveProject: 'Save .mcai project',
+    unsavedTitle: 'Unsaved changes',
+    unsavedMessage: 'Discard your unsaved changes and close?',
+    unsavedDetail: 'These changes will be lost. This action cannot be undone.',
+    cancelClose: 'Cancel',
+    discardAndClose: 'Discard and close',
     exportTitle: 'Export as…',
     importTitle: 'Import schematic…',
     schemFilter: 'Sponge schematic (.schem)',
@@ -716,4 +734,3 @@ export const enUS = {
     },
   },
 } satisfies Messages
-

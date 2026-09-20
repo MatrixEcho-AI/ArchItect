@@ -392,6 +392,64 @@ describe('StudioService：撤销 / 重做', () => {
   })
 })
 
+describe('StudioService：未保存状态', () => {
+  it('新建和打开的工程是干净的，编辑后才变脏', async () => {
+    const studio = makeStudio()
+    expect(studio.hasUnsavedChanges()).toBe(false)
+
+    studio.demo()
+    expect(studio.hasUnsavedChanges()).toBe(true)
+
+    const path = join(workspace, 'dirty-state.mcai')
+    await studio.save(path)
+    expect(studio.hasUnsavedChanges()).toBe(false)
+
+    const reopened = makeStudio()
+    await reopened.open(path)
+    expect(reopened.hasUnsavedChanges()).toBe(false)
+  })
+
+  it('保存后的撤销和重做都算未保存，重新保存后恢复干净', async () => {
+    const studio = makeStudio()
+    studio.demo()
+    const path = join(workspace, 'dirty-history.mcai')
+    await studio.save(path)
+
+    studio.undo()
+    expect(studio.hasUnsavedChanges()).toBe(true)
+    await studio.save()
+    expect(studio.hasUnsavedChanges()).toBe(false)
+
+    studio.redo()
+    expect(studio.hasUnsavedChanges()).toBe(true)
+  })
+
+  it('撤销后另开分支即使版本号和操作数相同，也不会冒充原保存点', async () => {
+    const studio = makeStudio()
+    const saved = studio.demo()
+    await studio.save(join(workspace, 'dirty-branch.mcai'))
+
+    studio.undo()
+    const branched = studio.editBlock({
+      pos: [0, 0, 0],
+      block: 'minecraft:gold_block',
+      mode: 'place',
+    })
+    expect(branched.revision).toBe(saved.revision)
+    expect(branched.totalOps).toBe(saved.totalOps)
+    expect(studio.hasUnsavedChanges()).toBe(true)
+  })
+
+  it('新建会丢弃上一工程的未保存状态，并建立新的干净基准', () => {
+    const studio = makeStudio()
+    studio.demo()
+    expect(studio.hasUnsavedChanges()).toBe(true)
+
+    studio.newProject()
+    expect(studio.hasUnsavedChanges()).toBe(false)
+  })
+})
+
 describe('StudioService：软件视口（没有 WebGL 时的兜底）', () => {
   it('出一帧原始 RGBA，长度与尺寸对得上', () => {
     const studio = makeStudio()

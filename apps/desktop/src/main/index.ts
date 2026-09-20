@@ -267,22 +267,74 @@ function toLlmImage(input: ChatImageInput): LlmImage {
  * 全在工具栏里。`setApplicationMenu(null)` 会把整条菜单栏从窗口上拿掉。
  *
  * macOS **不能照做**。它的菜单栏是屏幕顶部那条、由系统托管，而且 Electron 的
- * `Cmd+C` / `Cmd+V` / `Cmd+Z` / `Cmd+Q` 这些标准快捷键是**靠菜单 role 实现的**
- * ——把菜单置空，聊天输入框里的复制粘贴会跟着一起失效（那正是本程序重输入的地方，
- * 界面上还专门接了粘贴事件）。所以这里只留必要的三组：应用、编辑、窗口，让快捷键
- * 照常工作，同时又不再有默认那套 File / View / Help。
+ * `Cmd+C` / `Cmd+V` / `Cmd+Q` 这些标准快捷键是**靠菜单 role 实现的**——把菜单
+ * 置空，聊天输入框里的复制粘贴会跟着一起失效（那正是本程序重输入的地方）。
+ *
+ * 但 `editMenu` 不能整组照搬：它自带的 `undo` / `redo` role 会先吃掉 `Cmd+Z`，执行
+ * Chromium 的**文字**撤销，渲染进程负责项目历史的 keydown 根本收不到。于是用户
+ * 看着快捷键说明按 `Cmd+Z`，项目 revision 没动，关闭时当然也没有“未保存”提示。
+ * 下面单独接管这两个动作：输入框有焦点时仍走文字历史，其余位置走项目历史。
  */
+async function undoOrRedoFromMenu(redo: boolean): Promise<void> {
+  const win = mainWindow
+  if (!studioReady || win === undefined || win.isDestroyed()) return
+
+  const editing = await win.webContents
+    .executeJavaScript(`(() => {
+      const active = document.activeElement;
+      return active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        active?.isContentEditable === true;
+    })()`)
+    .catch(() => false)
+
+  if (editing === true) {
+    if (redo) win.webContents.redo()
+    else win.webContents.undo()
+    return
+  }
+
+  const state = redo ? studio.redo() : studio.undo()
+  pushEvent({ type: 'state', state })
+}
+
 function installApplicationMenu(): void {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null)
     return
   }
   Menu.setApplicationMenu(
-    Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]),
+    Menu.buildFromTemplate([
+      { role: 'appMenu' },
+      {
+        label: t('menu.edit'),
+        submenu: [
+          {
+            label: t('menu.undo'),
+            accelerator: 'CommandOrControl+Z',
+            click: () => void undoOrRedoFromMenu(false),
+          },
+          {
+            label: t('menu.redo'),
+            accelerator: 'CommandOrControl+Shift+Z',
+            click: () => void undoOrRedoFromMenu(true),
+          },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'pasteAndMatchStyle' },
+          { role: 'delete' },
+          { role: 'selectAll' },
+        ],
+      },
+      { role: 'windowMenu' },
+    ]),
   )
 }
 
 function createWindow(): void {
+  let closeConfirmed = false
   mainWindow = new BrowserWindow({
     width: 1360,
     height: 880,
@@ -300,6 +352,32 @@ function createWindow(): void {
   })
 
   mainWindow.once('ready-to-show', () => mainWindow?.show())
+  /**
+   * 明确保存之前，关闭窗口会丢掉工程里的操作、对话与备注。WAL 只负责崩溃恢复，
+   * 不能拿它冒充“已保存”；危险动作也不能成为默认按钮，避免回车误确认。
+   *
+   * 诊断运行会自己关闭窗口。若让它弹模态框，CI 与 GUI 冒烟都会一直等到超时。
+   */
+  mainWindow.on('close', (event) => {
+    const diagnostic = isDiagnosticRun(process.argv, new Set(debugFlagNames(process.argv)))
+    if (closeConfirmed || diagnostic || !studioReady || !studio.hasUnsavedChanges()) return
+
+    event.preventDefault()
+    const response = desktopDialog.showMessageBoxSync(mainWindow!, {
+      type: 'warning',
+      title: t('dialog.unsavedTitle'),
+      message: t('dialog.unsavedMessage'),
+      detail: t('dialog.unsavedDetail'),
+      buttons: [t('dialog.cancelClose'), t('dialog.discardAndClose')],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    if (response !== 1) return
+
+    closeConfirmed = true
+    mainWindow?.close()
+  })
   // 模型截图接上渲染进程里的 three.js。**接在这里而不是 `initStudio`**：
   // 工作台先建、窗口后建，接早了那时还没有窗口可问。
   // 渲染进程还没 `ready` 时 `captureInRenderer` 会自己返回 undefined，
@@ -389,7 +467,10 @@ function registerIpc(): void {
   })
 
   handle('studio:save', async (path?: string) => {
-    let target = path
+    // 普通“保存”优先写回当前工程；只有新建项目第一次保存时才询问位置。
+    // 渲染进程调用 `save()` 时本来就不传路径，旧接线因此每次都弹框，实际变成了
+    // “另存为”。StudioService 一直支持省略路径写回，这里不能把当前 projectPath 丢掉。
+    let target = path ?? studio.state().projectPath
     if (target === undefined) {
       const result = await desktopDialog.showSaveDialog({
         title: t('dialog.saveProject'),
@@ -1337,6 +1418,39 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       blocked ? '被挡且有打开设置的按钮' : '没有被挡（模型已配置）',
     );
 
+    const viewportHelp = document.querySelector('#btn-viewport-help');
+    const viewportCanvas = document.querySelector('#canvas');
+    const viewportOverlay = document.querySelector('#overlay');
+    const settingsForHelp = document.querySelector('#btn-settings');
+    if (viewportHelp !== null) {
+      viewportHelp.click();
+      await frames();
+    }
+    const helpDialog = document.querySelector('#viewport-help-dialog');
+    const helpLeftOfSettings =
+      viewportHelp !== null &&
+      settingsForHelp !== null &&
+      viewportHelp.getBoundingClientRect().right <= settingsForHelp.getBoundingClientRect().left;
+    check(
+      'viewport-controls-help',
+      viewportHelp !== null &&
+        helpLeftOfSettings &&
+        helpDialog !== null &&
+        helpDialog.textContent.includes('单击右键') &&
+        !viewportCanvas.hasAttribute('title') &&
+        !viewportOverlay.hasAttribute('title'),
+      viewportHelp === null
+        ? '没有操作入口'
+        : '入口在设置左侧=' + helpLeftOfSettings + ' / 独立说明界面=' + (helpDialog !== null) +
+            ' / 画布 hover 提示已移除=' +
+            (!viewportCanvas.hasAttribute('title') && !viewportOverlay.hasAttribute('title')),
+    );
+    const helpClose = helpDialog === null ? null : helpDialog.closest('.ant-modal')?.querySelector('.ant-modal-close');
+    if (helpClose !== null && helpClose !== undefined) {
+      helpClose.click();
+      await frames();
+    }
+
     // **WASD 真的在移动相机**。
     // 断言的是那行隐藏的状态行——它是渲染进程里唯一读得到的相机快照，相机落地之后
     // 会写上"位置 x,y,z"。所以走一步、再走一步，那三个数必须跟着变。
@@ -1353,12 +1467,23 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       const found = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
       return found === null ? null : found.slice(1).join(',');
     };
+    const settledPosition = positionOf(await walk('w', 0));
     const afterW = positionOf(await walk('w', 8));
     const afterA = positionOf(await walk('a', 8));
+    const settledParts = settledPosition === null ? null : settledPosition.split(',');
+    const afterWParts = afterW === null ? null : afterW.split(',');
+    const afterAParts = afterA === null ? null : afterA.split(',');
     check(
       'wasd-move',
-      afterW !== null && afterA !== null && afterW !== afterA,
-      '相机位置 ' + afterW + ' →（按 A 横移）' + afterA,
+      settledParts !== null &&
+        afterWParts !== null &&
+        afterAParts !== null &&
+        settledPosition !== afterW &&
+        afterW !== afterA &&
+        settledParts[1] === afterWParts[1] &&
+        afterWParts[1] === afterAParts[1],
+      '相机位置 ' + settledPosition + ' →（按 W）' + afterW + ' →（按 A）' + afterA +
+        '，高度保持 ' + (afterWParts === null ? '?' : afterWParts[1]),
     );
 
     // **空格上升 / Shift 下降**：同一条真实键盘路径。
@@ -1392,9 +1517,7 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         '，水平位置保持在 ' + xzOf(rose),
     );
 
-    // **拖动 = 原地转头**：角度变了，位置一动不动。
-    // 以前拖动是"绕着画面中心转"（位置在这套语义里根本不存在），现在相机有一个真实位置，
-    // 拖动只改朝向——所以这条断言同时钉住了"拖动仍然能转"和"转的时候人不跟着飞"。
+    // **左键拖动 = 环绕建筑**：角度与位置一起变化，但观察中心不漂。
     //
     // **方向也要钉住**：往右拖 = 画面跟着手往右走 = 相机**左**转（方位角增大）。
     // 这条只能在这里验，因为"dx 有没有被取反"发生在事件接线里，单元测试测不到；
@@ -1404,17 +1527,18 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
       const at = /(-?\\d+),(-?\\d+),(-?\\d+)/.exec(text);
       return {
         azimuth: angles === null ? null : Number(angles[1]),
+        elevation: angles === null ? null : Number(angles[2]),
         position: at === null ? null : at.slice(1).join(','),
       };
     };
     const overlay = document.querySelector('#overlay');
     const rect = overlay.getBoundingClientRect();
-    const send = (type, x, y) =>
+    const send = (type, x, y, button = 0) =>
       overlay.dispatchEvent(
         new PointerEvent(type, {
           pointerId: 7,
-          button: 0,
-          buttons: type === 'pointerup' ? 0 : 1,
+          button,
+          buttons: type === 'pointerup' ? 0 : button === 2 ? 2 : button === 1 ? 4 : 1,
           clientX: x,
           clientY: y,
           bubbles: true,
@@ -1429,12 +1553,64 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
     await frames();
     const afterTurn = poseOf(status === null ? '' : status.textContent);
     check(
-      'drag-turn-in-place',
+      'drag-orbit',
       beforeTurn.position !== null &&
-        beforeTurn.position === afterTurn.position &&
+        beforeTurn.position !== afterTurn.position &&
         beforeTurn.azimuth !== afterTurn.azimuth &&
         afterTurn.azimuth > beforeTurn.azimuth,
-      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°（往右拖 = 左转 = 角度增大），位置保持在 ' + beforeTurn.position,
+      '方位 ' + beforeTurn.azimuth + '° → ' + afterTurn.azimuth + '°，位置 ' + beforeTurn.position + ' → ' + afterTurn.position,
+    );
+
+    // 右键自由观察不是“抓住画面拖”：它遵循 Minecraft/FPS 方向，单击进入、再次单击退出。
+    const beforeLook = poseOf(status === null ? '' : status.textContent);
+    send('pointerdown', cx, cy, 2);
+    send('pointerup', cx + 24, cy + 18, 2);
+    send('pointermove', cx + 24, cy + 18, 2);
+    await frames();
+    const afterLook = poseOf(status === null ? '' : status.textContent);
+    const activeAfterRelease = document.body.classList.contains('free-looking');
+    send('pointerdown', cx + 24, cy + 18, 2);
+    send('pointerup', cx + 24, cy + 18, 2);
+    await frames();
+    check(
+      'right-click-free-look-toggle',
+      beforeLook.azimuth !== null &&
+        beforeLook.elevation !== null &&
+        afterLook.azimuth < beforeLook.azimuth &&
+        afterLook.elevation > beforeLook.elevation &&
+        afterLook.position === beforeLook.position &&
+        activeAfterRelease &&
+        !document.body.classList.contains('free-looking'),
+      '方位 ' + beforeLook.azimuth + '° → ' + afterLook.azimuth + '°（向右看），仰角 ' +
+        beforeLook.elevation + '° → ' + afterLook.elevation + '°（向下看），松开后仍激活=' +
+        activeAfterRelease + '，再次右击后已退出=' +
+        !document.body.classList.contains('free-looking'),
+    );
+
+    // 双击空白恢复默认取景后，滚轮应移动相机，而不是改变投影角/FOV。
+    overlay.dispatchEvent(
+      new MouseEvent('dblclick', {
+        clientX: rect.left + 8,
+        clientY: rect.top + 8,
+        bubbles: true,
+      }),
+    );
+    for (let i = 0; i < 6; i++) await frames();
+    // deltaY=0 只让自动取景相机落地，取得滚轮前的真实位置。
+    overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: 0, bubbles: true, cancelable: true }));
+    await frames();
+    const beforeWheel = poseOf(status === null ? '' : status.textContent);
+    overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: -180, bubbles: true, cancelable: true }));
+    await frames();
+    const afterWheel = poseOf(status === null ? '' : status.textContent);
+    check(
+      'wheel-dolly-after-reset',
+      beforeWheel.position !== null &&
+        afterWheel.position !== beforeWheel.position &&
+        afterWheel.azimuth === beforeWheel.azimuth &&
+        afterWheel.elevation === beforeWheel.elevation,
+      '位置 ' + beforeWheel.position + ' → ' + afterWheel.position +
+        '，方位/仰角保持 ' + afterWheel.azimuth + '°/' + afterWheel.elevation + '°',
     );
 
     /**

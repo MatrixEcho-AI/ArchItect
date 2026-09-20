@@ -13,6 +13,7 @@ export const zhCN = {
     failed: '{{label}}失败：{{message}}',
   },
   menu: {
+    edit: '编辑',
     new: '新建',
     open: '打开…',
     save: '保存…',

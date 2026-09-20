@@ -61,3 +61,13 @@ describe('拼给渲染进程的脚本', () => {
     expect(script).not.toContain('`')
   })
 })
+
+describe('macOS 应用菜单', () => {
+  it('不让原生 editMenu 抢走项目撤销快捷键', () => {
+    expect(source).not.toContain("{ role: 'editMenu' }")
+    expect(source).toContain("accelerator: 'CommandOrControl+Z'")
+    expect(source).toContain('undoOrRedoFromMenu(false)')
+    expect(source).toContain('win.webContents.undo()')
+    expect(source).toContain("pushEvent({ type: 'state', state })")
+  })
+})

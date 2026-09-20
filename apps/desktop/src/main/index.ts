@@ -267,18 +267,69 @@ function toLlmImage(input: ChatImageInput): LlmImage {
  * 全在工具栏里。`setApplicationMenu(null)` 会把整条菜单栏从窗口上拿掉。
  *
  * macOS **不能照做**。它的菜单栏是屏幕顶部那条、由系统托管，而且 Electron 的
- * `Cmd+C` / `Cmd+V` / `Cmd+Z` / `Cmd+Q` 这些标准快捷键是**靠菜单 role 实现的**
- * ——把菜单置空，聊天输入框里的复制粘贴会跟着一起失效（那正是本程序重输入的地方，
- * 界面上还专门接了粘贴事件）。所以这里只留必要的三组：应用、编辑、窗口，让快捷键
- * 照常工作，同时又不再有默认那套 File / View / Help。
+ * `Cmd+C` / `Cmd+V` / `Cmd+Q` 这些标准快捷键是**靠菜单 role 实现的**——把菜单
+ * 置空，聊天输入框里的复制粘贴会跟着一起失效（那正是本程序重输入的地方）。
+ *
+ * 但 `editMenu` 不能整组照搬：它自带的 `undo` / `redo` role 会先吃掉 `Cmd+Z`，执行
+ * Chromium 的**文字**撤销，渲染进程负责项目历史的 keydown 根本收不到。于是用户
+ * 看着快捷键说明按 `Cmd+Z`，项目 revision 没动，关闭时当然也没有“未保存”提示。
+ * 下面单独接管这两个动作：输入框有焦点时仍走文字历史，其余位置走项目历史。
  */
+async function undoOrRedoFromMenu(redo: boolean): Promise<void> {
+  const win = mainWindow
+  if (!studioReady || win === undefined || win.isDestroyed()) return
+
+  const editing = await win.webContents
+    .executeJavaScript(`(() => {
+      const active = document.activeElement;
+      return active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        active?.isContentEditable === true;
+    })()`)
+    .catch(() => false)
+
+  if (editing === true) {
+    if (redo) win.webContents.redo()
+    else win.webContents.undo()
+    return
+  }
+
+  const state = redo ? studio.redo() : studio.undo()
+  pushEvent({ type: 'state', state })
+}
+
 function installApplicationMenu(): void {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null)
     return
   }
   Menu.setApplicationMenu(
-    Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }]),
+    Menu.buildFromTemplate([
+      { role: 'appMenu' },
+      {
+        label: t('menu.edit'),
+        submenu: [
+          {
+            label: t('menu.undo'),
+            accelerator: 'CommandOrControl+Z',
+            click: () => void undoOrRedoFromMenu(false),
+          },
+          {
+            label: t('menu.redo'),
+            accelerator: 'CommandOrControl+Shift+Z',
+            click: () => void undoOrRedoFromMenu(true),
+          },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'pasteAndMatchStyle' },
+          { role: 'delete' },
+          { role: 'selectAll' },
+        ],
+      },
+      { role: 'windowMenu' },
+    ]),
   )
 }
 

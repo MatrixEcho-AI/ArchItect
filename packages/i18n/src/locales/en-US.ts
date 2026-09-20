@@ -16,6 +16,7 @@ export const enUS = {
     failed: '{{label}} failed: {{message}}',
   },
   menu: {
+    edit: 'Edit',
     new: 'New',
     open: 'Open…',
     save: 'Save…',

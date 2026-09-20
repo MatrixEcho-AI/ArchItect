@@ -179,6 +179,10 @@ export interface ProviderView {
   baseURL: string
   apiKeyRef: string
   model: string
+  models?: Array<{
+    id: string
+    capabilities?: ProviderView['capabilities']
+  }>
   capabilities: {
     vision: boolean
     toolCalling: string
@@ -407,6 +411,7 @@ export interface ArchitectBridge {
   removeProvider(id: string): Promise<SettingsView>
   addProvider(preset: string): Promise<SettingsView>
   setActive(id: string): Promise<SettingsView>
+  setActiveModel(providerId: string, modelId: string): Promise<SettingsView>
   setLocale(locale: string): Promise<SettingsView>
   setUi(patch: unknown): Promise<SettingsView>
   testConnection(input: unknown): Promise<DiscoveryResult>

@@ -582,6 +582,11 @@ function registerIpc(): void {
     persistSettings()
     return view
   })
+  handle('settings:setActiveModel', (providerId: string, modelId: string) => {
+    const view = studio.chat.setActiveModel(providerId, modelId)
+    persistSettings()
+    return view
+  })
   handle('settings:setLocale', (locale: 'zh-CN' | 'en-US') => {
     const view = studio.chat.setLocale(locale)
     setLocale(locale)
@@ -1274,8 +1279,8 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
      * 不该改用户的配置（demo 跑的是他本机的设置）。所以加号按钮只做存在性断言，
      * 新增那条链路由 chat.test.ts 覆盖。展开看表单是纯界面操作，不落盘。
      *
-     * **展开后必须能读到 #cfg-baseurl / #cfg-model / #btn-add-price**（在
-     * 「自定义设置」里）：地址、模型名与按模型的价格表就是这次要保住的东西，
+     * **编辑表单里必须能读到 #cfg-models / #cfg-model**：前者是这个 provider 的
+     * 模型集合，后者是当前模型。展开「自定义设置」后还必须有 #cfg-baseurl / #btn-add-price；
      * 折叠着不查的话，把整块删掉也能过。
      *
      * 它**不点「保存」**：那会发起一次真实的网络探测（挑模型那一步会在服务端花掉
@@ -1340,10 +1345,13 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         'settings-provider-form',
         expanded &&
           document.querySelector('#cfg-preset') !== null &&
+          document.querySelector('#cfg-models') !== null &&
+          document.querySelector('#cfg-model') !== null &&
           document.querySelector('#btn-advanced') !== null &&
           document.querySelector('#cfg-baseurl') === null,
         expanded
-          ? '表单展开，自定义设置默认收起=' + (document.querySelector('#cfg-baseurl') === null)
+          ? '表单展开，模型列表与当前模型在 / 自定义设置默认收起=' +
+            (document.querySelector('#cfg-baseurl') === null)
           : '点了「编辑」但表单没出来',
       );
 
@@ -1354,13 +1362,12 @@ async function assertGuiPanels(target: BrowserWindow): Promise<GuiCheck[]> {
         'settings-provider-advanced',
         openedAdvanced &&
           document.querySelector('#cfg-baseurl') !== null &&
-          document.querySelector('#cfg-model') !== null &&
           document.querySelector('#btn-add-price') !== null &&
           document.querySelector('#cfg-currency') !== null &&
           document.querySelector('#cfg-usd') === null &&
           document.querySelector('#cfg-turns') === null,
         openedAdvanced
-          ? '地址 / 模型名 / 加价格行 / 货币都在' +
+          ? '地址 / 加价格行 / 货币都在' +
               ' / 用量上限 ' +
               (document.querySelector('#cfg-usd') === null && document.querySelector('#cfg-turns') === null
                 ? '已移除'

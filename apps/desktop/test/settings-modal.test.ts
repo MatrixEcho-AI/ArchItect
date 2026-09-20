@@ -50,6 +50,7 @@ const settings: SettingsView = {
       baseURL: 'https://api.deepseek.com',
       apiKeyRef: 'env:DEEPSEEK_API_KEY',
       model: 'deepseek-flash',
+      models: [{ id: 'deepseek-flash' }, { id: 'deepseek-reasoner' }],
       capabilities: {
         vision: true,
         toolCalling: 'native',
@@ -85,7 +86,7 @@ afterEach(async () => {
 })
 
 /** 挂载并等对话框打开。Modal 渲染在 portal（document.body），查询要走 document。 */
-async function mountModal(): Promise<void> {
+async function mountModal(activeId = ''): Promise<void> {
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
@@ -95,7 +96,7 @@ async function mountModal(): Promise<void> {
       createElement(SettingsModal, {
         open: true,
         settings,
-        activeId: '',
+        activeId,
         onActiveId: () => {},
         onClose: () => {},
         onSaved: () => {},
@@ -172,6 +173,18 @@ describe('设置对话框的左侧菜单', () => {
     await clickMenuItem('settings-menu-general')
     expect(document.querySelector('#cfg-locale'), '切回通用页后语言选择器不见了').not.toBeNull()
     expect(document.querySelectorAll('.provider-card').length, '切回通用页后 provider 条目还在').toBe(0)
+  })
+})
+
+describe('一个 provider 的多个模型', () => {
+  it('编辑 provider 时显示可用模型列表与当前模型选择器', async () => {
+    await mountModal('deepseek')
+    await clickMenuItem('settings-menu-model')
+
+    expect(document.querySelector('#cfg-models')).not.toBeNull()
+    expect(document.querySelector('#cfg-model')).not.toBeNull()
+    expect(document.body.textContent).toContain('deepseek-flash')
+    expect(document.body.textContent).toContain('deepseek-reasoner')
   })
 })
 

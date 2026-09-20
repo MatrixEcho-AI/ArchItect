@@ -12,7 +12,7 @@
 import { t } from '@architect/i18n'
 
 import { envKeyRef, configFromPreset, PROVIDER_PRESETS, validateProviderConfig } from './config.js'
-import type { CostTable, PresetKey, ProviderConfig } from './config.js'
+import type { CostTable, PresetKey, ProviderCapabilities, ProviderConfig, ProviderModelConfig } from './config.js'
 
 export const SETTINGS_VERSION = 1
 
@@ -65,6 +65,59 @@ export function addPreset(settings: ProviderSettings, key: PresetKey, id?: strin
 
 export function activeProvider(settings: ProviderSettings): ProviderConfig | undefined {
   return settings.providers.find((p) => p.id === settings.activeId) ?? settings.providers[0]
+}
+
+/** 去空、去重后的模型 id；当前模型始终排在最前，兼容只有 `model` 的旧配置。 */
+export function providerModelIds(config: Pick<ProviderConfig, 'model' | 'models'>): string[] {
+  const ids = [config.model, ...(config.models ?? []).map((entry) => entry.id)]
+  const seen = new Set<string>()
+  const unique: string[] = []
+  for (const value of ids) {
+    const id = value.trim()
+    if (id.length === 0 || seen.has(id)) continue
+    seen.add(id)
+    unique.push(id)
+  }
+  return unique
+}
+
+/**
+ * 统一 provider 的多模型形状，同时把旧 `model + capabilities` 迁移为一项模型资料。
+ * 返回新对象，不改调用方持有的配置。
+ */
+export function normalizeProviderModels(config: ProviderConfig): ProviderConfig {
+  const byId = new Map<string, ProviderModelConfig>()
+  for (const entry of config.models ?? []) {
+    const id = entry.id.trim()
+    if (id.length === 0 || byId.has(id)) continue
+    byId.set(id, { id, ...(entry.capabilities !== undefined ? { capabilities: entry.capabilities } : {}) })
+  }
+
+  let model = config.model.trim()
+  if (model.length === 0) model = byId.keys().next().value ?? ''
+  if (model.length > 0) {
+    const current = byId.get(model)
+    byId.set(model, { id: model, capabilities: current?.capabilities ?? config.capabilities })
+  }
+
+  const models = [...byId.values()]
+  const activeCapabilities = model.length > 0 ? byId.get(model)?.capabilities : undefined
+  return {
+    ...config,
+    model,
+    capabilities: activeCapabilities ?? config.capabilities,
+    ...(models.length > 0 ? { models } : { models: undefined }),
+  }
+}
+
+/** 选择 provider 下的一项模型；没有探测资料时回到该预设的保守能力，而不是沿用上一项。 */
+export function selectProviderModel(config: ProviderConfig, modelId: string): ProviderConfig {
+  const normalized = normalizeProviderModels(config)
+  const model = modelId.trim()
+  if (model.length === 0 || !providerModelIds(normalized).includes(model)) return normalized
+  const stored = normalized.models?.find((entry) => entry.id === model)?.capabilities
+  const fallback = configFromPreset(normalized.preset).capabilities
+  return { ...normalized, model, capabilities: stored ?? fallback }
 }
 
 export interface SettingsIssue {
@@ -194,6 +247,7 @@ function parseProvider(raw: unknown, index: number, issues: SettingsIssue[]): Pr
     model: typeof entry['model'] === 'string' ? entry['model'].trim() : '',
     capabilities: parseCapabilities(entry['capabilities'], fallback.capabilities),
   }
+  config.models = parseProviderModels(entry['models'], config.model, config.capabilities)
   applyCostShape(config, entry['cost'])
 
   if (entry['compat'] !== null && typeof entry['compat'] === 'object') {
@@ -213,7 +267,38 @@ function parseProvider(raw: unknown, index: number, issues: SettingsIssue[]): Pr
     // 缺 baseURL / 缺引用是"还没配完"，不是文件损坏——报出来但不丢弃这一行
     issues.push({ field: `providers[${index}].${problem.field}`, message: problem.message })
   }
-  return config
+  return normalizeProviderModels(config)
+}
+
+function parseProviderModels(
+  raw: unknown,
+  activeModel: string,
+  activeCapabilities: ProviderCapabilities,
+): ProviderModelConfig[] | undefined {
+  const models: ProviderModelConfig[] = []
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      if (typeof value === 'string') {
+        models.push({ id: value })
+        continue
+      }
+      if (value === null || typeof value !== 'object') continue
+      const entry = value as Record<string, unknown>
+      if (typeof entry['id'] !== 'string') continue
+      const id = entry['id'].trim()
+      if (id.length === 0) continue
+      models.push({
+        id,
+        ...(entry['capabilities'] !== undefined
+          ? { capabilities: parseCapabilities(entry['capabilities'], activeCapabilities) }
+          : {}),
+      })
+    }
+  }
+  if (activeModel.length > 0 && !models.some((entry) => entry.id.trim() === activeModel)) {
+    models.unshift({ id: activeModel, capabilities: activeCapabilities })
+  }
+  return models.length > 0 ? models : undefined
 }
 
 /**

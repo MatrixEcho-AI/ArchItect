@@ -46,6 +46,25 @@ const DEFAULT_FIELDS: CameraFields = {
   lookAt: ['0', '0', '0'],
 }
 
+function modelIdsOfView(provider: SettingsView['providers'][number]): string[] {
+  const models = [...new Set([provider.model, ...(provider.models ?? []).map((entry) => entry.id)])]
+    .map((model) => model.trim())
+    .filter((model) => model.length > 0)
+  return models.length > 0 ? models : ['']
+}
+
+/** JSON tuple keeps identical model ids under different providers distinct. */
+function modelChoiceKey(providerId: string, model: string): string {
+  return JSON.stringify([providerId, model])
+}
+
+function activeModelKey(settings: SettingsView | undefined): string | undefined {
+  if (settings === undefined) return undefined
+  const provider = settings.providers.find((entry) => entry.id === settings.activeId)
+  if (provider === undefined) return undefined
+  return modelChoiceKey(provider.id, provider.model)
+}
+
 export interface AppProps {
   /**
    * 语言变了往上报告。
@@ -805,14 +824,18 @@ export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Elem
               notice={studio.notice}
               onNoticeClose={() => studioRef.current?.setNotice(undefined)}
               /* 模型选择器（在输入框里、发送按钮左边）。切换就是"接下来用它说话" */
-              providers={studio.settings?.providers.map((provider) => ({
-                id: provider.id,
-                model: provider.model,
-              }))}
-              activeProviderId={studio.settings?.activeId}
-              onPickProvider={(id) =>
+              modelChoices={studio.settings?.providers.flatMap((provider) =>
+                modelIdsOfView(provider).map((model) => ({
+                  key: modelChoiceKey(provider.id, model),
+                  providerId: provider.id,
+                  providerName: provider.id,
+                  model,
+                })),
+              )}
+              activeModelKey={activeModelKey(studio.settings)}
+              onPickModel={(providerId, model) =>
                 void run(t('app.ready'), async () => {
-                  studioRef.current?.setSettings(await window.architect.setActive(id))
+                  studioRef.current?.setSettings(await window.architect.setActiveModel(providerId, model))
                 })
               }
               onSend={(text, images) => {

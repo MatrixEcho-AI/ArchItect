@@ -508,6 +508,65 @@ describe('ChatController：设置的增删改', () => {
     fresh.saveProvider({ ...other, baseURL: 'https://other.example/v3' })
     expect(fresh.settingsValue.activeId).toBe('别的')
   })
+
+  it('同一 provider 可切换模型，当前模型与能力一起变化', () => {
+    const secrets = createMemorySecretStore()
+    const settings = deepseekWithKey()
+    const provider = settings.providers[0]!
+    provider.models = [
+      { id: provider.model, capabilities: provider.capabilities },
+      {
+        id: 'deepseek-reasoner',
+        capabilities: { vision: false, toolCalling: 'native', promptCache: 'auto', source: 'probe' },
+      },
+    ]
+    const controller = new ChatController({ settings, secrets }, async () => ({
+      stopReason: 'completed',
+      usage: { in: 0, out: 0 },
+    }))
+
+    const view = controller.setActiveModel('DeepSeek', 'deepseek-reasoner')
+    const selected = view.providers.find((entry) => entry.id === 'DeepSeek')!
+    expect(view.activeId).toBe('DeepSeek')
+    expect(selected.model).toBe('deepseek-reasoner')
+    expect(selected.capabilities.vision).toBe(false)
+    expect(controller.settingsValue.providers[0]?.model).toBe('deepseek-reasoner')
+  })
+
+  it('切换后的模型会用于下一次真实请求', async () => {
+    const secrets = createMemorySecretStore()
+    secrets.set('DeepSeek', 'sk-test-key')
+    const settings = deepseekWithKey()
+    settings.providers[0]!.models = [
+      { id: settings.providers[0]!.model, capabilities: settings.providers[0]!.capabilities },
+      { id: 'deepseek-reasoner' },
+    ]
+    let requestedModel = ''
+    const controller = new ChatController(
+      {
+        settings,
+        secrets,
+        providerFactory: (config) => {
+          requestedModel = config.model
+          return new ScriptedProvider([{ text: 'ok' }], { model: config.model })
+        },
+      },
+      async (_goal, provider) => ({
+        stopReason: 'completed',
+        usage: { in: 1, out: 1 },
+        messages: [{ role: 'assistant', content: provider.model }],
+      }),
+    )
+
+    controller.setActiveModel('DeepSeek', 'deepseek-reasoner')
+    controller.send('test')
+    for (let i = 0; i < 100 && controller.chatView().running; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(controller.chatView().running).toBe(false)
+    expect(requestedModel).toBe('deepseek-reasoner')
+  })
 })
 
 /**
@@ -642,6 +701,35 @@ describe('连接测试：探针的能力会写回配置（否则图被静默丢�
       expect(result.config.capabilities.vision).toBe(true)
       // ……但不许污染"已存的那个端点"的记录
       expect(controller.settingsValue.providers[0]!.capabilities.vision).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
+  it('测试非当前 provider 时，只更新正在编辑的那一个', async () => {
+    const { restore } = stubProbeFetch()
+    try {
+      const settings = unprobed()
+      settings.providers.push({
+        ...settings.providers[0]!,
+        id: 'Other',
+        preset: 'custom',
+      })
+      const controller = controllerFor(settings)
+
+      const result = await controller.testConnection({
+        providerId: 'Other',
+        preset: 'custom',
+        baseURL: 'https://api.deepseek.com',
+        model: '',
+      })
+
+      expect(result.ok).toBe(true)
+      expect(controller.settingsValue.activeId).toBe('DeepSeek')
+      expect(controller.settingsValue.providers.find((provider) => provider.id === 'DeepSeek')!.capabilities.vision).toBe(false)
+      const edited = controller.settingsValue.providers.find((provider) => provider.id === 'Other')!
+      expect(edited.capabilities.vision).toBe(true)
+      expect(edited.models?.map((model) => model.id)).toContain('deepseek-flash')
     } finally {
       restore()
     }

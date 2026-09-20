@@ -102,9 +102,10 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
     preset: string
     baseURL: string
     model: string
+    models: string[]
     currency: string
     costs: CostRow[]
-  }>({ id: '', preset: 'custom', baseURL: '', model: '', currency: 'USD', costs: [] })
+  }>({ id: '', preset: 'custom', baseURL: '', model: '', models: [], currency: 'USD', costs: [] })
 
   const editing: ProviderView | undefined = settings?.providers.find((p) => p.id === props.activeId)
   const activeId = settings?.activeId
@@ -133,6 +134,7 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
       preset: editing?.preset ?? 'custom',
       baseURL: editing?.baseURL ?? '',
       model: editing?.model ?? '',
+      models: modelIdsOf(editing),
       currency: currencyOf(editing),
       costs: costRowsOf(editing),
     })
@@ -152,6 +154,18 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
    * 内存里的 `costs` 是解析与查表用的中间形状，不该由界面往回写。
    */
   const collectConfig = (): { config: Record<string, unknown>; plain?: string } => {
+    const modelIds = uniqueModels([form.model, ...form.models])
+    const savedModels = new Map((editing?.models ?? []).map((entry) => [entry.id, entry]))
+    const fallbackCapabilities = {
+      vision: false,
+      toolCalling: 'native',
+      promptCache: form.preset === 'deepseek' ? 'auto' : 'none',
+      source: 'preset',
+    }
+    const activeCapabilities =
+      savedModels.get(form.model)?.capabilities ??
+      (form.model === editing?.model ? editing?.capabilities : undefined) ??
+      fallbackCapabilities
     const config: Record<string, unknown> = {
       id: form.id.trim().length > 0 ? form.id.trim() : (editing?.preset ?? 'custom'),
       preset: form.preset,
@@ -159,12 +173,15 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
       baseURL: form.baseURL.trim(),
       apiKeyRef: editing?.apiKeyRef ?? '',
       model: form.model.trim(),
-      capabilities: editing?.capabilities ?? {
-        vision: false,
-        toolCalling: 'native',
-        promptCache: 'none',
-        source: 'preset',
-      },
+      models: modelIds.map((id) => ({
+        id,
+        ...(savedModels.get(id)?.capabilities !== undefined
+          ? { capabilities: savedModels.get(id)!.capabilities }
+          : id === form.model
+            ? { capabilities: activeCapabilities }
+            : {}),
+      })),
+      capabilities: activeCapabilities,
     }
     const costs = costsFromRows(form.costs, form.currency)
     if (costs !== undefined) config['cost'] = costs
@@ -193,13 +210,20 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
     const { config, plain } = collectConfig()
     try {
       const result = await window.architect.testConnection({
+        providerId: editing.id,
         preset: form.preset as ProviderView['preset'],
         baseURL: config['baseURL'],
         model: config['model'],
         apiKeyRef: config['apiKeyRef'],
         ...(plain !== undefined ? { apiKeyPlain: plain } : {}),
       })
-      if (result.config.model.length > 0) setForm((current) => ({ ...current, model: result.config.model }))
+      if (result.config.model.length > 0) {
+        setForm((current) => ({
+          ...current,
+          model: result.config.model,
+          models: uniqueModels([...current.models, ...result.models, result.config.model]),
+        }))
+      }
       props.onSaved(await window.architect.settings())
       return result.config.model
     } catch {
@@ -431,6 +455,41 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                     {t('settings.llm.keyNote')}
                   </Typography.Text>
 
+                  <Field label={t('settings.llm.models')}>
+                    <Select
+                      id="cfg-models"
+                      mode="tags"
+                      style={{ flex: 1 }}
+                      value={form.models}
+                      tokenSeparators={[',']}
+                      placeholder={t('settings.llm.modelsPlaceholder')}
+                      onChange={(values: string[]) => {
+                        const models = uniqueModels(values)
+                        setForm((current) => ({
+                          ...current,
+                          models,
+                          model: models.includes(current.model) ? current.model : (models[0] ?? ''),
+                        }))
+                      }}
+                      options={form.models.map((model) => ({ value: model, label: model }))}
+                    />
+                  </Field>
+
+                  <Field label={t('settings.llm.activeModel')}>
+                    <Select
+                      id="cfg-model"
+                      style={{ flex: 1 }}
+                      value={form.model.length > 0 ? form.model : undefined}
+                      placeholder={t('settings.noModel')}
+                      onChange={(model: string) => setForm((current) => ({ ...current, model }))}
+                      options={form.models.map((model) => ({ value: model, label: model }))}
+                    />
+                  </Field>
+
+                  <Typography.Text type="secondary" style={{ fontSize: 11.5 }}>
+                    {t('settings.llm.modelsNote')}
+                  </Typography.Text>
+
                   <button
                     type="button"
                     className="provider-advanced-toggle"
@@ -450,15 +509,6 @@ export function SettingsModal(props: SettingsModalProps): React.JSX.Element {
                           spellCheck={false}
                           value={form.baseURL}
                           onChange={(event) => setForm((c) => ({ ...c, baseURL: event.target.value }))}
-                        />
-                      </Field>
-
-                      <Field label={t('settings.llm.model')}>
-                        <Input
-                          id="cfg-model"
-                          spellCheck={false}
-                          value={form.model}
-                          onChange={(event) => setForm((c) => ({ ...c, model: event.target.value }))}
                         />
                       </Field>
 
@@ -657,6 +707,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       {children}
     </Flex>
   )
+}
+
+function uniqueModels(values: readonly string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter((value) => value.length > 0))]
+}
+
+function modelIdsOf(provider: ProviderView | undefined): string[] {
+  if (provider === undefined) return []
+  return uniqueModels([provider.model, ...(provider.models ?? []).map((entry) => entry.id)])
 }
 
 /**

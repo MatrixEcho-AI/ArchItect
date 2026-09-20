@@ -45,6 +45,13 @@ export interface ProviderCapabilities {
   probedAt?: string
 }
 
+/** 一个 provider 下保存的一项模型。能力属于模型，不能在同一端点的模型之间串用。 */
+export interface ProviderModelConfig {
+  id: string
+  /** 尚未探测的模型省略；选中时使用该 provider 的保守预设能力。 */
+  capabilities?: ProviderCapabilities
+}
+
 /**
  * 每 1M token 的价格，**美元**。用户自己核对自己的账单页面，这里只是记账用的口径。
  *
@@ -127,6 +134,11 @@ export interface ProviderConfig {
   apiKeyRef: string
   /** 模型 id。**由 `GET /models` 发现后选定**，不预填（D-12）。 */
   model: string
+  /**
+   * 这个端点下可选择的模型。`model` 仍是当前项，保留它是为了兼容旧设置、CLI 与请求层。
+   * 老文件没有本字段时，设置解析会把 `model` 自动迁移成唯一的一项。
+   */
+  models?: ProviderModelConfig[]
   /**
    * 单次请求的输出上限（`max_tokens`）。
    *

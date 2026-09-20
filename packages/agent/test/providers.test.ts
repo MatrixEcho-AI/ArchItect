@@ -16,6 +16,8 @@ import {
   envKeyRef,
   isPeakHour,
   normalizeProviderCosts,
+  normalizeProviderModels,
+  providerModelIds,
   listModels,
   parseSettings,
   pickModel,
@@ -26,6 +28,7 @@ import {
   safeKeyRef,
   scrubSecrets,
   serializeSettings,
+  selectProviderModel,
   settingsFromEnv,
   upsertProvider,
   UsageMeter,
@@ -849,6 +852,65 @@ describe('设置文件读写（D-13 两条红线）', () => {
     expect(round.issues.filter((i) => !i.message.includes('缺'))).toEqual([])
     expect(round.settings.providers[0]?.id).toBe(settings.providers[0]?.id)
     expect(round.settings.ui).toEqual(settings.ui)
+  })
+
+  it('旧版单模型设置自动迁移成 provider 内的模型列表', () => {
+    const { settings } = parseSettings({
+      version: 1,
+      activeId: 'gw',
+      providers: [
+        {
+          id: 'gw',
+          preset: 'custom',
+          baseURL: 'https://gw.example',
+          model: 'model-a',
+          capabilities: { vision: true, toolCalling: 'native', promptCache: 'none', source: 'probe' },
+        },
+      ],
+    })
+    const provider = settings.providers[0]!
+    expect(providerModelIds(provider)).toEqual(['model-a'])
+    expect(provider.models?.[0]).toEqual({ id: 'model-a', capabilities: provider.capabilities })
+
+    const roundTrip = parseSettings(JSON.parse(serializeSettings(settings))).settings.providers[0]!
+    expect(providerModelIds(roundTrip)).toEqual(['model-a'])
+    expect(roundTrip.model).toBe('model-a')
+  })
+
+  it('同一 provider 的模型去重，切换时使用该模型自己的能力', () => {
+    const base = configFromPreset('custom', { id: 'gw', model: 'vision-model' })
+    base.capabilities = { vision: true, toolCalling: 'native', promptCache: 'none', source: 'probe' }
+    base.models = [
+      { id: 'vision-model', capabilities: base.capabilities },
+      {
+        id: 'text-model',
+        capabilities: { vision: false, toolCalling: 'prompted', promptCache: 'none', source: 'probe' },
+      },
+      { id: 'text-model' },
+      { id: '  ' },
+    ]
+    const normalized = normalizeProviderModels(base)
+    expect(providerModelIds(normalized)).toEqual(['vision-model', 'text-model'])
+
+    const selected = selectProviderModel(normalized, 'text-model')
+    expect(selected.model).toBe('text-model')
+    expect(selected.capabilities.vision).toBe(false)
+    expect(selected.capabilities.toolCalling).toBe('prompted')
+  })
+
+  it('不同 provider 可以保存同名模型，身份不会碰撞', () => {
+    const settings = {
+      ...defaultSettings(),
+      activeId: 'a',
+      providers: [
+        normalizeProviderModels({ ...configFromPreset('custom', { id: 'a', model: 'shared' }) }),
+        normalizeProviderModels({ ...configFromPreset('custom', { id: 'b', model: 'shared' }) }),
+      ],
+    }
+    expect(settings.providers.map((provider) => [provider.id, provider.model])).toEqual([
+      ['a', 'shared'],
+      ['b', 'shared'],
+    ])
   })
 
   it('ui.theme 只收 light/dark/auto，乱写的值被丢掉（不留坏种子）', () => {

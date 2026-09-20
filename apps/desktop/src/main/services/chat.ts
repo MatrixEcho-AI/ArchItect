@@ -7,7 +7,10 @@ import {
   currencyOf,
   discoverProvider,
   normalizeProviderCosts,
+  normalizeProviderModels,
+  providerModelIds,
   resolveApiKey,
+  selectProviderModel,
   UsageMeter,
   validateProviderConfig,
   addPreset,
@@ -143,6 +146,8 @@ export interface SettingsView {
 }
 
 export interface TestConnectionInput {
+  /** 正在编辑的 provider；不能拿聊天当前 activeId 猜。 */
+  providerId?: string
   preset: PresetKey
   baseURL: string
   model?: string
@@ -387,7 +392,7 @@ export class ChatController {
      * 留在内存里——界面读不到价格，用户以为丢了，再点一次保存就真的写没了。
      * 解析与保存共用 `applyCostShape`，形状必然一致（见那里的注释）。
      */
-    const target: ProviderConfig = normalizeProviderCosts({ ...config })
+    const target: ProviderConfig = normalizeProviderModels(normalizeProviderCosts({ ...config }))
     if (apiKeyPlain !== undefined && apiKeyPlain.trim().length > 0) {
       const id = config.id
       if (this.secrets.set(id, apiKeyPlain.trim())) {
@@ -458,6 +463,19 @@ export class ChatController {
     return view
   }
 
+  /** 输入框旁的选择器一次确定 provider 与其下的模型。 */
+  setActiveModel(providerId: string, modelId: string): SettingsView {
+    const providers = this.settings.providers.map((provider) =>
+      provider.id === providerId ? selectProviderModel(provider, modelId) : provider,
+    )
+    if (!providers.some((provider) => provider.id === providerId)) return this.settingsView()
+    this.settings = { ...this.settings, providers, activeId: providerId }
+    this.error = undefined
+    const view = this.settingsView()
+    this.emitSettings(view)
+    return view
+  }
+
   setLocale(locale: 'zh-CN' | 'en-US'): SettingsView {
     this.settings = { ...this.settings, locale }
     const view = this.settingsView()
@@ -497,7 +515,8 @@ export class ChatController {
    * 否则用户只是在拿一个草稿端点试连接，把它的能力记到另一个 provider 上就是撒谎。
    */
   async testConnection(input: TestConnectionInput): Promise<DiscoveryResult> {
-    const base = this.settings.providers.find((p) => p.id === this.settings.activeId)
+    const targetId = input.providerId ?? this.settings.activeId
+    const base = this.settings.providers.find((p) => p.id === targetId)
     const config: ProviderConfig = {
       ...(base ?? { id: input.preset, preset: input.preset, kind: 'openai-compatible', apiKeyRef: '' } as ProviderConfig),
       preset: input.preset,
@@ -526,11 +545,30 @@ export class ChatController {
     const probed = result.config
     const sameTarget =
       base !== undefined && base.baseURL === probed.baseURL && base.apiKeyRef === probed.apiKeyRef
-    if (sameTarget && !sameCapabilities(base.capabilities, probed.capabilities)) {
+    if (sameTarget) {
+      const normalized = normalizeProviderModels(base)
+      const oldById = new Map((normalized.models ?? []).map((entry) => [entry.id, entry]))
+      const ids = [...new Set([...providerModelIds(normalized), ...result.models, probed.model])]
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+      const models = ids.map((id) => ({
+        id,
+        ...(id === probed.model
+          ? { capabilities: probed.capabilities }
+          : oldById.get(id)?.capabilities !== undefined
+            ? { capabilities: oldById.get(id)!.capabilities }
+            : {}),
+      }))
+      const updated = normalizeProviderModels({
+        ...base,
+        model: probed.model,
+        capabilities: probed.capabilities,
+        models,
+      })
       this.settings = {
         ...this.settings,
         providers: this.settings.providers.map((p) =>
-          p.id === base.id ? { ...p, model: probed.model, capabilities: probed.capabilities } : p,
+          p.id === base.id ? updated : p,
         ),
       }
       this.emitSettings(this.settingsView())
@@ -1214,18 +1252,4 @@ function compactJson(value: unknown): string {
   } catch {
     return t('desktop.unserializableArgs')
   }
-}
-
-/**
- * 两份能力描述是不是同一份。
- *
- * 用来判断探针有没有**真的改到东西**——没变就别动设置、别写盘。用 JSON 全量比较而不是
- * 只比 `vision`：`toolCalling` / `imageTokenCost` / `contextWindow` 都是探针的结论，
- * 漏比一个就会让那个字段永远停在旧值上（这次这个 bug 就是这么来的）。
- */
-function sameCapabilities(
-  a: ProviderConfig['capabilities'],
-  b: ProviderConfig['capabilities'],
-): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
 }

@@ -64,9 +64,9 @@ export interface ChatPanelProps {
    * 模型选择器要读的两样东西（用户的要求：像 DSH 那样**放在发送按钮左边**）。
    * `undefined` 表示还没读到设置——那时候选择器不渲染，而不是渲染一个空的。
    */
-  providers: Array<{ id: string; model: string }> | undefined
-  activeProviderId: string | undefined
-  onPickProvider: (id: string) => void
+  modelChoices: Array<{ key: string; providerId: string; providerName: string; model: string }> | undefined
+  activeModelKey: string | undefined
+  onPickModel: (providerId: string, model: string) => void
 }
 
 export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
@@ -364,17 +364,23 @@ export function ChatPanel(props: ChatPanelProps): React.JSX.Element {
               里不再有"使用中 / 使用"那一对概念。
               模型名为空时显示 provider 的 id：只显示空白会让人以为选择器坏了。
             */}
-            {props.providers !== undefined && props.providers.length > 0 && (
+            {props.modelChoices !== undefined && props.modelChoices.length > 0 && (
               <Select
                 id="model-picker"
                 size="small"
                 variant="borderless"
                 className="model-picker"
-                value={props.activeProviderId}
-                onChange={(id: string) => props.onPickProvider(id)}
-                options={props.providers.map((provider) => ({
-                  value: provider.id,
-                  label: provider.model.trim().length > 0 ? provider.model : provider.id,
+                value={props.activeModelKey}
+                onChange={(key: string) => {
+                  const choice = props.modelChoices?.find((item) => item.key === key)
+                  if (choice !== undefined) props.onPickModel(choice.providerId, choice.model)
+                }}
+                options={props.modelChoices.map((choice) => ({
+                  value: choice.key,
+                  label:
+                    choice.model.trim().length > 0
+                      ? `${choice.providerName} — ${choice.model}`
+                      : choice.providerName,
                 }))}
               />
             )}

@@ -417,11 +417,20 @@ export function App({ onLocaleChange, onThemeChange }: AppProps): React.JSX.Elem
     })
   }
 
-  // ── 键盘：⌘Z / ⇧⌘Z 撤销重做，左右方向键走游标 ─────────────────────────────
+  // ── 键盘：⌘S 保存，⌘Z / ⇧⌘Z 撤销重做，左右方向键走游标 ─────────────────────
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       const editing =
         event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        void run(t('menu.save'), async () => {
+          const path = await window.architect.save()
+          if (path === undefined) return
+          studioRef.current?.setState(await window.architect.state())
+        })
+        return
+      }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
         // **输入框里不抢**——在文本框里按 ⌘Z 应该是文本撤销，不是世界撤销
         if (editing) return

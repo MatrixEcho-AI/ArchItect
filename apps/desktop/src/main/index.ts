@@ -467,7 +467,10 @@ function registerIpc(): void {
   })
 
   handle('studio:save', async (path?: string) => {
-    let target = path
+    // 普通“保存”优先写回当前工程；只有新建项目第一次保存时才询问位置。
+    // 渲染进程调用 `save()` 时本来就不传路径，旧接线因此每次都弹框，实际变成了
+    // “另存为”。StudioService 一直支持省略路径写回，这里不能把当前 projectPath 丢掉。
+    let target = path ?? studio.state().projectPath
     if (target === undefined) {
       const result = await desktopDialog.showSaveDialog({
         title: t('dialog.saveProject'),

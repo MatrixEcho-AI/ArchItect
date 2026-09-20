@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest'
  */
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, '..', 'src/main/index.ts'), 'utf8')
+const appSource = readFileSync(join(here, '..', 'src/renderer/app.tsx'), 'utf8')
 
 /** 从 `const script = \`…\`` 里切出那段模板字面量的正文。 */
 function injectedScript(): string {
@@ -69,5 +70,19 @@ describe('macOS 应用菜单', () => {
     expect(source).toContain('undoOrRedoFromMenu(false)')
     expect(source).toContain('win.webContents.undo()')
     expect(source).toContain("pushEvent({ type: 'state', state })")
+  })
+})
+
+describe('保存接线', () => {
+  it('已有工程写回当前路径，新建工程才弹保存对话框', () => {
+    expect(source).toContain('path ?? studio.state().projectPath')
+    expect(source.indexOf('path ?? studio.state().projectPath')).toBeLessThan(
+      source.indexOf('desktopDialog.showSaveDialog({'),
+    )
+  })
+
+  it('提供 Cmd/Ctrl+S 项目保存快捷键', () => {
+    expect(appSource).toContain("event.key.toLowerCase() === 's'")
+    expect(appSource).toContain('await window.architect.save()')
   })
 })

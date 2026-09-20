@@ -16,7 +16,7 @@ export const zhCN = {
     edit: '编辑',
     new: '新建',
     open: '打开…',
-    save: '保存…',
+    save: '保存',
     demo: '生成示例',
     settings: '设置…',
     export: '导出…',

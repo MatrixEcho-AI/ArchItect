@@ -19,7 +19,7 @@ export const enUS = {
     edit: 'Edit',
     new: 'New',
     open: 'Open…',
-    save: 'Save…',
+    save: 'Save',
     demo: 'Load sample',
     settings: 'Settings…',
     export: 'Export…',
